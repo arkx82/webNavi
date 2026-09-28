@@ -8,6 +8,7 @@ import { Kakao } from "./route/kakao.js";
 import { Naver } from "./route/naver.js";
 import { ProviderError, type LonLat, type Provider, type RouteProvider } from "./route/types.js";
 import { SafetyIndex } from "./safety/index.js";
+import { KakaoSearch } from "./search.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "..");
@@ -23,6 +24,8 @@ const providers: Record<Provider, RouteProvider> = {
   naver: new Naver(env.NAVER_CLIENT_ID, env.NAVER_CLIENT_SECRET),
 };
 
+const search = new KakaoSearch(env.KAKAO_REST_KEY);
+
 const dataDir = env.DATA_DIR ?? join(root, "data");
 const safety = SafetyIndex.fromDirectory(dataDir);
 app.log.info({ features: safety.features.length, dataDir }, "safety index built");
@@ -31,8 +34,21 @@ app.get("/api/health", async () => ({
   ok: true,
   providers: Object.fromEntries(Object.values(providers).map((p) => [p.name, p.ready])),
   safetyFeatures: safety.features.length,
+  search: search.ready,
   tts: !!env.DASHSCOPE_API_KEY,
 }));
+
+app.get<{ Querystring: { q: string; near?: string } }>("/api/search", async (request, reply) => {
+  const q = (request.query.q ?? "").trim();
+  if (!q) return reply.code(400).send({ error: "q" });
+  if (!search.ready) return reply.code(503).send({ error: "search has no key on this server" });
+  try {
+    return await search.find(q, lonLat(request.query.near) ?? undefined);
+  } catch (refused) {
+    if (refused instanceof ProviderError) return reply.code(502).send({ error: refused.message });
+    throw refused;
+  }
+});
 
 interface RouteQuery {
   provider: Provider;

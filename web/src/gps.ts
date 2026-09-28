@@ -60,8 +60,8 @@ export class Gps {
       return;
     }
     this.watch = navigator.geolocation.watchPosition(
-      (p) => {
-        const fix: Fix = {
+      (p) =>
+        this.feed({
           t: p.timestamp,
           lon: p.coords.longitude,
           lat: p.coords.latitude,
@@ -69,15 +69,23 @@ export class Gps {
           speed: p.coords.speed,
           heading: p.coords.heading,
           course: null,
-        };
-        fix.course = this.courseOf(fix);
-        this.samples.push(fix);
-        if (this.samples.length > 36_000) this.samples.shift(); // ten hours at 1 Hz
-        for (const l of this.listeners) l(fix, this.samples);
-      },
+        }),
       (e) => this.onError(`${e.code}: ${e.message}`),
       { enableHighAccuracy: true, maximumAge: 0, timeout: 10_000 },
     );
+  }
+
+  /** One fix in, from the browser or a replay; the course is worked out here. */
+  feed(fix: Fix) {
+    fix.course = this.courseOf(fix);
+    this.samples.push(fix);
+    if (this.samples.length > 36_000) this.samples.shift(); // ten hours at 1 Hz
+    for (const l of this.listeners) l(fix, this.samples);
+  }
+
+  /** The last fix, if any. */
+  get last(): Fix | null {
+    return this.samples[this.samples.length - 1] ?? null;
   }
 
   private courseOf(fix: Fix): number | null {

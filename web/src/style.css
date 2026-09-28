@@ -1,7 +1,7 @@
 @import "maplibre-gl/dist/maplibre-gl.css";
 
 :root {
-  --panel: rgba(18, 18, 20, 0.86);
+  --panel: rgba(18, 18, 20, 0.88);
   --ink: #f2f2f2;
   --dim: #9a9a9a;
   --accent: #4fc3f7;
@@ -10,19 +10,33 @@
 html, body { margin: 0; height: 100%; background: #111; color: var(--ink); font-family: var(--font); }
 #map { position: absolute; inset: 0; }
 #hud {
-  position: absolute; top: 16px; left: 16px; width: 300px; max-height: calc(100% - 32px);
+  position: absolute; top: 16px; left: 16px; width: 320px; max-height: calc(100% - 32px);
   padding: 16px; box-sizing: border-box; border-radius: 12px; background: var(--panel);
-  backdrop-filter: blur(6px); display: flex; flex-direction: column; gap: 10px; overflow: hidden;
+  backdrop-filter: blur(6px); display: flex; flex-direction: column; gap: 10px; overflow: auto;
 }
 .big { font-size: 56px; font-weight: 700; line-height: 1; }
 .big small { font-size: 18px; font-weight: 400; color: var(--dim); }
-dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; font-size: 15px; }
+dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; font-size: 14px; }
 dt { color: var(--dim); }
 dd { margin: 0; font-variant-numeric: tabular-nums; }
 .row { display: flex; gap: 8px; }
-button {
-  flex: 1; padding: 12px 0; font-size: 15px; border: 0; border-radius: 8px;
-  background: #2a2a2e; color: var(--ink); font-family: inherit;
+/* Touch targets a driver can hit: nothing under 48 px tall. */
+button, .button {
+  flex: 1; min-height: 48px; padding: 0 12px; font-size: 16px; border: 0; border-radius: 8px;
+  background: #2a2a2e; color: var(--ink); font-family: inherit; text-align: center; line-height: 48px;
 }
-button.on { background: var(--accent); color: #000; }
-#log { flex: 1; margin: 0; font-size: 11px; line-height: 1.35; color: var(--dim); overflow: auto; white-space: pre-wrap; }
+button.on, .button.on { background: var(--accent); color: #000; }
+button.narrow { flex: 0 0 auto; }
+input[type="search"] {
+  flex: 1; min-height: 48px; padding: 0 12px; font-size: 18px; border: 0; border-radius: 8px;
+  background: #1c1c20; color: var(--ink); font-family: inherit;
+}
+#results { list-style: none; margin: 0; padding: 0; max-height: 40vh; overflow: auto; }
+#results li { padding: 10px 8px; border-bottom: 1px solid #2a2a2e; font-size: 16px; }
+#results li small { display: block; color: var(--dim); font-size: 13px; }
+#trip { display: flex; flex-direction: column; gap: 8px; }
+#trip-name { font-size: 18px; font-weight: 600; }
+#trip-sum { font-size: 15px; color: var(--dim); }
+details summary { color: var(--dim); cursor: pointer; }
+details > * + * { margin-top: 8px; }
+#log { margin: 0; max-height: 30vh; font-size: 11px; line-height: 1.35; color: var(--dim); overflow: auto; white-space: pre-wrap; }
