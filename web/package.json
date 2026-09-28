@@ -6,7 +6,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "node --test --import tsx src/**/*.test.ts"
+    "test": "node --test --import tsx \"src/**/*.test.ts\""
   },
   "dependencies": {
     "maplibre-gl": "^5.0.0"

@@ -9,6 +9,8 @@ import { Naver } from "./route/naver.js";
 import { ProviderError, type LonLat, type Provider, type RouteProvider } from "./route/types.js";
 import { SafetyIndex } from "./safety/index.js";
 import { KakaoSearch } from "./search.js";
+import { Speaker } from "./tts.js";
+import { Readable } from "node:stream";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "..");
@@ -35,7 +37,7 @@ app.get("/api/health", async () => ({
   providers: Object.fromEntries(Object.values(providers).map((p) => [p.name, p.ready])),
   safetyFeatures: safety.features.length,
   search: search.ready,
-  tts: !!env.DASHSCOPE_API_KEY,
+  tts: speaker.ready,
 }));
 
 app.get<{ Querystring: { q: string; near?: string } }>("/api/search", async (request, reply) => {
@@ -105,11 +107,40 @@ app.get<{ Querystring: NearQuery }>("/api/safety/near", async (request, reply) =
   return safety.near(lon, lat, r);
 });
 
-// Pre-rendered phrases, and later the built web app, as plain files.
+// Words into sound, cached on disk under the phrase's hash.
 const ttsDir = env.TTS_DIR ?? join(root, "tts");
-if (existsSync(ttsDir)) {
-  await app.register(fastifyStatic, { root: ttsDir, prefix: "/tts/", decorateReply: false });
-}
+const speaker = new Speaker(env.DASHSCOPE_API_KEY, ttsDir, env.TTS_VOICE ?? "Cherry");
+app.get<{ Querystring: { text: string } }>("/api/tts", async (request, reply) => {
+  const text = (request.query.text ?? "").trim().slice(0, 200);
+  if (!text) return reply.code(400).send({ error: "text" });
+  try {
+    const wav = await speaker.say(text);
+    return reply.header("Content-Type", "audio/wav").header("Cache-Control", "public, max-age=31536000, immutable").send(wav);
+  } catch (refused) {
+    request.log.warn({ text }, (refused as Error).message);
+    return reply.code(speaker.ready ? 502 : 503).send({ error: (refused as Error).message });
+  }
+});
+
+// A music stream with CORS on it, so the page's audio graph may carry it.
+app.get<{ Querystring: { url: string } }>("/api/stream", async (request, reply) => {
+  let url: URL;
+  try {
+    url = new URL(request.query.url);
+    if (!/^https?:$/.test(url.protocol)) throw new Error();
+  } catch {
+    return reply.code(400).send({ error: "url" });
+  }
+  const upstream = await fetch(url, { headers: { "Icy-MetaData": "0", Range: request.headers.range ?? "" } });
+  if (!upstream.ok || !upstream.body) return reply.code(502).send({ error: `${upstream.status}` });
+  reply.header("Access-Control-Allow-Origin", "*");
+  reply.header("Content-Type", upstream.headers.get("content-type") ?? "audio/mpeg");
+  for (const h of ["content-length", "accept-ranges", "content-range"]) {
+    const v = upstream.headers.get(h);
+    if (v) reply.header(h, v);
+  }
+  return reply.code(upstream.status).send(Readable.fromWeb(upstream.body as import("node:stream/web").ReadableStream));
+});
 const webDir = env.WEB_DIR ?? resolve(root, "..", "web", "dist");
 if (existsSync(webDir)) {
   await app.register(fastifyStatic, { root: webDir, prefix: "/" });

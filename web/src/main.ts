@@ -5,6 +5,10 @@ import { chime, keepAwake } from "./probes";
 import { Replay } from "./replay";
 import { RouteLayer } from "./route-layer";
 import { Tracker, type Shown } from "./tracker";
+import { metres } from "./geo";
+import { Player } from "./player";
+import { Voice } from "./voice";
+import { RouteWatch, phraseFor, type Feature } from "./warnings";
 import type { Health, LonLat, Place, Provider, Route } from "./types";
 
 // A key-free vector style; swap for a Mapbox/VWorld style URL through
@@ -44,11 +48,18 @@ let follow = true;
 let placed = false;
 const gps = new Gps();
 const tracker = new Tracker();
+const voice = new Voice();
+voice.onError = (m) => {
+  el("voice").textContent = "실패";
+  log(`음성 실패 ${m}`);
+};
+const player = new Player(voice);
 gps.onError = (m) => log(`GPS 오류 ${m}`);
 gps.on(onFix);
 
 function onFix(fix: Fix) {
   tracker.feed(fix);
+  void watchRoad(fix);
   el("speed").textContent = fix.speed == null ? "--" : Math.round(fix.speed * 3.6).toString();
   el("pos").textContent = `${fix.lat.toFixed(5)}, ${fix.lon.toFixed(5)}`;
   el("acc").textContent = `${Math.round(fix.accM)} m`;
@@ -167,6 +178,10 @@ function drive(chosen: Route, fitView: boolean) {
   route = chosen;
   routeLayer.show(route);
   tracker.setRoute(route);
+  watch = new RouteWatch(route);
+  watchedAt = null;
+  turnsSaid.clear();
+  arrived = false;
   el("trip-sum").textContent = `${km(route.distanceM)} · ${minutes(route.durationS)} · ${NAMES[route.provider]}`;
   if (fitView) {
     setFollow(false);
@@ -184,6 +199,7 @@ async function recheckRoute() {
     if (best && best.durationS < current - BETTER_BY_S) {
       offers = answer.routes;
       log(`더 빠른 길: ${best.provider} ${minutes(best.durationS)} (지금 ${minutes(current)})`);
+      voice.say("더 빠른 길로 안내합니다");
       drive(best, false);
       drawProviders();
     }
@@ -197,6 +213,7 @@ tracker.onOffRoute = async () => {
   if (!goal || rerouting) return;
   rerouting = true;
   log("경로 이탈 — 재탐색");
+  voice.say("경로를 벗어나 다시 찾습니다");
   el("trip-sum").textContent = "경로 이탈 · 재탐색 중…";
   try {
     await go(goal, true);
@@ -229,15 +246,33 @@ function drawProviders() {
   }
 }
 
+/** Distances at which a turn is spoken; each once per guide. */
+const TURN_RUNGS_M = [500, 150];
+const turnsSaid = new Map<string, Set<number>>();
+let arrived = false;
+
 function showTurn(shown: Shown) {
   const turn = el("turn");
   if (!route || !shown.nextGuide) {
     turn.hidden = true;
+    if (route && shown.remainingM != null && shown.remainingM < 30 && !arrived) {
+      arrived = true;
+      voice.say("목적지에 도착했습니다");
+    }
     return;
   }
   turn.hidden = false;
   el("turn-in").textContent = km(shown.nextGuide.inM);
   el("turn-text").textContent = shown.nextGuide.guide.text;
+  const key = `${shown.nextGuide.guide.at[0]},${shown.nextGuide.guide.at[1]}`;
+  const said = turnsSaid.get(key) ?? new Set<number>();
+  for (const rung of TURN_RUNGS_M) {
+    if (said.has(rung) || shown.nextGuide.inM > rung) continue;
+    said.add(rung);
+    turnsSaid.set(key, said);
+    voice.say(`${rung}미터 앞 ${shown.nextGuide.guide.text}`);
+    break;
+  }
   if (shown.remainingM != null && shown.remainingS != null) {
     el("trip-sum").textContent = `남은 ${km(shown.remainingM)} · ${minutes(shown.remainingS)} · ${NAMES[route.provider]}`;
   }
@@ -250,6 +285,7 @@ el("clear").addEventListener("click", () => {
   preferred = null;
   routeLayer.show(null);
   tracker.setRoute(null);
+  watch = null;
   el("trip").hidden = true;
   if (recheck != null) clearInterval(recheck);
   recheck = null;
@@ -275,9 +311,63 @@ el<HTMLFormElement>("search-form").addEventListener("submit", (e) => {
 const km = (m: number) => (m < 1000 ? `${Math.round(m / 10) * 10} m` : `${(m / 1000).toFixed(1)} km`);
 const minutes = (s: number) => (s < 3600 ? `${Math.round(s / 60)}분` : `${Math.floor(s / 3600)}시간 ${Math.round((s % 3600) / 60)}분`);
 
+// ---- the road ahead --------------------------------------------------------
+
+let watch: RouteWatch | null = null;
+/** Where the server was last asked what is near; asked again 500 m on or after 30 s. */
+let watchedAt: { at: LonLat; t: number } | null = null;
+
+async function watchRoad(fix: Fix) {
+  if (!watch || !route) return;
+  const moved = watchedAt ? metres(watchedAt.at[0], watchedAt.at[1], fix.lon, fix.lat) : Infinity;
+  if (moved > 500 || !watchedAt || Date.now() - watchedAt.t > 30_000) {
+    watchedAt = { at: [fix.lon, fix.lat], t: Date.now() };
+    try {
+      const near = await (await fetch(`/api/safety/near?lon=${fix.lon}&lat=${fix.lat}&r=1500`)).json() as Feature[];
+      watch.add(near);
+    } catch (e) {
+      log(`시설물 조회 실패 ${(e as Error).message}`);
+    }
+  }
+  const along = tracker.frame()?.alongM;
+  if (along == null) return;
+  for (const due of watch.due(along)) {
+    const phrase = phraseFor(due);
+    log(`경고 ${phrase}`);
+    voice.say(phrase);
+  }
+}
+
+// ---- music -----------------------------------------------------------------
+
+el<HTMLFormElement>("music-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const input = el<HTMLInputElement>("music-url");
+  if (player.playing) {
+    player.stop();
+    el("music-play").textContent = "재생";
+    return;
+  }
+  const url = input.value.trim();
+  if (!url) return;
+  try {
+    await player.play(url);
+    el("music-play").textContent = "정지";
+    try { localStorage.setItem("nav-music", url); } catch { /* private window */ }
+  } catch (err) {
+    log(`음악 실패 ${(err as Error).message}`);
+  }
+});
+try {
+  const kept = localStorage.getItem("nav-music");
+  if (kept) el<HTMLInputElement>("music-url").value = kept;
+} catch { /* no storage */ }
+
 // ---- probes and replay -----------------------------------------------------
 
 el("beep").addEventListener("click", async () => {
+  await voice.unlock();
+  el("voice").textContent = voice.context.state;
   const said = await chime();
   el("audio").textContent = said;
   log(`오디오 ${said}`);
@@ -300,6 +390,9 @@ el<HTMLInputElement>("replay").addEventListener("change", async (e) => {
   log(`재생 ${file.name}: ${fixes.length}점, ${speedup}배속`);
   replay.start();
 });
+
+// Audio only starts after a tap; the first one anywhere on the page does it.
+document.addEventListener("pointerdown", () => void voice.unlock().then(() => { el("voice").textContent = voice.context.state; }), { once: true });
 
 map.on("load", async () => {
   log(`UA ${navigator.userAgent}`);

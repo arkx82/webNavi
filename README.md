@@ -17,7 +17,8 @@ cp .env.example .env        # 키를 채운다. 비워 둔 제공자는 화면�
 npm install
 npm run dev                 # web :5173 (→ /api 프록시), server :8080
 npm run build && npm start  # 빌드 결과를 server가 :8080 에서 함께 서빙
-npm test                    # server 단위 테스트
+npm test                    # server + web 단위 테스트
+DASHSCOPE_API_KEY=… npx tsx server/src/prerender.ts   # 고정 멘트 ~90개 미리 렌더링
 docker compose up -d --build   # NUC: nav + caddy. DOMAIN 이 .env 에 있어야 인증서를 받는다
 ```
 
@@ -33,7 +34,8 @@ docker compose up -d --build   # NUC: nav + caddy. DOMAIN 이 .env 에 있어야
 | `GET /api/route?provider=all&…` | 키 있는 제공자 전부 동시에: `{routes, errors}` |
 | `GET /api/search?q=&near=lon,lat` | 카카오 로컬 키워드 검색, 가까운 순 |
 | `GET /api/safety/near?lon&lat&r=1500` | 반경 안 시설물, 가까운 순 |
-| `GET /tts/<file>.mp3` | 미리 렌더링한 고정 멘트 |
+| `GET /api/tts?text=` | 그 문장의 WAV. 디스크 캐시(`server/tts/`, 음성+문장 해시) 우선, 없으면 Qwen3-TTS(DashScope) 호출 후 저장 |
+| `GET /api/stream?url=` | 음악 스트림을 CORS 헤더 붙여 중계 (Web Audio 그래프에 넣으려면 필요) |
 
 ## 계획서를 읽고 바꾼 것
 
@@ -71,13 +73,25 @@ Next.js + Mapbox + Waze 알림. 가져온 것: heading 계산·스무딩(위 4),
 안 가져온 것: Waze(국내 데이터 없음), Redis/Vercel Blob(개인 NUC 한 대에 과함),
 React(화면 하나에 프레임워크는 무거움).
 
+## 음성 파이프라인
+
+말할 문장은 클라이언트가 만들고(`phraseFor`, `"${rung}미터 앞 ${guide.text}"`), 서버는
+문장 → WAV 캐시일 뿐이다. 고정 멘트는 `prerender.ts` 로 미리 만들고, 제공자가 보내는
+회전 안내 문구는 첫 주행에서 한 번 렌더링되면 그 뒤로는 공짜다. 브라우저 오디오는
+탭이 있어야 시작되므로 페이지의 첫 터치가 `AudioContext` 를 깨운다. **테슬라에서
+순정 오디오 재생 중 이 페이지 소리가 나는지**는 진단 → 소리 테스트로 실차 확인.
+
 ## 남은 것 (계획서 2~6주차)
 
 - [ ] 실차: GPS 필드(heading/speed/정확도/주기), Wake Lock, 소리 통과 여부 확인
 - [x] 목적지 검색(카카오 로컬 API) 과 경로 요청·표시(혼잡도 색), 3사 비교
 - [x] 맵매칭(`geo.ts` 자체 투영, 창 탐색), 60 fps 보간, 이탈 35 m·3 s 판정, 추측
       항법과 1.5 s 복귀 — `tracker.ts`, 단위 테스트 7개
-- [ ] 경로 위 카메라/방지턱/급커브 경고 + 고정 멘트 사전 렌더링(`server/tts/`) + 동적 TTS 프록시
-- [ ] 웹 오디오 플레이어와 덕킹
+- [x] 경로 위 카메라/방지턱/급커브 경고(`warnings.ts`: 경로에 투영, 25 m 이내·앞쪽만,
+      단계별 1회 발화; 급커브는 40 m 안에 35° 이상 꺾이고 안내 지점이 아닌 곳) +
+      고정 멘트 사전 렌더링(`prerender.ts`) + 동적 TTS(`/api/tts`, 캐시)
+- [x] 회전 안내 음성(500 m·150 m), 도착·이탈·더 빠른 길 멘트
+- [x] 웹 오디오 플레이어와 덕킹(`voice.ts` 그래프의 music GainNode를 말할 때 0.3으로;
+      `player.ts` 는 `/api/stream` 을 통해 CORS 붙은 스트림만 그래프에 넣을 수 있음)
 - [ ] BYOK: 설정 화면에서 키를 넣으면 요청 헤더로 실어 서버가 그 키로 대신 호출
 - [x] CSV 로그 재생 모드(진단 → 재생, `?speedup=4`)

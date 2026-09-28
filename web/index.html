@@ -25,6 +25,11 @@
         <button id="clear">경로 지우기</button>
       </section>
 
+      <form id="music-form" class="row" autocomplete="off">
+        <input id="music-url" type="url" placeholder="음악 스트림 URL" />
+        <button type="submit" class="narrow" id="music-play">재생</button>
+      </form>
+
       <details>
         <summary>진단</summary>
         <dl>
@@ -36,6 +41,7 @@
           <dt>추적</dt><dd id="mode">--</dd>
           <dt>화면 유지</dt><dd id="wake">--</dd>
           <dt>오디오</dt><dd id="audio">--</dd>
+          <dt>음성</dt><dd id="voice">--</dd>
         </dl>
         <div class="row">
           <button id="beep">소리 테스트</button>
