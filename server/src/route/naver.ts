@@ -20,9 +20,9 @@ interface NaverAnswer {
 
 export class Naver implements RouteProvider {
   readonly name = "naver" as const;
-  constructor(private clientId: string | undefined, private clientSecret: string | undefined) {}
+  constructor(private clientId: () => string | undefined, private clientSecret: () => string | undefined) {}
   get ready() {
-    return !!this.clientId && !!this.clientSecret;
+    return !!this.clientId() && !!this.clientSecret();
   }
 
   async route({ start, goal }: RouteRequest): Promise<Route> {
@@ -34,8 +34,8 @@ export class Naver implements RouteProvider {
       url.toString(),
       {
         headers: {
-          "x-ncp-apigw-api-key-id": this.clientId!,
-          "x-ncp-apigw-api-key": this.clientSecret!,
+          "x-ncp-apigw-api-key-id": this.clientId()!,
+          "x-ncp-apigw-api-key": this.clientSecret()!,
         },
       },
       this.name,

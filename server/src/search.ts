@@ -16,9 +16,9 @@ export interface Place {
  * means by "the nearest 스타벅스".
  */
 export class KakaoSearch {
-  constructor(private restKey: string | undefined) {}
+  constructor(private restKey: () => string | undefined) {}
   get ready() {
-    return !!this.restKey;
+    return !!this.restKey();
   }
 
   async find(query: string, near?: LonLat): Promise<Place[]> {
@@ -40,7 +40,7 @@ export class KakaoSearch {
         y: string;
         distance: string;
       }[];
-    }>(url.toString(), { headers: { Authorization: `KakaoAK ${this.restKey}` } }, "kakao");
+    }>(url.toString(), { headers: { Authorization: `KakaoAK ${this.restKey()}` } }, "kakao");
     return answer.documents.map((d) => ({
       name: d.place_name,
       address: d.road_address_name || d.address_name,

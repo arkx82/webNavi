@@ -15,7 +15,9 @@ COPY --from=build /src/package.json ./
 COPY --from=build /src/server/package.json server/
 RUN npm install --omit=dev --workspace=server
 COPY --from=build /src/server/dist server/dist
+COPY --from=build /src/server/admin server/admin
 COPY --from=build /src/web/dist web/dist
-ENV PORT=8080 DATA_DIR=/data TTS_DIR=/tts
+ENV PORT=8080 DATA_DIR=/data TTS_DIR=/tts CONFIG_DIR=/config
+VOLUME ["/config", "/tts"]
 EXPOSE 8080
 CMD ["node", "server/dist/index.js"]

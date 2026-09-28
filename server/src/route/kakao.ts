@@ -19,9 +19,9 @@ interface KakaoAnswer {
 
 export class Kakao implements RouteProvider {
   readonly name = "kakao" as const;
-  constructor(private restKey: string | undefined) {}
+  constructor(private restKey: () => string | undefined) {}
   get ready() {
-    return !!this.restKey;
+    return !!this.restKey();
   }
 
   async route({ start, goal }: RouteRequest): Promise<Route> {
@@ -32,7 +32,7 @@ export class Kakao implements RouteProvider {
     url.searchParams.set("road_details", "true");
     const answer = await askJson<KakaoAnswer>(
       url.toString(),
-      { headers: { Authorization: `KakaoAK ${this.restKey}` } },
+      { headers: { Authorization: `KakaoAK ${this.restKey()}` } },
       this.name,
     );
     const first = answer.routes[0];

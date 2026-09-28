@@ -13,12 +13,16 @@ const BASE = "https://dashscope-intl.aliyuncs.com";
 const MODEL = "qwen3-tts-flash";
 
 export class Speaker {
-  constructor(private key: string | undefined, private dir: string, readonly voice = "Cherry") {
+  constructor(private key: () => string | undefined, private dir: string, private voiceOf: () => string | undefined = () => undefined) {
     mkdirSync(dir, { recursive: true });
   }
 
   get ready() {
-    return !!this.key;
+    return !!this.key();
+  }
+
+  get voice() {
+    return this.voiceOf() || "Cherry";
   }
 
   fileFor(text: string): string {
@@ -35,10 +39,11 @@ export class Speaker {
   async say(text: string): Promise<Buffer> {
     const had = this.cached(text);
     if (had) return had;
-    if (!this.key) throw new Error("tts has no key on this server");
+    const key = this.key();
+    if (!key) throw new Error("tts has no key on this server");
     const answer = await fetch(`${BASE}/api/v1/services/aigc/multimodal-generation/generation`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${this.key}`, "Content-Type": "application/json" },
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
       body: JSON.stringify({ model: MODEL, input: { text, voice: this.voice, language_type: "Korean" } }),
     });
     if (!answer.ok) throw new Error(`dashscope ${answer.status}: ${(await answer.text()).slice(0, 300)}`);
@@ -82,6 +87,17 @@ export function wavOf(pcm: Buffer, rate: number): Buffer {
  * The phrases known before any trip: every warning at every distance rung,
  * with every speed limit the roads post. Roughly a hundred, rendered once.
  */
+/** Every fixed phrase into the cache; how many were made and how many were there. */
+export async function prerender(speaker: Speaker): Promise<{ made: number; had: number }> {
+  let made = 0, had = 0;
+  for (const text of fixedPhrases()) {
+    if (speaker.cached(text)) { had++; continue; }
+    await speaker.say(text);
+    made++;
+  }
+  return { made, had };
+}
+
 export function fixedPhrases(): string[] {
   const out = new Set<string>();
   const limits = [30, 40, 50, 60, 70, 80, 90, 100, 110];

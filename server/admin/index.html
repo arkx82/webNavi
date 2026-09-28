@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Tesla Nav 설정</title>
+<style>
+  :root { --bg: #111; --panel: #1b1b1f; --ink: #f2f2f2; --dim: #9a9a9a; --accent: #4fc3f7; --ok: #3ddc84; --bad: #ff4d4f; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.5 -apple-system, "Segoe UI", Roboto, "Noto Sans KR", sans-serif; }
+  main { max-width: 560px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 22px; margin: 0 0 16px; }
+  h2 { font-size: 16px; color: var(--dim); margin: 28px 0 8px; font-weight: 500; }
+  section { background: var(--panel); border-radius: 12px; padding: 16px; }
+  label { display: block; margin: 12px 0 4px; font-size: 14px; color: var(--dim); }
+  label b { color: var(--ink); font-weight: 500; }
+  input { width: 100%; box-sizing: border-box; min-height: 44px; padding: 0 12px; font: inherit; color: var(--ink);
+          background: #111; border: 1px solid #2c2c31; border-radius: 8px; }
+  input:focus { outline: 2px solid var(--accent); border-color: transparent; }
+  .row { display: flex; gap: 8px; margin-top: 16px; }
+  button { min-height: 44px; padding: 0 16px; font: inherit; border: 0; border-radius: 8px; background: #2a2a2e; color: var(--ink); }
+  button.primary { background: var(--accent); color: #000; }
+  button:disabled { opacity: 0.5; }
+  .hint { font-size: 13px; color: var(--dim); }
+  .hint.saved { color: var(--ok); }
+  .msg { margin-top: 12px; font-size: 14px; }
+  .msg.bad { color: var(--bad); }
+  .msg.ok { color: var(--ok); }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 14px; }
+  td { padding: 6px 0; border-bottom: 1px solid #2a2a2e; vertical-align: top; }
+  td:first-child { color: var(--dim); width: 40%; }
+  .ok { color: var(--ok); } .bad { color: var(--bad); }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Tesla Nav 설정</h1>
+
+  <section id="setup" hidden>
+    <p>처음입니다. 이 페이지의 비밀번호를 정하세요. 8자 이상.</p>
+    <label>비밀번호<input id="setup-pw" type="password" autocomplete="new-password" /></label>
+    <label>다시 한 번<input id="setup-pw2" type="password" autocomplete="new-password" /></label>
+    <div class="row"><button class="primary" id="setup-go">정하기</button></div>
+    <div class="msg" id="setup-msg"></div>
+  </section>
+
+  <section id="login" hidden>
+    <label>비밀번호<input id="login-pw" type="password" autocomplete="current-password" /></label>
+    <div class="row"><button class="primary" id="login-go">들어가기</button></div>
+    <div class="msg" id="login-msg"></div>
+  </section>
+
+  <div id="panel" hidden>
+    <section>
+      <p class="hint">키는 암호화되어 서버에만 저장되고, 여기서는 마지막 네 자만 보입니다. 비워 두면 그대로, 지우려면 <code>-</code> 하나만 넣으세요.</p>
+      <form id="form" autocomplete="off">
+        <h2>경로</h2>
+        <label><b>TMAP</b> appKey <span class="hint" data-hint="tmapAppKey"></span><input name="tmapAppKey" /></label>
+        <label><b>카카오</b> REST API 키 (경로·검색) <span class="hint" data-hint="kakaoRestKey"></span><input name="kakaoRestKey" /></label>
+        <label><b>네이버 클라우드</b> Client ID <span class="hint" data-hint="naverClientId"></span><input name="naverClientId" /></label>
+        <label><b>네이버 클라우드</b> Client Secret <span class="hint" data-hint="naverClientSecret"></span><input name="naverClientSecret" /></label>
+        <h2>음성</h2>
+        <label><b>DashScope</b> API 키 (Qwen3-TTS) <span class="hint" data-hint="dashscopeApiKey"></span><input name="dashscopeApiKey" /></label>
+        <label><b>목소리</b> Cherry · Serena · Ethan … <span class="hint" data-hint="ttsVoice"></span><input name="ttsVoice" placeholder="Cherry" /></label>
+        <h2>이 페이지</h2>
+        <label>새 비밀번호 (바꿀 때만)<input name="password" type="password" autocomplete="new-password" /></label>
+        <div class="row">
+          <button class="primary" type="submit">저장</button>
+          <button type="button" id="test">연결 확인</button>
+          <button type="button" id="prerender">고정 멘트 렌더링</button>
+          <button type="button" id="logout">나가기</button>
+        </div>
+        <div class="msg" id="msg"></div>
+      </form>
+    </section>
+
+    <h2>상태</h2>
+    <section><table id="status"></table></section>
+  </div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const call = async (path, body) => {
+  const a = await fetch(path, {
+    method: body === undefined ? "GET" : "POST",
+    headers: { "Content-Type": "application/json", "X-Requested-With": "nav-admin" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const j = await a.json().catch(() => ({}));
+  if (!a.ok) throw new Error(j.error || a.status);
+  return j;
+};
+const say = (id, text, cls) => { const m = $(id); m.textContent = text; m.className = "msg " + (cls || ""); };
+
+async function start() {
+  const s = await call("/admin/api/state");
+  $("setup").hidden = !s.needsSetup;
+  $("login").hidden = s.needsSetup || s.loggedIn;
+  $("panel").hidden = !s.loggedIn;
+  if (s.loggedIn) await load();
+}
+
+$("setup-go").onclick = async () => {
+  const pw = $("setup-pw").value, pw2 = $("setup-pw2").value;
+  if (pw !== pw2) return say("setup-msg", "두 번 입력이 다릅니다", "bad");
+  try { await call("/admin/api/setup", { password: pw }); location.reload(); }
+  catch (e) { say("setup-msg", e.message, "bad"); }
+};
+$("login-go").onclick = async () => {
+  try { await call("/admin/api/login", { password: $("login-pw").value }); location.reload(); }
+  catch (e) { say("login-msg", e.message, "bad"); }
+};
+$("login-pw").addEventListener("keydown", (e) => { if (e.key === "Enter") $("login-go").click(); });
+$("logout").onclick = async () => { await call("/admin/api/logout", {}); location.reload(); };
+
+function showFields(fields) {
+  for (const el of document.querySelectorAll("[data-hint]")) {
+    const f = fields[el.dataset.hint];
+    el.textContent = f && f.set ? (f.from === "env" ? `환경변수 ${f.hint}` : `저장됨 ${f.hint}`) : "없음";
+    el.className = "hint" + (f && f.set ? " saved" : "");
+  }
+}
+function showStatus(status) {
+  const rows = Object.entries(status).map(([k, v]) => {
+    const cls = v === true || v === "ok" ? "ok" : v === false ? "bad" : "";
+    const text = v === true ? "준비됨" : v === false ? "키 없음" : String(v);
+    return `<tr><td>${k}</td><td class="${cls}">${text}</td></tr>`;
+  });
+  $("status").innerHTML = rows.join("");
+}
+async function load() {
+  const r = await call("/admin/api/settings");
+  showFields(r.fields);
+  showStatus(r.status);
+}
+
+$("form").onsubmit = async (e) => {
+  e.preventDefault();
+  const body = {};
+  for (const input of $("form").querySelectorAll("input[name]")) {
+    const v = input.value.trim();
+    if (!v) continue;
+    body[input.name] = v === "-" ? "" : v;
+  }
+  try {
+    const r = await call("/admin/api/settings", body);
+    showFields(r.fields);
+    for (const input of $("form").querySelectorAll("input[name]")) input.value = "";
+    say("msg", "저장했습니다. 바로 적용됩니다.", "ok");
+    await load();
+  } catch (err) { say("msg", err.message, "bad"); }
+};
+$("test").onclick = async () => {
+  $("test").disabled = true;
+  say("msg", "각 서비스에 실제로 한 번씩 물어보는 중…");
+  try {
+    const r = await call("/admin/api/test", {});
+    showStatus(r);
+    const bad = Object.values(r).filter((v) => v !== "ok").length;
+    say("msg", bad ? `${bad}개 실패 — 아래 표를 보세요` : "모두 연결됩니다", bad ? "bad" : "ok");
+  } catch (err) { say("msg", err.message, "bad"); }
+  $("test").disabled = false;
+};
+$("prerender").onclick = async () => {
+  $("prerender").disabled = true;
+  say("msg", "고정 멘트를 만드는 중… (1분쯤)");
+  try {
+    const r = await call("/admin/api/prerender", {});
+    say("msg", `${r.made}개 만들고 ${r.had}개는 이미 있었습니다`, "ok");
+    await load();
+  } catch (err) { say("msg", err.message, "bad"); }
+  $("prerender").disabled = false;
+};
+
+start().catch((e) => { document.body.textContent = "서버 응답 없음: " + e.message; });
+</script>
+</body>
+</html>

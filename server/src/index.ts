@@ -1,6 +1,6 @@
 import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Tmap } from "./route/tmap.js";
@@ -9,8 +9,10 @@ import { Naver } from "./route/naver.js";
 import { ProviderError, type LonLat, type Provider, type RouteProvider } from "./route/types.js";
 import { SafetyIndex } from "./safety/index.js";
 import { KakaoSearch } from "./search.js";
-import { Speaker } from "./tts.js";
+import { Speaker, prerender } from "./tts.js";
 import { Readable } from "node:stream";
+import { Settings } from "./settings.js";
+import { registerAdmin } from "./admin.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "..");
@@ -19,14 +21,16 @@ const env = process.env;
 const app = Fastify({ logger: { level: env.LOG_LEVEL ?? "info" } });
 
 // The keys live here and nowhere else: the car's browser only ever sees
-// this server. A provider without a key is simply not offered.
+// this server. They are read at every call, so a key typed on /admin is
+// in force at once; a provider without one is simply not offered.
+const settings = new Settings(env.CONFIG_DIR ?? join(root, "config"));
 const providers: Record<Provider, RouteProvider> = {
-  tmap: new Tmap(env.TMAP_APP_KEY),
-  kakao: new Kakao(env.KAKAO_REST_KEY),
-  naver: new Naver(env.NAVER_CLIENT_ID, env.NAVER_CLIENT_SECRET),
+  tmap: new Tmap(settings.reader("tmapAppKey")),
+  kakao: new Kakao(settings.reader("kakaoRestKey")),
+  naver: new Naver(settings.reader("naverClientId"), settings.reader("naverClientSecret")),
 };
 
-const search = new KakaoSearch(env.KAKAO_REST_KEY);
+const search = new KakaoSearch(settings.reader("kakaoRestKey"));
 
 const dataDir = env.DATA_DIR ?? join(root, "data");
 const safety = SafetyIndex.fromDirectory(dataDir);
@@ -109,7 +113,7 @@ app.get<{ Querystring: NearQuery }>("/api/safety/near", async (request, reply) =
 
 // Words into sound, cached on disk under the phrase's hash.
 const ttsDir = env.TTS_DIR ?? join(root, "tts");
-const speaker = new Speaker(env.DASHSCOPE_API_KEY, ttsDir, env.TTS_VOICE ?? "Cherry");
+const speaker = new Speaker(settings.reader("dashscopeApiKey"), ttsDir, settings.reader("ttsVoice"));
 app.get<{ Querystring: { text: string } }>("/api/tts", async (request, reply) => {
   const text = (request.query.text ?? "").trim().slice(0, 200);
   if (!text) return reply.code(400).send({ error: "text" });
@@ -141,6 +145,31 @@ app.get<{ Querystring: { url: string } }>("/api/stream", async (request, reply) 
   }
   return reply.code(upstream.status).send(Readable.fromWeb(upstream.body as import("node:stream/web").ReadableStream));
 });
+// The settings page, and one real call per service to prove a key.
+registerAdmin(app, settings, {
+  status: () => ({
+    tmap: providers.tmap.ready, kakao: providers.kakao.ready, naver: providers.naver.ready,
+    검색: search.ready, 음성: speaker.ready, 목소리: speaker.voice,
+    시설물: safety.features.length,
+    "멘트 캐시": existsSync(ttsDir) ? readdirSync(ttsDir).filter((f) => f.endsWith(".wav")).length : 0,
+  }),
+  test: async () => {
+    const start: LonLat = [127.0276, 37.4979], goal: LonLat = [127.0363, 37.5006];
+    const word = async (ready: boolean, call: () => Promise<unknown>) => {
+      if (!ready) return "키 없음";
+      try { await call(); return "ok"; } catch (e) { return (e as Error).message.slice(0, 120); }
+    };
+    return {
+      tmap: await word(providers.tmap.ready, () => providers.tmap.route({ start, goal })),
+      kakao: await word(providers.kakao.ready, () => providers.kakao.route({ start, goal })),
+      naver: await word(providers.naver.ready, () => providers.naver.route({ start, goal })),
+      검색: await word(search.ready, () => search.find("서울역")),
+      음성: await word(speaker.ready, () => speaker.say("안내를 시작합니다")),
+    };
+  },
+  prerender: () => prerender(speaker),
+}, join(root, "admin", "index.html"));
+
 const webDir = env.WEB_DIR ?? resolve(root, "..", "web", "dist");
 if (existsSync(webDir)) {
   await app.register(fastifyStatic, { root: webDir, prefix: "/" });

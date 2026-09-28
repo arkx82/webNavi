@@ -21,9 +21,9 @@ interface TmapFeature {
 
 export class Tmap implements RouteProvider {
   readonly name = "tmap" as const;
-  constructor(private appKey: string | undefined) {}
+  constructor(private appKey: () => string | undefined) {}
   get ready() {
-    return !!this.appKey;
+    return !!this.appKey();
   }
 
   async route({ start, goal }: RouteRequest): Promise<Route> {
@@ -31,7 +31,7 @@ export class Tmap implements RouteProvider {
       "https://apis.openapi.sk.com/tmap/routes?version=1",
       {
         method: "POST",
-        headers: { appKey: this.appKey!, "Content-Type": "application/json" },
+        headers: { appKey: this.appKey()!, "Content-Type": "application/json" },
         body: JSON.stringify({
           startX: start[0], startY: start[1], endX: goal[0], endY: goal[1],
           reqCoordType: "WGS84GEO", resCoordType: "WGS84GEO",

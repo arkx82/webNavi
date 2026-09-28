@@ -13,17 +13,41 @@ caddy/   TLS 종단 (Let's Encrypt)
 ## 실행
 
 ```bash
-cp .env.example .env        # 키를 채운다. 비워 둔 제공자는 화면에서 숨겨진다
+cp .env.example .env        # DOMAIN 만 필수. 키는 /admin 에서 넣는 게 기본
 npm install
 npm run dev                 # web :5173 (→ /api 프록시), server :8080
 npm run build && npm start  # 빌드 결과를 server가 :8080 에서 함께 서빙
-npm test                    # server + web 단위 테스트
+npm test                    # server + web 단위 테스트 (19개)
 DASHSCOPE_API_KEY=… npx tsx server/src/prerender.ts   # 고정 멘트 ~90개 미리 렌더링
 docker compose up -d --build   # NUC: nav + caddy. DOMAIN 이 .env 에 있어야 인증서를 받는다
 ```
 
 `server/data/` 에 data.go.kr 표준데이터 CSV를 넣으면 시작 시 색인된다
 ([server/data/README.md](server/data/README.md)).
+
+## 설정 페이지 `/admin`
+
+키를 파일에 쓰지 않고 브라우저에서 넣는다. 첫 방문에 비밀번호를 정하고(8자
+이상), 그 뒤로는 그 비밀번호로 들어간다. 필드마다 "저장됨 …1234" 식으로 마지막
+네 자만 보이고, 키 자체는 다시 나오지 않는다. **저장하면 재시작 없이 바로
+적용**된다(제공자가 호출 때마다 읽음). 버튼 둘: **연결 확인**은 서비스마다 실제
+호출을 한 번씩 해서 ok/오류를 표로 보여 주고, **고정 멘트 렌더링**은 경고 문장
+~90개를 미리 만든다.
+
+저장 방식 (`server/src/settings.ts`):
+- `CONFIG_DIR/master.key` — 첫 실행 때 만든 32바이트 난수, 0600.
+- `CONFIG_DIR/settings.enc` — 키·목소리·비밀번호 해시를 JSON으로 묶어
+  AES-256-GCM 으로 암호화(iv·tag·본문 base64), 0600.
+- 비밀번호는 scrypt 해시, 세션은 master.key 로 HMAC 서명한 쿠키(30일, HttpOnly,
+  https 뒤에서는 Secure), 틀린 시도 5번이면 그 주소는 1분 잠김, 변경 요청은
+  `X-Requested-With` 헤더가 있어야 받는다.
+- 약속의 범위: 백업이나 볼륨 복사본이 새어도 `master.key` 없이는 읽을 수 없다.
+  서버의 root 는 둘 다 가지므로 그 위는 막지 않는다.
+- 환경변수(`.env`)는 페이지에서 비워 둔 필드의 대체값. 페이지에서 `-` 를 넣으면
+  저장값이 지워지고 환경변수로 돌아간다.
+
+도커에서는 `nav_config` 볼륨이 `/config`, `nav_tts` 가 `/tts` 라 이미지를 다시
+빌드해도 남는다.
 
 ## API
 

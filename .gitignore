@@ -4,5 +4,6 @@ dist/
 server/data/*.csv
 server/data/*.json
 server/tts/
+server/config/
 *.log
 .DS_Store

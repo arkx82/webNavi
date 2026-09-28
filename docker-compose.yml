@@ -5,7 +5,10 @@ services:
     env_file: .env
     volumes:
       - ./server/data:/data:ro
-      - ./server/tts:/tts:ro
+      # Keys typed on /admin, encrypted; the master key sits beside them.
+      - nav_config:/config
+      # Phrases rendered once, kept across rebuilds.
+      - nav_tts:/tts
     expose: ["8080"]
 
   # TLS in front: the browser only hands out geolocation and wake lock on
@@ -21,5 +24,7 @@ services:
       - caddy_config:/config
 
 volumes:
+  nav_config:
+  nav_tts:
   caddy_data:
   caddy_config:
