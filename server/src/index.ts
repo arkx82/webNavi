@@ -51,13 +51,26 @@ app.get<{ Querystring: { q: string; near?: string } }>("/api/search", async (req
 });
 
 interface RouteQuery {
-  provider: Provider;
+  provider: Provider | "all";
   start: string;
   goal: string;
 }
 
 app.get<{ Querystring: RouteQuery }>("/api/route", async (request, reply) => {
   const { provider: name, start, goal } = request.query;
+  // Every keyed provider at once: the routes are not spliced (each one's
+  // guides and traffic only make sense whole) but compared, by the client.
+  if (name === "all") {
+    const s = lonLat(start);
+    const g = lonLat(goal);
+    if (!s || !g) return reply.code(400).send({ error: "start and goal are lon,lat" });
+    const ready = Object.values(providers).filter((p) => p.ready);
+    if (ready.length === 0) return reply.code(503).send({ error: "no provider has a key on this server" });
+    const settled = await Promise.allSettled(ready.map((p) => p.route({ start: s, goal: g })));
+    const routes = settled.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
+    const errors = settled.flatMap((r, i) => (r.status === "rejected" ? [`${ready[i].name}: ${(r.reason as Error).message}`] : []));
+    return { routes, errors };
+  }
   const provider = providers[name];
   if (!provider) return reply.code(400).send({ error: `unknown provider ${name}` });
   if (!provider.ready) return reply.code(503).send({ error: `${name} has no key on this server` });

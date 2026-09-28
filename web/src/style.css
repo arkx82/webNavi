@@ -37,6 +37,11 @@ input[type="search"] {
 #trip { display: flex; flex-direction: column; gap: 8px; }
 #trip-name { font-size: 18px; font-weight: 600; }
 #trip-sum { font-size: 15px; color: var(--dim); }
+#turn { display: flex; align-items: baseline; gap: 10px; padding: 8px 0; }
+#turn-in { font-size: 34px; font-weight: 700; font-variant-numeric: tabular-nums; }
+#turn-text { font-size: 18px; }
+#providers button small { display: block; font-size: 12px; line-height: 1; color: inherit; opacity: 0.8; }
+#providers button { line-height: 1.2; padding: 6px 4px; }
 details summary { color: var(--dim); cursor: pointer; }
 details > * + * { margin-top: 8px; }
 #log { margin: 0; max-height: 30vh; font-size: 11px; line-height: 1.35; color: var(--dim); overflow: auto; white-space: pre-wrap; }

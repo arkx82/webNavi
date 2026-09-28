@@ -16,4 +16,6 @@ export const api = {
   search: (q: string, near?: LonLat) => get<Place[]>("/api/search", { q, near: near && pair(near) }),
   route: (provider: Provider, start: LonLat, goal: LonLat) =>
     get<Route>("/api/route", { provider, start: pair(start), goal: pair(goal) }),
+  routes: (start: LonLat, goal: LonLat) =>
+    get<{ routes: Route[]; errors: string[] }>("/api/route", { provider: "all", start: pair(start), goal: pair(goal) }),
 };

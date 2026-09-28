@@ -4,6 +4,8 @@
  * hands over — speed and heading are optional in the spec and null on many
  * browsers — so every sample is kept and can be saved for the record.
  */
+import { bearing, lerpAngle, metres } from "./geo";
+
 export interface Fix {
   t: number;
   lon: number;
@@ -23,28 +25,6 @@ export interface Fix {
 
 const MIN_MOVE_M = 3;
 const MIN_SPEED_MPS = 1.4;
-
-export function bearing(lon1: number, lat1: number, lon2: number, lat2: number): number {
-  const toRad = (d: number) => (d * Math.PI) / 180;
-  const dLon = toRad(lon2 - lon1);
-  const y = Math.sin(dLon) * Math.cos(toRad(lat2));
-  const x = Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) - Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(dLon);
-  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
-}
-
-export function metres(lon1: number, lat1: number, lon2: number, lat2: number): number {
-  const x = (lon2 - lon1) * 111_320 * Math.cos(((lat1 + lat2) / 2) * (Math.PI / 180));
-  const y = (lat2 - lat1) * 111_320;
-  return Math.hypot(x, y);
-}
-
-/** Turns [from] toward [to] by [t] of the short way round. */
-export function lerpAngle(from: number, to: number, t: number): number {
-  let d = to - from;
-  while (d > 180) d -= 360;
-  while (d < -180) d += 360;
-  return (from + d * t + 360) % 360;
-}
 
 export type FixListener = (fix: Fix, samples: Fix[]) => void;
 
