@@ -1,0 +1,22 @@
+{
+  "name": "@tesla-nav/server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "test": "node --test --import tsx src/**/*.test.ts"
+  },
+  "dependencies": {
+    "@fastify/static": "^8.0.0",
+    "csv-parse": "^5.6.0",
+    "fastify": "^5.3.0",
+    "flatbush": "^4.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

@@ -1,0 +1,25 @@
+services:
+  nav:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./server/data:/data:ro
+      - ./server/tts:/tts:ro
+    expose: ["8080"]
+
+  # TLS in front: the browser only hands out geolocation and wake lock on
+  # https, so the car must reach this through a real certificate.
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    env_file: .env
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

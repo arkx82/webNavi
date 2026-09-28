@@ -1,0 +1,137 @@
+import Flatbush from "flatbush";
+import { parse } from "csv-parse/sync";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
+/**
+ * What the road has in store: enforcement cameras, speed bumps, school
+ * zones — every kind in one index, since the question is always "what is
+ * within r metres of here", never "which cameras".
+ */
+export type Kind = "speed" | "signal" | "speed-signal" | "section-start" | "section-end" | "bump" | "school" | "other";
+
+export interface Feature {
+  id: string;
+  kind: Kind;
+  lon: number;
+  lat: number;
+  /** km/h, where the source says. */
+  limit?: number;
+  /** Free text the source gave for the road direction ("상행", "동쪽" …); no bearing is published. */
+  direction?: string;
+  name?: string;
+}
+
+const M_PER_DEG_LAT = 111_320;
+
+export class SafetyIndex {
+  private tree: Flatbush | null = null;
+  readonly features: Feature[] = [];
+
+  /** Loads every CSV in [dir]; the file name says which loader applies. */
+  static fromDirectory(dir: string): SafetyIndex {
+    const index = new SafetyIndex();
+    let files: string[] = [];
+    try {
+      files = readdirSync(dir).filter((f) => f.toLowerCase().endsWith(".csv"));
+    } catch {
+      return index.build();
+    }
+    for (const file of files) {
+      const text = decode(readFileSync(join(dir, file)));
+      index.features.push(...parseStandardData(text, file));
+    }
+    return index.build();
+  }
+
+  add(features: Feature[]): this {
+    this.features.push(...features);
+    return this;
+  }
+
+  build(): this {
+    if (this.features.length === 0) {
+      this.tree = null;
+      return this;
+    }
+    const tree = new Flatbush(this.features.length);
+    for (const f of this.features) tree.add(f.lon, f.lat, f.lon, f.lat);
+    tree.finish();
+    this.tree = tree;
+    return this;
+  }
+
+  /** Everything within [radiusM] of the point, nearest first. */
+  near(lon: number, lat: number, radiusM: number): (Feature & { distanceM: number })[] {
+    if (!this.tree) return [];
+    const dLat = radiusM / M_PER_DEG_LAT;
+    const dLon = radiusM / (M_PER_DEG_LAT * Math.cos((lat * Math.PI) / 180));
+    const found = this.tree.search(lon - dLon, lat - dLat, lon + dLon, lat + dLat);
+    const out: (Feature & { distanceM: number })[] = [];
+    for (const i of found) {
+      const f = this.features[i];
+      const d = metres(lon, lat, f.lon, f.lat);
+      if (d <= radiusM) out.push({ ...f, distanceM: Math.round(d) });
+    }
+    return out.sort((a, b) => a.distanceM - b.distanceM);
+  }
+}
+
+/** Equirectangular distance; fine under a few kilometres. */
+export function metres(lon1: number, lat1: number, lon2: number, lat2: number): number {
+  const x = (lon2 - lon1) * M_PER_DEG_LAT * Math.cos(((lat1 + lat2) / 2) * (Math.PI / 180));
+  const y = (lat2 - lat1) * M_PER_DEG_LAT;
+  return Math.hypot(x, y);
+}
+
+/** data.go.kr ships EUC-KR as often as UTF-8; a BOM or a decode failure tells them apart. */
+function decode(bytes: Buffer): string {
+  if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return bytes.subarray(3).toString("utf8");
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return new TextDecoder("euc-kr").decode(bytes);
+  }
+}
+
+/**
+ * The 표준데이터 CSVs share a habit: a header row with the columns named in
+ * Korean, 위도/경도 among them. The rest is read by name where a column
+ * exists, so a schema change costs a row's field, not the whole file.
+ */
+export function parseStandardData(text: string, file: string): Feature[] {
+  const rows = parse(text, { columns: true, skip_empty_lines: true, relax_column_count: true, bom: true }) as Record<string, string>[];
+  const bumps = /방지턱/.test(file);
+  const out: Feature[] = [];
+  rows.forEach((row, n) => {
+    const lat = Number(row["위도"]);
+    const lon = Number(row["경도"]);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || lat === 0 || lon === 0) return;
+    const limit = Number(row["제한속도"]);
+    out.push({
+      id: `${file}:${row["무인교통단속카메라관리번호"] ?? row["과속방지턱관리번호"] ?? n}`,
+      kind: bumps ? "bump" : cameraKind(row["단속구분"], row["보호구역구분"]),
+      lon, lat,
+      limit: Number.isFinite(limit) && limit > 0 ? limit : undefined,
+      direction: row["도로노선방향"] || undefined,
+      name: row["도로노선명"] || row["도로명"] || row["설치장소"] || undefined,
+    });
+  });
+  return out;
+}
+
+/** 단속구분 in the police dataset: 1 속도, 2 신호, 3 속도+신호, 4 구간단속 시점, 5 구간단속 종점 (plus a few text variants). */
+function cameraKind(code: string | undefined, zone: string | undefined): Kind {
+  if (zone && /어린이|보호구역/.test(zone)) return "school";
+  switch ((code ?? "").trim()) {
+    case "1": case "속도": return "speed";
+    case "2": case "신호": return "signal";
+    case "3": case "속도+신호": return "speed-signal";
+    case "4": return "section-start";
+    case "5": return "section-end";
+    default:
+      if (/구간.*시/.test(code ?? "")) return "section-start";
+      if (/구간.*종/.test(code ?? "")) return "section-end";
+      return "other";
+  }
+}

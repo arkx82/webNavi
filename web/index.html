@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <title>Tesla Nav</title>
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <div id="map"></div>
+    <aside id="hud">
+      <div class="big"><span id="speed">--</span><small> km/h</small></div>
+      <dl>
+        <dt>위치</dt><dd id="pos">--</dd>
+        <dt>정확도</dt><dd id="acc">--</dd>
+        <dt>방향</dt><dd id="heading">--</dd>
+        <dt>주기</dt><dd id="period">--</dd>
+        <dt>수신</dt><dd id="count">0</dd>
+        <dt>화면 유지</dt><dd id="wake">--</dd>
+        <dt>오디오</dt><dd id="audio">--</dd>
+      </dl>
+      <div class="row">
+        <button id="follow" class="on">따라가기</button>
+        <button id="beep">소리 테스트</button>
+        <button id="save">로그 저장</button>
+      </div>
+      <pre id="log"></pre>
+    </aside>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>
