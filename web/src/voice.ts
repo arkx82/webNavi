@@ -21,6 +21,8 @@ export class Voice {
   private lastSaid = new Map<string, number>();
   /** Off, the voice says nothing (the chime too). */
   enabled = true;
+  /** The voice asked of the server (안내 설정 → 목소리); null is the server's own. */
+  voiceName: string | null = null;
   /** How far the music drops while the voice speaks. */
   duckTo = 0.3;
   /** Players outside the graph (DRM SDKs) that take the same level. */
@@ -56,20 +58,28 @@ export class Voice {
     if (!this.speaking) void this.next();
   }
 
+  /** [text] now, even if it was just said: for hearing a voice before choosing it. */
+  preview(text: string) {
+    this.lastSaid.delete(text);
+    this.say(text);
+  }
+
   private buffer(text: string): Promise<AudioBuffer> {
-    let had = this.buffers.get(text);
+    const key = `${this.voiceName ?? ""}|${text}`;
+    let had = this.buffers.get(key);
     if (!had) {
       // v=2: tightened audio; the browser keeps the old answer for a year under the old address.
-      had = fetch(`/api/tts?text=${encodeURIComponent(text)}&v=2`)
+      const voice = this.voiceName ? `&voice=${encodeURIComponent(this.voiceName)}` : "";
+      had = fetch(`/api/tts?text=${encodeURIComponent(text)}&v=2${voice}`)
         .then(async (a) => {
           if (!a.ok) throw new Error((await a.json().catch(() => ({}))).error ?? `${a.status}`);
           return this.context.decodeAudioData(await a.arrayBuffer());
         })
         .catch((e) => {
-          this.buffers.delete(text);
+          this.buffers.delete(key);
           throw e;
         });
-      this.buffers.set(text, had);
+      this.buffers.set(key, had);
     }
     return had;
   }

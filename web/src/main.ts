@@ -17,7 +17,7 @@ import { RouteWatch, phraseFor, type Feature } from "./warnings";
 import { Nearby } from "./nearby";
 import { autoZoom } from "./autozoom";
 import { EVENTS, turnSpeech } from "./speech";
-import { drawGuide, loadGuide, wants } from "./guide-settings";
+import { drawGuide, loadGuide, wants, type VoiceList } from "./guide-settings";
 import { isFavourite, loadPlaces, samePlace, savePlaces, toggleFavourite } from "./places";
 import { OVERLAY_STYLE, TmapBase, tmapAvailable } from "./tmap-base";
 import { NaverBase, naverAvailable } from "./naver-base";
@@ -1042,15 +1042,26 @@ map.on("contextmenu", (e) => {
 const guide = loadGuide();
 function applyGuide() {
   voice.enabled = guide.voice;
+  voice.voiceName = guide.voiceName;
   voice.setVolume(guide.volume);
 }
+/** A voice chosen from the list: heard at once, and its sentences made ahead on the server. */
+function voicePicked(name: string | null) {
+  voice.preview(EVENTS.start);
+  void fetch(`/api/tts/warm${name ? `?voice=${encodeURIComponent(name)}` : ""}`).catch(() => undefined);
+}
+const loadVoices = async (): Promise<VoiceList> => {
+  const a = await fetch("/api/tts/voices");
+  if (!a.ok) throw new Error(`${a.status}`);
+  return a.json();
+};
 applyGuide();
 function openGuide(open: boolean) {
   el("guide").hidden = !open;
   if (open) {
     nearby.show(false);
     openDock(false);
-    drawGuide(el("guide-rows"), guide, applyGuide);
+    drawGuide(el("guide-rows"), guide, applyGuide, loadVoices, voicePicked);
   }
   sideChanged();
 }

@@ -14,7 +14,8 @@ import { Hotspots } from "./safety/hotspots.js";
 import { KakaoSearch } from "./search.js";
 import { CATEGORIES, FUELS, Nearby, type Category, type Fuel } from "./nearby/index.js";
 import { NearbyError } from "./nearby/util.js";
-import { Speaker, prerender } from "./tts.js";
+import { Speaker, isMadeVoice, prerender } from "./tts.js";
+import { MadeVoices, SYSTEM_VOICES } from "./voices.js";
 import { Readable } from "node:stream";
 import { Settings } from "./settings.js";
 import { registerAdmin } from "./admin.js";
@@ -255,11 +256,43 @@ app.get<{ Querystring: NearQuery }>("/api/safety/near", async (request, reply) =
 // Words into sound, cached on disk under the phrase's hash.
 const ttsDir = env.TTS_DIR ?? join(root, "tts");
 const speaker = new Speaker(settings.reader("dashscopeApiKey"), ttsDir, settings.reader("ttsVoice"));
-app.get<{ Querystring: { text: string } }>("/api/tts", async (request, reply) => {
+const madeVoices = new MadeVoices(settings.reader("dashscopeApiKey"));
+/** A voice a page may ask for: one of Qwen's, or one the owner made. Anything else is the default. */
+async function voiceAsked(asked: string | undefined): Promise<string> {
+  if (!asked) return speaker.voice;
+  if (SYSTEM_VOICES.some((v) => v.name === asked)) return asked;
+  if (isMadeVoice(asked) && (await madeVoices.isMade(asked))) return asked;
+  return speaker.voice;
+}
+
+// The voices the car page can choose from (안내 설정 → 목소리).
+app.get("/api/tts/voices", async () => ({
+  current: speaker.voice,
+  system: SYSTEM_VOICES,
+  mine: await madeVoices.list().catch(() => []),
+}));
+
+// A voice just chosen: its fixed sentences made in the background, one at a
+// time and only the missing ones, so the drive after asks nothing new.
+const warming = new Set<string>();
+app.get<{ Querystring: { voice?: string } }>("/api/tts/warm", async (request, reply) => {
+  if (!speaker.ready) return reply.code(503).send({ error: "tts has no key on this server" });
+  const voice = await voiceAsked(request.query.voice);
+  if (!warming.has(voice)) {
+    warming.add(voice);
+    prerender(speaker, voice)
+      .then(({ made, had }) => app.log.info({ voice, made, had }, "voice warmed"))
+      .catch((e) => app.log.warn({ voice, err: (e as Error).message }, "voice warm stopped"))
+      .finally(() => warming.delete(voice));
+  }
+  return { voice, warming: true };
+});
+
+app.get<{ Querystring: { text: string; voice?: string } }>("/api/tts", async (request, reply) => {
   const text = (request.query.text ?? "").trim().slice(0, 200);
   if (!text) return reply.code(400).send({ error: "text" });
   try {
-    const wav = await speaker.say(text);
+    const wav = await speaker.say(text, await voiceAsked(request.query.voice));
     return reply.header("Content-Type", "audio/wav").header("Cache-Control", "public, max-age=31536000, immutable").send(wav);
   } catch (refused) {
     request.log.warn({ text }, (refused as Error).message);

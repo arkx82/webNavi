@@ -3,6 +3,11 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fixedPhrases } from "./phrases.js";
 import { ALL_SPENT, CHAIN, SpentBook, SpentError, realtime, saysSpent, voiceOn, type Tier } from "./qwen-models.js";
+import { CLONED_MODEL } from "./voices.js";
+
+/** A voice the owner made (an id from the cloning model), not one of Qwen's own. */
+export const isMadeVoice = (voice: string) => /^qwen-tts-vc-/.test(voice);
+const CLONED_TIER: Tier = { model: CLONED_MODEL, realtime: false, full: true };
 
 export { fixedPhrases };
 
@@ -37,16 +42,16 @@ export class Speaker {
   }
 
   /** v2: tightened audio. The version is in the name so old files are never served as new. */
-  fileFor(text: string, version = 2): string {
-    const hash = createHash("sha1").update(`${version === 2 ? "v2\n" : ""}${this.voice}\n${text}`).digest("hex").slice(0, 20);
+  fileFor(text: string, version = 2, voice = this.voice): string {
+    const hash = createHash("sha1").update(`${version === 2 ? "v2\n" : ""}${voice}\n${text}`).digest("hex").slice(0, 20);
     return join(this.dir, `${hash}.wav`);
   }
 
-  cached(text: string): Buffer | null {
-    const file = this.fileFor(text);
+  cached(text: string, voice = this.voice): Buffer | null {
+    const file = this.fileFor(text, 2, voice);
     if (existsSync(file)) return readFileSync(file);
     // A phrase kept before tightening: tightened now, no new call.
-    const old = this.fileFor(text, 1);
+    const old = this.fileFor(text, 1, voice);
     if (!existsSync(old)) return null;
     const wav = tightenWav(readFileSync(old));
     writeFileSync(file, wav);
@@ -54,8 +59,8 @@ export class Speaker {
   }
 
   /** [text] on one model, as a WAV. Throws SpentError where that model's allowance is gone. */
-  private async render(key: string, tier: Tier, text: string): Promise<Buffer> {
-    const voice = voiceOn(tier, this.voice);
+  private async render(key: string, tier: Tier, text: string, asked: string): Promise<Buffer> {
+    const voice = tier === CLONED_TIER ? asked : voiceOn(tier, asked);
     if (tier.realtime) return wavOf(await realtime(key, tier.model, voice, text), 24_000);
     const answer = await fetch(`${BASE}/api/v1/services/aigc/multimodal-generation/generation`, {
       method: "POST",
@@ -78,19 +83,37 @@ export class Speaker {
     throw new Error(`dashscope: no audio (${body.message ?? "?"})`);
   }
 
-  /** The WAV for [text], from disk or from the service. */
-  async say(text: string): Promise<Buffer> {
-    const had = this.cached(text);
+  /**
+   * The WAV for [text] in [voice] (the server's own when none is asked),
+   * from disk or from the service. A made voice is spoken by the cloning
+   * model alone; when its allowance is gone the sentence comes in the
+   * default voice instead, kept under that voice's name, not the made one's.
+   */
+  async say(text: string, voice = this.voice): Promise<Buffer> {
+    const had = this.cached(text, voice);
     if (had) return had;
     const key = this.key();
     if (!key) throw new Error("tts has no key on this server");
+    if (isMadeVoice(voice)) {
+      if (!this.spent.isSpent(CLONED_MODEL)) {
+        try {
+          const wav = tightenWav(await this.render(key, CLONED_TIER, text, voice));
+          writeFileSync(this.fileFor(text, 2, voice), wav);
+          return wav;
+        } catch (e) {
+          if (!(e instanceof SpentError)) throw e;
+          this.spent.mark(CLONED_MODEL);
+        }
+      }
+      return this.say(text, this.voice === voice ? "Cherry" : this.voice);
+    }
     let wav: Buffer | null = null;
     // Down the chain: a model whose free allowance is gone says so and the
     // next one speaks; any other refusal is the answer.
     for (const tier of CHAIN) {
       if (this.spent.isSpent(tier.model)) continue;
       try {
-        wav = await this.render(key, tier, text);
+        wav = await this.render(key, tier, text, voice);
         break;
       } catch (e) {
         if (!(e instanceof SpentError)) throw e;
@@ -100,7 +123,7 @@ export class Speaker {
     }
     if (!wav) throw new Error(ALL_SPENT);
     wav = tightenWav(wav);
-    writeFileSync(this.fileFor(text), wav);
+    writeFileSync(this.fileFor(text, 2, voice), wav);
     return wav;
   }
 }
@@ -194,11 +217,11 @@ export function tightenWav(wav: Buffer): Buffer {
 }
 
 /** Every fixed phrase into the cache; how many were made and how many were there. */
-export async function prerender(speaker: Speaker): Promise<{ made: number; had: number }> {
+export async function prerender(speaker: Speaker, voice = speaker.voice): Promise<{ made: number; had: number }> {
   let made = 0, had = 0;
   for (const text of fixedPhrases()) {
-    if (speaker.cached(text)) { had++; continue; }
-    await speaker.say(text);
+    if (speaker.cached(text, voice)) { had++; continue; }
+    await speaker.say(text, voice);
     made++;
   }
   return { made, had };

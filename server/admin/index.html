@@ -68,9 +68,9 @@
         <label><b>충전 요금</b> 운영사별 회원가, <code>이름 급속 완속</code> 을 <code>;</code> 로 구분 (예: <code>GS차지비 385 280; 에버온 360</code>). 환경부 공공요금(2026-08)은 기본 포함 <span class="hint" data-hint="evTariffs"></span><input name="evTariffs" /></label>
         <h2>음성</h2>
         <label><b>DashScope</b> API 키 (Qwen3-TTS) <span class="hint" data-hint="dashscopeApiKey"></span><input name="dashscopeApiKey" /></label>
-        <label><b>목소리</b> Cherry · Serena · Ethan … <span class="hint" data-hint="ttsVoice"></span><input name="ttsVoice" placeholder="Cherry" /></label>
+        <label><b>기본 목소리</b> Sohee(한국어) · Cherry · Serena · Ethan … — 차 화면 안내 설정에서 직접 만든 목소리까지 골라 바꿀 수 있습니다 <span class="hint" data-hint="ttsVoice"></span><input name="ttsVoice" placeholder="Cherry" /></label>
         <h2>음악 계정</h2>
-        <p class="hint">각 서비스의 개발자 포털에서 앱을 만들고 Redirect URI 에 <code id="redir-spotify"></code> / <code id="redir-tidal"></code> 를 등록한 뒤, 여기에 Client ID/Secret 을 저장하고 <b>연결</b>을 누르면 그 계정으로 로그인합니다. 토큰은 서버에 암호화되어 남고, 차의 화면은 짧은 접근 토큰만 받습니다.</p>
+        <p class="hint">각 서비스의 개발자 포털에서 앱을 만들고 Redirect URI 에 <code id="redir-spotify"></code> / <code id="redir-tidal"></code> 를 등록한 뒤, <b>Spotify 는 Client ID 와 Secret</b>, <b>TIDAL 은 Client ID 만</b> 저장하고(TIDAL 로그인은 PKCE 라 Secret 이 필요 없습니다) <b>연결</b>을 누르면 그 계정으로 로그인합니다. 토큰은 서버에 암호화되어 남고, 차의 화면은 짧은 접근 토큰만 받습니다.</p>
         <label><b>Spotify</b> Client ID <span class="hint" data-hint="spotifyClientId"></span><input name="spotifyClientId" /></label>
         <label><b>Spotify</b> Client Secret <span class="hint" data-hint="spotifyClientSecret"></span><input name="spotifyClientSecret" /></label>
         <div class="row"><a class="button" id="link-spotify" href="/admin/music/spotify/login">Spotify 연결</a><button type="button" data-disconnect="spotify">해제</button><span class="hint" id="state-spotify"></span></div>

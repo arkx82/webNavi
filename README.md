@@ -223,6 +223,12 @@ TMAP 키가 있으면 **티맵의 벡터 지도(Tmapv3)** 를 바닥에 깔고, 
 
 ## 음성 파이프라인
 
+**목소리 고르기**: 차 화면 안내 설정 → 목소리. 누르면 목록이 열리고, `/admin` 의 기본 목소리, **직접 만든 목소리**
+(Model Studio 계정의 `qwen-voice-enrollment` 목록, 복제 모델 `qwen3-tts-vc-2026-01-22` 로 말함), Qwen 기본 목소리
+24개(Sohee 가 한국어 목소리)가 나온다. 고르면 그 목소리로 한 번 들려주고 서버가 그 목소리의 고정 문장을 뒤에서
+미리 만든다(`/api/tts/warm`). 선택은 차 브라우저에 저장되고, 음성 파일은 목소리별로 따로 캐시된다. 직접 만든
+목소리의 무료 한도가 떨어지면 그 문장은 기본 목소리로 나온다(기본 목소리 이름으로 저장).
+
 **모델 순서**(`server/src/qwen-models.ts`, PaperFlow 와 같은 방식): Qwen3-TTS-Flash 는 ID 마다 무료 한도가 따로다 —
 `qwen3-tts-flash`, `…-2025-11-27`, `…-realtime`, `…-realtime-2025-11-27`, `…-2025-09-18`, `…-realtime-2025-09-18`.
 `AllocationQuota.FreeTierOnly`(403) 로 거절되면 다음 ID 로 같은 문장을 다시 묻고, 소진 기록은 `tts/spent.json`
