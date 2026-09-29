@@ -11,9 +11,8 @@ export interface Place {
 }
 
 /**
- * Kakao Local keyword search — the same REST key as Kakao Mobility. Sorted
- * by distance when the car's position comes along, which is what a driver
- * means by "the nearest 스타벅스".
+ * Kakao Local keyword search — the same REST key as Kakao Mobility. By
+ * accuracy, with the car's position weighed in when it comes along.
  */
 export class KakaoSearch {
   constructor(private restKey: () => string | undefined) {}
@@ -28,7 +27,10 @@ export class KakaoSearch {
     if (near) {
       url.searchParams.set("x", String(near[0]));
       url.searchParams.set("y", String(near[1]));
-      url.searchParams.set("sort", "distance");
+      // Accuracy, the car apps' order: "선릉역" is the station first, not
+      // the nearest shop with the word in its name. Kakao still weighs the
+      // distance in, and each answer says how far it is.
+      url.searchParams.set("sort", "accuracy");
     }
     const answer = await askJson<{
       documents: {

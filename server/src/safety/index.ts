@@ -8,7 +8,7 @@ import { join } from "node:path";
  * zones — every kind in one index, since the question is always "what is
  * within r metres of here", never "which cameras".
  */
-export type Kind = "speed" | "signal" | "speed-signal" | "section-start" | "section-end" | "bump" | "school" | "other";
+export type Kind = "speed" | "signal" | "speed-signal" | "section-start" | "section-end" | "bump" | "school" | "accident" | "bike-accident" | "other";
 
 export interface Feature {
   id: string;
@@ -20,6 +20,8 @@ export interface Feature {
   /** Free text the source gave for the road direction ("상행", "동쪽" …); no bearing is published. */
   direction?: string;
   name?: string;
+  /** For an area rather than a point (an accident hotspot): how far round the centre it reaches. */
+  radiusM?: number;
 }
 
 const M_PER_DEG_LAT = 111_320;
@@ -101,16 +103,23 @@ function decode(bytes: Buffer): string {
  */
 export function parseStandardData(text: string, file: string): Feature[] {
   const rows = parse(text, { columns: true, skip_empty_lines: true, relax_column_count: true, bom: true }) as Record<string, string>[];
-  const bumps = /방지턱/.test(file);
+  return featuresOf(rows, file, /방지턱/.test(file));
+}
+
+/** Rows with the standard data's Korean column names, into features; rows without a position are dropped. */
+export function featuresOf(rows: Record<string, string | undefined>[], source: string, bumps = false): Feature[] {
   const out: Feature[] = [];
   rows.forEach((row, n) => {
     const lat = Number(row["위도"]);
     const lon = Number(row["경도"]);
     if (!Number.isFinite(lat) || !Number.isFinite(lon) || lat === 0 || lon === 0) return;
     const limit = Number(row["제한속도"]);
+    const kind = bumps ? "bump" : cameraKind(row["단속구분"], row["보호구역구분"], row["단속구간위치구분"]);
+    // Cameras a driver on the move is not warned of: parking, bus lanes, the unexplained.
+    if (!kind) return;
     out.push({
-      id: `${file}:${row["무인교통단속카메라관리번호"] ?? row["과속방지턱관리번호"] ?? n}`,
-      kind: bumps ? "bump" : cameraKind(row["단속구분"], row["보호구역구분"]),
+      id: `${source}:${row["무인교통단속카메라관리번호"] ?? row["과속방지턱관리번호"] ?? n}`,
+      kind,
       lon, lat,
       limit: Number.isFinite(limit) && limit > 0 ? limit : undefined,
       direction: row["도로노선방향"] || undefined,
@@ -120,18 +129,26 @@ export function parseStandardData(text: string, file: string): Feature[] {
   return out;
 }
 
-/** 단속구분 in the police dataset: 1 속도, 2 신호, 3 속도+신호, 4 구간단속 시점, 5 구간단속 종점 (plus a few text variants). */
-function cameraKind(code: string | undefined, zone: string | undefined): Kind {
-  if (zone && /어린이|보호구역/.test(zone)) return "school";
-  switch ((code ?? "").trim()) {
-    case "1": case "속도": return "speed";
-    case "2": case "신호": return "signal";
-    case "3": case "속도+신호": return "speed-signal";
-    case "4": return "section-start";
-    case "5": return "section-end";
-    default:
-      if (/구간.*시/.test(code ?? "")) return "section-start";
-      if (/구간.*종/.test(code ?? "")) return "section-end";
-      return "other";
-  }
+/**
+ * What a camera is, from the standard data: 단속구분 1 속도, 2 신호,
+ * 3 불법주정차, 4 버스전용차로, 99 기타 — written "1", "01", "01+02" or in
+ * words — and 단속구간위치구분 1 시점, 2 종점 for a 구간 단속, which is
+ * what makes one a section whatever its 단속구분 says. Null for the kinds a
+ * moving car is not warned of.
+ */
+export function cameraKind(code: string | undefined, zone: string | undefined, section?: string): Kind | null {
+  const pos = (section ?? "").trim().replace(/^0+/, "");
+  if (pos === "1" || /시점/.test(pos)) return "section-start";
+  if (pos === "2" || /종점/.test(pos)) return "section-end";
+  const text = (code ?? "").trim();
+  const parts = new Set(text.split(/[+,/\s]+/).map((p) => p.replace(/^0+/, "")));
+  const speed = parts.has("1") || /속도|과속/.test(text);
+  const signal = parts.has("2") || /신호/.test(text);
+  if (/구간.*시/.test(text)) return "section-start";
+  if (/구간.*종/.test(text)) return "section-end";
+  if (zone && /어린이/.test(zone) && speed) return "school";
+  if (speed && signal) return "speed-signal";
+  if (speed) return "speed";
+  if (signal) return "signal";
+  return null;
 }

@@ -5,13 +5,31 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
     <title>Tesla Nav</title>
     <link rel="stylesheet" href="./src/style.css" />
+    <!-- TMAP's vector map, when the server has a TMAP key (an empty script
+         otherwise). Blocking on purpose: TMAP's loader document.writes the SDK. -->
+    <script src="/api/map/tmap.js"></script>
+    <!-- NAVER's GL map likewise; a refusal (no Dynamic Map, or this address
+         not registered) is noted so the app picks another ground. -->
+    <script>
+      window.navermap_authFailure = function () {
+        window.naverRefused = true;
+        window.dispatchEvent(new Event("naver-refused"));
+      };
+    </script>
+    <script src="/api/map/naver.js"></script>
   </head>
   <body>
+    <div id="ground" hidden></div>
     <div id="map"></div>
     <aside id="hud">
       <div class="top">
         <div class="big"><span id="speed">--</span><small> km/h</small></div>
-        <div id="clock" class="clock"></div>
+        <div class="top-right">
+          <div id="clock" class="clock"></div>
+          <button id="guide-open" class="icon" type="button" title="안내 설정">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>
+          </button>
+        </div>
       </div>
 
       <!-- 1. Where to. -->
@@ -20,6 +38,7 @@
           <input id="q" type="search" placeholder="어디로 갈까요?" enterkeyhint="search" />
           <button type="submit" class="narrow">검색</button>
         </form>
+        <div id="quick-cats" class="chips quick"></div>
         <ul id="results" class="places" hidden></ul>
         <div id="recent-box" hidden>
           <h4>최근 목적지</h4>
@@ -38,7 +57,10 @@
         </header>
         <ul id="offers"></ul>
         <div class="hint" id="pv-msg"></div>
-        <button id="go" class="primary" type="button">안내 시작</button>
+        <div class="row go-row">
+          <button id="go" class="primary" type="button">안내 시작</button>
+          <button id="go-sim" type="button">모의 주행</button>
+        </div>
       </section>
 
       <!-- 3. On the way. -->
@@ -50,10 +72,19 @@
             <div id="turn-text"></div>
           </div>
         </div>
+        <!-- The camera or section ahead, with its limit, the way the car apps show it. -->
+        <div id="cam" hidden><span class="limit-sign" id="cam-limit"></span><span id="cam-what"></span></div>
         <div id="then" hidden><span class="then-label">다음</span><span id="then-icon"></span><span id="then-text"></span></div>
         <div id="eta">
           <div><b id="eta-time">--:--</b><small> 도착</small></div>
           <div id="eta-left"></div>
+        </div>
+        <!-- A pretend drive along this route: its speed, and a way out. -->
+        <div id="sim-bar" hidden>
+          <span class="sim-name">모의 주행</span>
+          <button id="sim-slower" class="icon" type="button" title="느리게">−</button>
+          <b id="sim-kmh">50</b><small>km/h</small>
+          <button id="sim-faster" class="icon" type="button" title="빠르게">+</button>
         </div>
         <div class="row">
           <button id="routes" type="button">경로</button>
@@ -61,7 +92,7 @@
         </div>
       </section>
 
-      <details>
+      <details id="diag">
         <summary>진단</summary>
         <dl>
           <dt>위치</dt><dd id="pos">--</dd>
@@ -92,11 +123,69 @@
         <pre id="log"></pre>
       </details>
     </aside>
-    <button id="recenter" type="button" hidden title="내 위치">⌖</button>
+    <!-- On the map's right edge, the way the car apps stack them: which way
+         up, what is around, how close; 현위치 by the player. -->
+    <div id="controls">
+      <button id="view-mode" class="ctl" type="button" title="지도 방향">
+        <svg id="view-ic" viewBox="0 0 24 24" width="22" height="22"><path d="M12 3 6 20l6-3.5 6 3.5z" fill="currentColor"/></svg>
+        <small id="view-label">3D</small>
+      </button>
+      <button id="nearby-open" class="ctl" type="button" title="주변">
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17.5s-5-4.6-5-8.8a5 5 0 0 1 10 0c0 4.2-5 8.8-5 8.8z"/><circle cx="12" cy="8.7" r="1.7" fill="currentColor" stroke="none"/><path d="M7.6 15.6c-2.8.5-4.6 1.4-4.6 2.4 0 1.7 4 3 9 3s9-1.3 9-3c0-1-1.8-1.9-4.6-2.4"/></svg>
+        <small>주변</small>
+      </button>
+      <div class="ctl-pair">
+        <button id="zoom-in" class="ctl" type="button" title="확대">+</button>
+        <button id="zoom-out" class="ctl" type="button" title="축소">−</button>
+      </div>
+      <button id="base-mode" class="ctl" type="button" title="바탕 지도">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/></svg>
+        <small id="base-label">티맵</small>
+      </button>
+    </div>
+    <!-- Which map is the ground: a list, not a toggle, so the choice is seen. -->
+    <div id="base-menu" hidden>
+      <div class="menu-title">바탕 지도</div>
+      <div id="base-options"></div>
+    </div>
+    <button id="locate" type="button" title="현위치">
+      <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="6.5"/><circle cx="12" cy="12" r="2.2" fill="currentColor"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+    </button>
+    <!-- 안내 설정: what the voice says, and from how far. -->
+    <aside id="guide" class="sheet" hidden>
+      <header class="nb-head"><b>안내 설정</b><button id="guide-close" class="icon" type="button">✕</button></header>
+      <div id="guide-rows"></div>
+    </aside>
+    <!-- 주변: kinds of place to put on the map, and the list of them. -->
+    <aside id="nearby" hidden>
+      <header class="nb-head"><b>주변</b><button id="nb-close" class="icon" type="button">✕</button></header>
+      <div id="nb-listview">
+        <div id="nb-cats" class="chips"></div>
+        <div class="nb-opts">
+          <div id="nb-fuel" class="seg" hidden></div>
+          <div id="nb-sort" class="seg" hidden><button data-sort="distance" type="button">거리순</button><button data-sort="price" type="button">가격순</button></div>
+          <button id="nb-route" class="toggle" type="button" hidden>경로 위만</button>
+        </div>
+        <div class="hint" id="nb-msg"></div>
+        <ul id="nb-list"></ul>
+      </div>
+      <div id="nb-detail" hidden>
+        <button id="nb-back" type="button" class="back">‹ 목록</button>
+        <div class="nb-d-head">
+          <span id="nb-d-ic" class="nb-ic big"></span>
+          <div class="titles"><div id="nb-d-name" class="title"></div><div id="nb-d-kind" class="artist"></div></div>
+        </div>
+        <div id="nb-d-prices" class="prices"></div>
+        <dl id="nb-d-rows"></dl>
+        <button id="nb-go" class="primary" type="button">목적지로</button>
+      </div>
+    </aside>
     <!-- The player, the way music apps do it: a mini bar that opens into the
          full player. Closed while driving; opened to choose, closed on play. -->
     <aside id="music-dock" class="closed">
-      <div id="mini" role="button" tabindex="0">
+      <div id="mini" role="button" tabindex="0" title="음악">
+        <!-- Nothing playing: only this, a round button like 현위치. -->
+        <svg id="mini-note" viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/></svg>
         <div class="art small" id="mini-art"></div>
         <div class="titles">
           <div class="title" id="mini-title">음악</div>

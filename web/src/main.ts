@@ -6,20 +6,42 @@ import { Replay } from "./replay";
 import { Simulator } from "./simulate";
 import { RouteLayer } from "./route-layer";
 import { Tracker, type Shown } from "./tracker";
-import { Line, metres } from "./geo";
+import { Line, lerpAngle, metres } from "./geo";
 import { arrowSvg, maneuverOf } from "./maneuver";
 import { SpotifySource } from "./music/spotify";
 import { lazy, type MusicSource, type NowPlaying } from "./music/source";
 import { Voice } from "./voice";
 import { RouteWatch, phraseFor, type Feature } from "./warnings";
+import { Nearby } from "./nearby";
+import { autoZoom } from "./autozoom";
+import { EVENTS, turnSpeech } from "./speech";
+import { drawGuide, loadGuide, wants } from "./guide-settings";
+import { OVERLAY_STYLE, TmapBase, tmapAvailable } from "./tmap-base";
+import { NaverBase, naverAvailable } from "./naver-base";
 import type { Health, LonLat, Place, Provider, Route } from "./types";
 
-// A key-free vector style; swap for a Mapbox/VWorld style URL through
-// VITE_MAP_STYLE once Korean coverage has been compared in the car.
+// The ground: TMAP's or NAVER's own vector map when the server has their
+// keys (Korean roads as they know them: tmap-base.ts, naver-base.ts), else
+// a key-free OpenStreetMap style — or any style URL through VITE_MAP_STYLE.
+// The 지도 button goes round the ones that are there.
 const HOME: LonLat = [127.0276, 37.4979];
 /** ?demo: a made-up trip fills the panel, for judging the layout at a desk. */
 const demo = new URLSearchParams(location.search).has("demo");
-const style: string = import.meta.env.VITE_MAP_STYLE ?? "https://tiles.openfreemap.org/styles/liberty";
+// The 진단 panel (sound test, GPS log, pretend drive) is for checking the
+// car and the desk, not for driving: shown with ?debug, or in the demo.
+if (!demo && !new URLSearchParams(location.search).has("debug")) document.getElementById("diag")!.hidden = true;
+const OSM_STYLE: string = import.meta.env.VITE_MAP_STYLE ?? "https://tiles.openfreemap.org/styles/liberty";
+type Base = "tmap" | "naver" | "osm";
+const BASE_ORDER: Base[] = ["tmap", "naver", "osm"];
+const BASE_NAMES: Record<Base, string> = { tmap: "티맵", naver: "네이버", osm: "OSM" };
+const baseReady = (b: Base) => (b === "tmap" ? tmapAvailable() : b === "naver" ? naverAvailable() : true);
+let base: Base = (() => {
+  let kept: string | null = null;
+  try { kept = localStorage.getItem("nav-base"); } catch { /* private window */ }
+  const want = BASE_ORDER.includes(kept as Base) ? (kept as Base) : "tmap";
+  return baseReady(want) ? want : BASE_ORDER.find(baseReady)!;
+})();
+const style = base === "osm" ? OSM_STYLE : OVERLAY_STYLE;
 // Where the tiles cannot be reached, a plain ground so the page still works
 // (and the demo still runs) — offline at a desk, or a dead tile server.
 const STYLE_WAIT_S = 8;
@@ -44,14 +66,25 @@ function openMap(): maplibregl.Map {
     // A style that fails, or one that simply never comes (a dead link
     // hangs rather than refuses), gives way to the plain ground so the
     // rest of the page can go on; the log says so.
+    //
+    // Only the style itself: once it has come, a tile that fails or is slow
+    // (a patchy link in the car) is MapLibre's to retry, never a reason to
+    // wipe the map. isStyleLoaded() cannot tell the two apart — it is false
+    // whenever tiles are still loading — so the arrival is kept here.
+    let arrived = false;
     let grounded = false;
+    m.once("style.load", () => { arrived = true; });
     const ground = (why: string) => {
-      if (grounded || m.isStyleLoaded()) return;
+      if (grounded || arrived || base !== "osm") return;
       grounded = true;
       log(`지도 스타일을 못 받음 (${why}) — 빈 바닥으로`);
       m.setStyle(GROUND);
     };
-    m.on("error", (e) => ground((e as { error?: Error }).error?.message ?? "오류"));
+    m.on("error", (e) => {
+      const message = (e as { error?: Error }).error?.message ?? "오류";
+      if (arrived) log(`지도 타일 오류 (다시 받음): ${message.slice(0, 120)}`);
+      else ground(message);
+    });
     window.setTimeout(() => ground(`${STYLE_WAIT_S}초 무응답`), STYLE_WAIT_S * 1000);
     return m;
   } catch (e) {
@@ -73,11 +106,52 @@ function log(text: string) {
 
 // ---- the car ---------------------------------------------------------------
 
-const dot = document.createElement("div");
-dot.style.cssText = "width:18px;height:18px;border-radius:50%;background:#4fc3f7;border:3px solid #fff;box-shadow:0 0 8px #000";
-const marker = new maplibregl.Marker({ element: dot }).setLngLat(HOME);
+// An arrow lying flat on the road, turned with the car: the way every car
+// app draws "you", and it tilts with the map in 3D.
+const car = document.createElement("div");
+car.className = "car";
+car.innerHTML = `<svg viewBox="0 0 48 48" width="44" height="44"><path d="M24 4 39 41 24 33 9 41z" fill="#1a73e8" stroke="#fff" stroke-width="3.5" stroke-linejoin="round"/></svg>`;
+const marker = new maplibregl.Marker({ element: car, rotationAlignment: "map", pitchAlignment: "map" }).setLngLat(HOME);
 
+// ---- the camera ------------------------------------------------------------
+// Three ways to look, as the car apps offer them: 3D (tilted, heading up,
+// buildings standing), 2D heading up, and 2D north up. Following the car,
+// the car sits low on the screen with the road ahead above it, right of
+// the trip panel. A finger that drags, turns or tilts the map lets go of
+// the car — 현위치 takes it back, and on the way it goes back by itself
+// after a while. Pinching only zooms, and the car stays followed.
+
+type View = "3d" | "heading" | "north";
+// Zoom follows the speed (autozoom.ts); each view only shifts it — flat
+// views a little further out, since they show no road beyond the top edge.
+const VIEWS: Record<View, { pitch: number; zoomShift: number; label: string; /** Share of the height pushed above the car. */ carLow: number }> = {
+  "3d": { pitch: 55, zoomShift: 0, label: "3D", carLow: 0.4 },
+  heading: { pitch: 0, zoomShift: -0.4, label: "2D", carLow: 0.28 },
+  north: { pitch: 0, zoomShift: -0.6, label: "북쪽", carLow: 0 },
+};
+const ORDER: View[] = ["3d", "heading", "north"];
+/** Left alone this long after a hand moved it, the map goes back to the car. */
+const RETURN_MS = 5_000;
+let view: View = (() => {
+  try { const v = localStorage.getItem("nav-view") as View; return v in VIEWS ? v : "3d"; } catch { return "3d"; }
+})();
 let follow = true;
+/** What a pinch or ± added to the speed's zoom while following; 현위치 clears it. */
+let zoomBias = 0;
+/** The speed the zoom goes by, smoothed so a jerky fix does not bob the camera. */
+let zoomSpeed = 0;
+let turnInM: number | undefined;
+/** The zoom to follow at, before the driver's own bias. */
+const speedZoom = () => autoZoom(zoomSpeed, turnInM, VIEWS[view].zoomShift);
+/** Gliding back to the car rather than jumping. */
+let returning = false;
+/** Fingers (or the mouse button) down on the map, by pointer id. */
+const hands = new Set<number>();
+/** The wheel was turned just now; its zoom animation is still going. */
+let wheelUntil = 0;
+let touchedAt = 0;
+/** Where on the screen the car sits while followed; eases when a side panel opens. */
+let spot: { x: number; y: number } | null = null;
 let placed = false;
 const gps = new Gps();
 const tracker = new Tracker();
@@ -114,21 +188,241 @@ function frame() {
   if (shown) {
     marker.setLngLat(shown.at);
     el("mode").textContent = MODES[shown.mode] + (shown.offM != null ? ` · ${Math.round(shown.offM)} m` : "");
-    if (follow) {
-      map.jumpTo({ center: shown.at, bearing: tracker.cameraBearing(map.getBearing()) });
-    }
+    marker.setRotation(shown.bearing);
+    zoomSpeed += (shown.speedMps * 3.6 - zoomSpeed) * 0.01;
+    turnInM = route ? shown.nextGuide?.inM : undefined;
+    if (follow && !handsOn()) followCar(shown.at);
     showTurn(shown);
   }
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
 
-function setFollow(on: boolean) {
-  follow = on;
-  el("recenter").hidden = on;
-  if (on && gps.last) map.easeTo({ center: [gps.last.lon, gps.last.lat], pitch: 45, zoom: Math.max(map.getZoom(), 16) });
+const approach = (from: number, to: number, k: number) => (Math.abs(to - from) < 0.005 ? to : from + (to - from) * k);
+
+/** One frame of following: everything eases toward where it should be. */
+function followCar(at: LonLat) {
+  const v = VIEWS[view];
+  const want = carSpot(v.carLow);
+  spot = spot ? { x: approach(spot.x, want.x, 0.15), y: approach(spot.y, want.y, 0.15) } : want;
+  const before = map.getCenter();
+  const camera = {
+    bearing: view === "north" ? lerpAngle(map.getBearing(), 0, 0.15) : tracker.cameraBearing(map.getBearing()),
+    pitch: approach(map.getPitch(), v.pitch, 0.12),
+    // Quick when coming back to the car; slow as the speed changes, like a drive.
+    zoom: approach(map.getZoom(), Math.max(10, Math.min(20, speedZoom() + zoomBias)), returning ? 0.12 : 0.03),
+  };
+  let center = centreFor(at, spot, camera);
+  if (returning) {
+    const eased: LonLat = [before.lng + (center[0] - before.lng) * 0.15, before.lat + (center[1] - before.lat) * 0.15];
+    if (metres(eased[0], eased[1], center[0], center[1]) < 1) returning = false;
+    center = eased;
+  }
+  map.jumpTo({ center, ...camera });
 }
-map.on("dragstart", () => setFollow(false));
+
+/**
+ * The camera centre that puts [at] at screen point [to]. This is what
+ * padding would do, but TMAP's camera takes no padding, so both maps keep
+ * a plain centre and the car is placed by moving it: aim at the car, slide
+ * by the offset, then once more for the tilt's perspective.
+ */
+function centreFor(at: LonLat, to: { x: number; y: number }, camera: { bearing: number; pitch: number; zoom: number }): LonLat {
+  const canvas = map.getCanvas();
+  const cx = canvas.clientWidth / 2, cy = canvas.clientHeight / 2;
+  map.jumpTo({ center: at, ...camera });
+  let q = map.unproject([2 * cx - to.x, 2 * cy - to.y]);
+  map.jumpTo({ center: q });
+  const p = map.project(at);
+  q = map.unproject([cx + p.x - to.x, cy + p.y - to.y]);
+  return [q.lng, q.lat];
+}
+
+/** The middle of the map's free part — right of the trip panel, left of whatever holds the right side — lowered by [carLow]. */
+function carSpot(carLow = 0) {
+  const canvas = map.getCanvas();
+  const hud = el("hud").getBoundingClientRect();
+  const side = !el("nearby").hidden || !el("guide").hidden || !el("music-dock").classList.contains("closed");
+  const right = canvas.clientWidth - (side ? 356 : 76);
+  return { x: (hud.right + right) / 2, y: (canvas.clientHeight * (1 + carLow)) / 2 };
+}
+
+function setFollow(on: boolean) {
+  if (on) {
+    if (!follow) returning = true;
+    zoomBias = 0;
+  }
+  const changed = follow !== on;
+  follow = on;
+  el("locate").classList.toggle("on", on);
+  if (changed) showBasePlaces();
+}
+
+// Hands on the map: the camera is left alone the whole time, from the
+// press — not from MapLibre's movestart, which comes a frame later. A
+// jumpTo in between calls map.stop(), which resets the gesture handlers,
+// so a drag that had not yet passed its few pixels never began and the
+// map would not move while the car was followed.
+function handsOn() {
+  return hands.size > 0 || Date.now() < wheelUntil || map.isEasing();
+}
+const box = map.getCanvasContainer();
+box.addEventListener("pointerdown", (e) => { hands.add(e.pointerId); touchedAt = Date.now(); }, true);
+let wheelDone = 0;
+box.addEventListener("wheel", () => {
+  wheelUntil = Date.now() + 400;
+  touchedAt = Date.now();
+  // The wheel's zoom is the one to keep following at, once it settles.
+  clearTimeout(wheelDone);
+  wheelDone = window.setTimeout(keepHandZoom, 420);
+}, { capture: true, passive: true });
+for (const kind of ["pointerup", "pointercancel"] as const) {
+  window.addEventListener(kind, (e) => {
+    if (!hands.delete(e.pointerId) || hands.size > 0 || !follow) return;
+    // A pinch while following: keep its zoom, and glide back onto the car
+    // it may have slid away from.
+    keepHandZoom();
+    returning = true;
+  }, true);
+}
+// Dragging, turning or tilting by hand lets go of the car; a pinch or the
+// wheel only zooms, and the zoom it leaves is kept while following.
+type Moved = { originalEvent?: Event };
+for (const kind of ["dragstart", "rotatestart", "pitchstart"] as const) {
+  map.on(kind, (e: Moved) => { if (e.originalEvent) setFollow(false); });
+}
+map.on("move", (e: Moved) => { if (e.originalEvent) touchedAt = Date.now(); });
+map.on("zoomend", (e: Moved) => { if (e.originalEvent) keepHandZoom(); });
+/** A zoom by hand while following is kept as a lean on the speed's zoom, not a fixed level. */
+function keepHandZoom() {
+  if (follow) zoomBias = Math.max(-4, Math.min(2.5, map.getZoom() - speedZoom()));
+}
+// A map left alone goes back to the car, driving or not — except while
+// the route cards are up or a place is open on the 주변 sheet, when it was
+// moved there on purpose, and never under a finger that is still down.
+setInterval(() => {
+  if (follow || !gps.last || handsOn() || !el("s-preview").hidden || nearby.isOpen) return;
+  if (Date.now() - touchedAt > RETURN_MS) setFollow(true);
+}, 500);
+
+function setView(next: View) {
+  view = next;
+  try { localStorage.setItem("nav-view", view); } catch { /* private window */ }
+  const v = VIEWS[view];
+  el("view-label").textContent = v.label;
+  el("view-ic").style.transform = view === "north" ? "" : view === "3d" ? "perspective(40px) rotateX(28deg)" : "";
+  el("view-mode").classList.toggle("on", view !== "north");
+  zoomBias = 0;
+  showBuildings();
+  // Following, the frame eases there; off the car, the map turns on the spot.
+  if (!follow) map.easeTo({ pitch: v.pitch, bearing: view === "north" ? 0 : map.getBearing(), duration: 500 });
+}
+/** Standing buildings are for the tilted view; flat, they only cost frames. */
+function showBuildings() {
+  try {
+    if (map.getLayer("building-3d")) map.setLayoutProperty("building-3d", "visibility", view === "3d" ? "visible" : "none");
+  } catch { /* the style is not in yet; style.load comes back here */ }
+}
+/**
+ * The style's own shop and restaurant icons, off while following: in a
+ * view that moves every frame they flicker in and out of placement, and
+ * on the way the driver wants the road. The 주변 buttons bring back the
+ * kinds that matter. Back on when the map is browsed by hand.
+ */
+function showBasePlaces() {
+  for (const id of ["poi_r1", "poi_r7", "poi_r20"]) {
+    try {
+      if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", follow ? "none" : "visible");
+    } catch { /* style not in yet */ }
+  }
+}
+map.on("style.load", () => { showBuildings(); showBasePlaces(); });
+el("view-mode").addEventListener("click", () => setView(ORDER[(ORDER.indexOf(view) + 1) % ORDER.length]));
+
+// ---- the ground --------------------------------------------------------------
+
+let ground: TmapBase | NaverBase | null = null;
+/** Onto [next]: the other ground away, MapLibre's own style swapped only to or from OSM. */
+function setBase(next: Base, remember = true) {
+  if (!baseReady(next)) next = BASE_ORDER.find(baseReady)!;
+  const was = base;
+  base = next;
+  if (remember) try { localStorage.setItem("nav-base", base); } catch { /* private window */ }
+  // A refused NAVER map can throw on the way out; it must not keep the switch from happening.
+  try { ground?.destroy(); } catch (e) { log(`바탕 지도 정리 오류 ${(e as Error).message}`); }
+  el("ground").replaceChildren();
+  ground = null;
+  if ((was === "osm") !== (base === "osm")) map.setStyle(base === "osm" ? OSM_STYLE : OVERLAY_STYLE);
+  try {
+    if (base === "tmap") ground = new TmapBase(el("ground"), map);
+    if (base === "naver") ground = new NaverBase(el("ground"), map);
+  } catch (e) {
+    log(`${BASE_NAMES[base]} 지도 실패 ${(e as Error).message} — OSM 으로`);
+    return setBase("osm", false);
+  }
+  el("base-label").textContent = BASE_NAMES[base];
+  drawBaseMenu();
+}
+
+/** What each ground is, and why one cannot be chosen right now. */
+function baseNote(b: Base): string {
+  if (b === "osm") return "오픈스트리트맵 · 키 없이 · 한국 골목은 빠지기도";
+  if (baseReady(b)) return b === "tmap" ? "티맵 도로망 · 혼잡도와 같은 데이터" : "네이버 지도 · 상호와 건물이 자세함";
+  if (b === "naver" && window.naverRefused) return `인증 실패 — NCP 콘솔 Web 서비스 URL 에 ${location.origin}`;
+  return "서버에 키가 없음 (/admin)";
+}
+function drawBaseMenu() {
+  const box = el("base-options");
+  box.replaceChildren();
+  for (const b of BASE_ORDER) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.classList.toggle("on", b === base);
+    button.disabled = !baseReady(b);
+    button.innerHTML = `<b></b><small></small>`;
+    button.querySelector("b")!.textContent = BASE_NAMES[b] + (b === base ? " ✓" : "");
+    button.querySelector("small")!.textContent = baseNote(b);
+    button.addEventListener("click", () => {
+      el("base-menu").hidden = true;
+      if (b !== base) setBase(b);
+    });
+    box.append(button);
+  }
+}
+el("base-mode").addEventListener("click", (e) => {
+  e.stopPropagation();
+  const menu = el("base-menu");
+  if (menu.hidden) {
+    drawBaseMenu();
+    const at = el("base-mode").getBoundingClientRect();
+    menu.style.top = `${at.top}px`;
+  }
+  menu.hidden = !menu.hidden;
+});
+// A tap anywhere else closes the list.
+document.addEventListener("pointerdown", (e) => {
+  const menu = el("base-menu");
+  if (!menu.hidden && !menu.contains(e.target as Node) && !el("base-mode").contains(e.target as Node)) menu.hidden = true;
+});
+// NAVER says no only after its script has run (the key's settings are
+// checked on its server): off its ground, and out of the round.
+function naverRefused() {
+  log(`네이버 지도 인증 실패 — NCP 콘솔 Maps 앱의 Web 서비스 URL 에 ${location.origin} 이 있는지 확인하세요`);
+  if (base === "naver") setBase(BASE_ORDER.find(baseReady)!, false);
+  else drawBaseMenu();
+}
+window.addEventListener("naver-refused", naverRefused);
+setBase(base, false);
+// The refusal can come before this module runs (its answer races the
+// page's own scripts), so it is looked for once more here.
+if (window.naverRefused) naverRefused();
+el("locate").addEventListener("click", () => setFollow(true));
+for (const [id, by] of [["zoom-in", 1], ["zoom-out", -1]] as const) {
+  el(id).addEventListener("click", () => {
+    if (follow) zoomBias = Math.max(-4, Math.min(2.5, zoomBias + by));
+    else { touchedAt = Date.now(); map.easeTo({ zoom: map.getZoom() + by, duration: 300 }); }
+  });
+}
 
 /** Where a route starts: the car, or the map's middle before the first fix. */
 function here(): LonLat {
@@ -146,7 +440,10 @@ function here(): LonLat {
 
 type Screen = "search" | "preview" | "drive";
 let health: Health | null = null;
+/** The place whose routes are on the cards. */
 let goal: Place | null = null;
+/** The place being driven to; a new goal only replaces it on 안내 시작. */
+let drivingTo: Place | null = null;
 /** Every provider's answer for this goal, quickest first, and the one chosen. */
 let offers: Route[] = [];
 let chosen: Route | null = null;
@@ -160,7 +457,9 @@ function showScreen(name: Screen) {
   el("s-search").hidden = name !== "search";
   el("s-preview").hidden = name !== "preview";
   el("s-drive").hidden = name !== "drive";
-  el("go").textContent = route ? "이 경로로" : "안내 시작";
+  el("go").textContent = route ? (goal === drivingTo ? "이 경로로" : "이곳으로 변경") : "안내 시작";
+  el("go-sim").textContent = sim?.running ? "모의 주행 다시" : "모의 주행";
+  nearby.refresh();
 }
 
 // -- 1. where to --
@@ -300,7 +599,8 @@ el("go").addEventListener("click", () => {
 });
 el("pv-close").addEventListener("click", () => {
   if (route) {
-    // Back to the drive as it was.
+    // Back to the drive as it was, to where it was going.
+    goal = drivingTo;
     routeLayer.show(route);
     showScreen("drive");
     setFollow(true);
@@ -318,25 +618,30 @@ el("pv-close").addEventListener("click", () => {
 
 function startDrive(r: Route) {
   const fresh = route == null;
+  const elsewhere = !fresh && goal !== drivingTo;
   route = r;
   chosen = r;
+  drivingTo = goal;
   routeLayer.show(route);
   tracker.setRoute(route);
   sim?.follow(route);
-  watch = new RouteWatch(route);
+  watch = new RouteWatch(route, () => ({ wants: (k) => wants(guide, k), cameraFromM: guide.cameraFromM }));
   watchedAt = null;
   turnsSaid.clear();
   arrived = false;
   showScreen("drive");
   setFollow(true);
   if (goal) remember(goal);
-  if (fresh) voice.say("안내를 시작합니다");
+  if (fresh) voice.say(EVENTS.start);
+  else if (elsewhere) voice.say(EVENTS.changed);
   if (recheck == null) recheck = window.setInterval(() => void recheckRoute(), RECHECK_MS);
 }
 
 function endDrive() {
+  if (sim?.running) stopSim();
   route = null;
   goal = null;
+  drivingTo = null;
   offers = [];
   chosen = null;
   routeLayer.show(null);
@@ -352,6 +657,11 @@ function endDrive() {
 
 el("end").addEventListener("click", endDrive);
 el("routes").addEventListener("click", async () => {
+  goal = drivingTo;
+  if (goal) {
+    el("pv-name").textContent = goal.name;
+    el("pv-addr").textContent = goal.address;
+  }
   showScreen("preview");
   el("pv-msg").textContent = "경로 다시 찾는 중…";
   await fetchOffers();
@@ -359,16 +669,17 @@ el("routes").addEventListener("click", async () => {
 
 /** Every few minutes on the way: a much quicker route from any provider wins. */
 async function recheckRoute() {
-  if (!goal || !route || !gps.last || rerouting) return;
+  if (!drivingTo || !route || !gps.last || rerouting) return;
   if (!el("s-preview").hidden) return; // the cards are open; the driver is choosing
   const current = tracker.frame()?.remainingS ?? route.durationS;
   try {
-    const answer = await api.routes(here(), goal.at);
+    const answer = await api.routes(here(), drivingTo.at);
     const best = answer.routes.sort((a, b) => a.durationS - b.durationS)[0];
     if (best && best.durationS < current - BETTER_BY_S) {
       offers = answer.routes;
       log(`더 빠른 길: ${best.provider} ${minutes(best.durationS)} (지금 ${minutes(current)})`);
-      voice.say("더 빠른 길로 안내합니다");
+      voice.say(EVENTS.faster);
+      goal = drivingTo;
       startDrive(best);
     }
   } catch (e) {
@@ -378,17 +689,18 @@ async function recheckRoute() {
 
 // Off the road for three seconds: the route is asked again from here.
 tracker.onOffRoute = async () => {
-  if (!goal || !route || rerouting) return;
+  if (!drivingTo || !route || rerouting) return;
   rerouting = true;
   log("경로 이탈 — 재탐색");
-  voice.say("경로를 벗어나 다시 찾습니다");
+  voice.say(EVENTS.off);
   el("eta-left").textContent = "경로 이탈 · 재탐색 중…";
   try {
-    const answer = await api.routes(here(), goal.at);
+    const answer = await api.routes(here(), drivingTo.at);
     const again = answer.routes.sort((a, b) => a.durationS - b.durationS);
     const same = again.find((r) => r.provider === route!.provider) ?? again[0];
     if (same) {
       offers = again;
+      goal = drivingTo;
       startDrive(same);
     }
   } catch (e) {
@@ -398,8 +710,7 @@ tracker.onOffRoute = async () => {
   }
 };
 
-/** Distances at which a turn is spoken; each once per guide. */
-const TURN_RUNGS_M = [500, 150];
+/** The rungs already spoken, per guide (speech.ts decides which and when). */
 const turnsSaid = new Map<string, Set<number>>();
 let arrived = false;
 
@@ -412,10 +723,10 @@ function showTurn(shown: Shown) {
   if (!shown.nextGuide) {
     if (shown.remainingM != null && shown.remainingM < 30 && !arrived) {
       arrived = true;
-      voice.say("목적지에 도착했습니다");
+      voice.say(EVENTS.arrived);
       el("turn-icon").innerHTML = arrowSvg("arrive");
       el("turn-in").textContent = "도착";
-      el("turn-text").textContent = goal?.name ?? "";
+      el("turn-text").textContent = drivingTo?.name ?? "";
       el("then").hidden = true;
     }
     return;
@@ -433,13 +744,9 @@ function showTurn(shown: Shown) {
   }
   const key = `${g.at[0]},${g.at[1]}`;
   const said = turnsSaid.get(key) ?? new Set<number>();
-  for (const rung of TURN_RUNGS_M) {
-    if (said.has(rung) || shown.nextGuide.inM > rung) continue;
-    said.add(rung);
-    turnsSaid.set(key, said);
-    voice.say(`${rung}미터 앞 ${g.text}`);
-    break;
-  }
+  turnsSaid.set(key, said);
+  const sentence = turnSpeech(maneuverOf(route.provider, g), shown.nextGuide.inM, shown.speedMps * 3.6, said, g.text);
+  if (sentence && guide.turns) voice.say(sentence);
 }
 
 const km = (m: number) => (m < 1000 ? `${Math.round(m / 10) * 10} m` : `${(m / 1000).toFixed(1)} km`);
@@ -452,8 +759,40 @@ setInterval(() => { el("clock").textContent = hhmm(new Date()); }, 1000);
 el("clock").textContent = hhmm(new Date());
 drawRecents();
 
-// Back onto the car, when the map was dragged away.
-el("recenter").addEventListener("click", () => setFollow(true));
+// ---- 주변 --------------------------------------------------------------------
+
+const nearby = new Nearby({
+  map,
+  here,
+  following: () => follow,
+  route: () => route,
+  alongM: () => tracker.frame()?.alongM ?? null,
+  demo,
+  log,
+  go: (place) => void choose(place),
+  look: (at) => {
+    setFollow(false);
+    touchedAt = Date.now();
+    // Into the middle of the free part of the screen (an offset, not padding: see centreFor).
+    const middle = carSpot(0);
+    const canvas = map.getCanvas();
+    map.easeTo({ center: at, zoom: Math.max(map.getZoom(), 16), offset: [middle.x - canvas.clientWidth / 2, 0], duration: 600 });
+  },
+  sheet: (open) => {
+    if (open) { openDock(false); el("guide").hidden = true; }
+    sideChanged();
+  },
+});
+el("nearby-open").addEventListener("click", () => nearby.show(!nearby.isOpen));
+setView(view);
+setFollow(true);
+
+/** The right column's holder changed: the controls step aside, and the car re-centres. */
+function sideChanged() {
+  const open = !el("nearby").hidden || !el("guide").hidden || !el("music-dock").classList.contains("closed");
+  document.body.classList.toggle("side-open", open);
+  el("nearby-open").classList.toggle("on", nearby.isOpen);
+}
 
 // ---- the road ahead --------------------------------------------------------
 
@@ -480,7 +819,51 @@ async function watchRoad(fix: Fix) {
     log(`경고 ${phrase}`);
     voice.say(phrase);
   }
+  showLimit(watch.limitAt(along), fix.speed);
 }
+
+/** When the soft over-the-limit chime last sounded; it repeats while over, not faster than this. */
+let chimedAt = 0;
+const CHIME_EVERY_MS = 3000;
+
+/**
+ * The limit ahead on the panel (a sign, and "과속 카메라 420 m" or
+ * "구간 단속"), the speed in red over it, and the chime — the car apps'
+ * camera stretch, as far out as the warning starts.
+ */
+function showLimit(held: ReturnType<RouteWatch["limitAt"]>, speedMps: number | null | undefined) {
+  el("cam").hidden = !held;
+  const kmh = speedMps == null ? null : speedMps * 3.6;
+  const over = !!held && kmh != null && kmh > held.limit + guide.overspeedBy;
+  document.querySelector(".big")!.classList.toggle("over", over);
+  if (!held) return;
+  el("cam-limit").textContent = String(held.limit);
+  el("cam-what").textContent = held.why === "section" ? "구간 단속 중" : `단속 카메라 ${km(held.inM ?? 0)}`;
+  if (over && guide.overspeed && Date.now() - chimedAt > CHIME_EVERY_MS) {
+    chimedAt = Date.now();
+    voice.chime();
+  }
+}
+
+// ---- 안내 설정 ----------------------------------------------------------------
+
+const guide = loadGuide();
+function applyGuide() {
+  voice.enabled = guide.voice;
+  voice.setVolume(guide.volume);
+}
+applyGuide();
+function openGuide(open: boolean) {
+  el("guide").hidden = !open;
+  if (open) {
+    nearby.show(false);
+    openDock(false);
+    drawGuide(el("guide-rows"), guide, applyGuide);
+  }
+  sideChanged();
+}
+el("guide-open").addEventListener("click", () => openGuide(el("guide").hidden));
+el("guide-close").addEventListener("click", () => openGuide(false));
 
 // ---- music -----------------------------------------------------------------
 // The dock is a mini bar (art, title, ⏯ ⏭) that opens into the full
@@ -503,8 +886,12 @@ function musicSay(text: string, bad = false) {
 
 function openDock(open: boolean) {
   el("music-dock").classList.toggle("closed", !open);
+  if (open && nearby.isOpen) nearby.show(false);
+  if (open) el("guide").hidden = true;
+  sideChanged();
 }
 el("mini").addEventListener("click", () => openDock(el("music-dock").classList.contains("closed")));
+drawDockSize();
 
 async function drawSources() {
   if (demo) return;
@@ -556,9 +943,15 @@ function duckBySource(level: number) {
   music?.setVolume(level);
 }
 
+/** A playing (or paused mid-song) player keeps its bar; with nothing on, the dock shrinks to a button. */
+function drawDockSize() {
+  el("music-dock").classList.toggle("compact", !now.playing);
+}
+
 function showNow(state: NowPlaying) {
   now = state;
   nowAt = performance.now();
+  drawDockSize();
   const has = !!state.title;
   el("mini-title").textContent = state.title ?? "음악";
   el("mini-artist").textContent = state.artist ?? music?.label ?? "Spotify · TIDAL";
@@ -635,15 +1028,33 @@ function startSim() {
   sim?.stop();
   sim = new Simulator(gps, route);
   sim.speedMps = simSpeed();
-  sim.onEnd = () => { el("sim-toggle").classList.remove("on"); log("모의 주행 끝"); };
+  sim.onEnd = () => { el("sim-toggle").classList.remove("on"); el("sim-bar").hidden = true; log("모의 주행 끝"); };
   sim.start();
   el("sim-toggle").classList.add("on");
+  el("sim-bar").hidden = false;
+  el("sim-kmh").textContent = el<HTMLInputElement>("sim-speed").value;
   log(`모의 주행 시작 ${Math.round(sim.speedMps * 3.6)} km/h`);
 }
 function stopSim() {
   sim?.stop();
   el("sim-toggle").classList.remove("on");
+  el("sim-bar").hidden = true;
   gps.start();
+}
+// 모의 주행 from the route cards, as the car apps have it: the chosen way,
+// driven by a pretend GPS, with the voice and the warnings as for real.
+el("go-sim").addEventListener("click", () => {
+  if (!chosen) return;
+  startDrive(chosen);
+  startSim();
+});
+for (const [id, by] of [["sim-slower", -10], ["sim-faster", 10]] as const) {
+  el(id).addEventListener("click", () => {
+    const input = el<HTMLInputElement>("sim-speed");
+    input.value = String(Math.max(10, Math.min(120, Number(input.value) + by)));
+    input.dispatchEvent(new Event("input"));
+    el("sim-kmh").textContent = input.value;
+  });
 }
 el("sim-toggle").addEventListener("click", () => (sim?.running ? stopSim() : startSim()));
 el("sim-tunnel").addEventListener("click", () => { sim?.tunnel(10); log("터널: 10초간 GPS 없음"); });
@@ -721,6 +1132,10 @@ if (demo) map.once("load", async () => {
     routeLayer.fit(...offers);
   } else {
     startDrive(offers[0]);
+    // A made-up camera a quarter of the way along, limit 30 against the
+    // pretend 50 km/h, so the sign, the red speed and the chime can be seen.
+    const cam = path[q(0.25)];
+    watch?.add([{ id: "demo:cam", kind: "speed", lon: cam[0], lat: cam[1], limit: 30 }]);
     startSim();
   }
   const row = el("music-sources");
@@ -750,6 +1165,7 @@ map.on("load", async () => {
   try {
     health = await api.health();
     log(`서버 ${JSON.stringify(health)}`);
+    nearby.sources = health.nearby;
     if (!health.search) el<HTMLInputElement>("q").placeholder = "검색 키 없음 — lon,lat 입력";
   } catch {
     log("서버 응답 없음 (/api/health)");

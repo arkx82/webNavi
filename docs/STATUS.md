@@ -33,6 +33,11 @@
 - **모의 주행**: 경로를 따라 1 Hz 가짜 GPS. 속도 슬라이더, 터널, 이탈 버튼
 - **`?demo`**: 강남역 → 선릉 OSM 실제 도로로 자동 모의 주행. `&screen=preview`를 붙이면 경로 카드 화면
 - CSV 로그 재생, WebGL이 없을 때 안내 문구, 지도 스타일을 못 받으면 빈 바닥으로 대체
+- **지도 조작** (2026-09-29): 3D/2D 진행 방향/북쪽 고정 모드, 끌기·회전·기울이기는 자유 보기
+  (핀치 확대는 따라가기 유지), 안내 중 12초 뒤 자동 복귀, 현위치·확대/축소 버튼, 차를 화살표로
+- **주변 카테고리** (2026-09-29): 주유소(오피넷 가격)·충전소(환경공단 빈 충전기, 환경부 요금)·주차장·
+  음식점·카페·편의점·병원·약국·은행·휴게소. 여러 종류 동시 표시, 거리순/가격순, 유종 선택,
+  경로 위만, 상세 → 목적지로. 주행 중 목적지를 바꿔도 카드를 닫으면 원래 목적지 유지
 
 ## 음악 서비스 판단
 
@@ -53,11 +58,19 @@
 1. **차 페이지 접근 키**: 지금은 도메인을 아는 사람이면 누구나 `/api/*`를 부를 수 있음. 경로·TTS 비용이 나가고, Spotify 토큰도 받아 갈 수 있음. `/admin`에서 긴 키를 만들어 차 브라우저에 한 번 넣는 방식으로
 2. **실제 키로 검증**: TMAP·카카오·네이버·DashScope 키를 `/admin`에 넣고 "연결 확인" → 실제 경로 카드와 음성 확인
 3. **공공데이터 CSV 넣기**: 경찰청 무인교통단속카메라, 행안부 과속방지턱
+   - **오피넷 키·공공데이터포털 키**도 `/admin`에 넣고 "연결 확인". 특히 충전소 API의 `zscode`
+     (시군구) 조회가 실제로 되는지, 강원(51/42)·전북(52/45) 코드 중 무엇이 맞는지는 실제 키로만 확인됨
 4. **Spotify·TIDAL 앱 등록** 후 계정 연결 확인
 5. **실차**: GPS 필드(heading/speed 제공 여부, 수신 주기), Widevine, 순정 오디오와의 공존, Wake Lock, 메모리
 6. NUC 배포: 도메인 + 포트포워딩 또는 Cloudflare Tunnel
 
-화면 쪽으로 더 볼 만한 것: 낮 모드(일몰 기준 자동 전환), 확대·축소 버튼, 차선 안내(TMAP·카카오가 주는 정보)
+**실제 키 확인 (2026-09-29, 도커 :8088)**: 티맵·카카오·네이버 경로 ✅, 오피넷 가격 ✅, 음성 ✅,
+충전소 ✅(시군구를 티맵 역지오코딩으로), 티맵 벡터 바탕 지도 ✅. 남은 것: 카카오 앱의 **카카오맵 사용 설정 OFF**
+(검색·주변 403), 티맵 경로에 구간별 혼잡도(`traffic`)가 안 옴(요청 방식 3가지 모두 — 요금제 추정).
+
+화면 쪽으로 더 볼 만한 것: 낮 모드(일몰 기준 자동 전환), 차선 안내(TMAP·카카오가 주는 정보),
+**경유지 추가**(주변에서 고른 주유소를 목적지 대신 경유지로 — 3사 모두 경유지 파라미터가 있음),
+지도 길게 눌러 목적지, 테슬라 슈퍼차저(환경공단 피드에 없을 수 있음)
 
 ## 로컬에서 보기
 
@@ -65,23 +78,10 @@
 cd tesla-nav && npm install && npm run build
 PORT=8080 node server/dist/index.js
 # http://localhost:8080/?demo    http://localhost:8080/?demo&screen=preview    http://localhost:8080/admin
-npm test    # 서버 9개 + 웹 11개
+npm test    # 서버 20개 + 웹 22개
 ```
 
-## 커밋 (13개, main, 푸시 안 함)
+## 저장소
 
-```
-46fdfd5 The trip as three screens: where to, the ways there, the way
-a95817f OpenStreetMap roads with no key, and the demo drives on them
-9dc135d Player on the right, clear of the trip panel; a ground when the map never comes
-6f8d4ce A player dock like a music app's, and a pretend drive for the desk
-9238394 A ?demo drive for judging the panel at a desk, and a route that waits for the style
-6482e72 Keep hidden things hidden, and say when WebGL is missing
-ff9c22c Play the owner's Spotify or TIDAL on the page, ducked by the voice
-3524708 Say how the NUC gets it, now that the image runs
-26389ff Take the keys on a settings page, kept encrypted, in force at once
-73b0d99 Warn of what is ahead, in a voice that turns the music down
-6633e2f Track the car on the road: matching, gliding, reckoning, rerouting
-18e80b1 Search a destination and draw the route, coloured by traffic
-29a0bcd Start tesla-nav: server, car-side probe page, Docker
-```
+GitHub `arkx82/webNavi` (공개, Apache-2.0). 키·비밀번호는 저장소에 없다 — `/admin` 에 넣은 값은 서버의
+`CONFIG_DIR`(도커 볼륨 `nav_config`)에 암호화되어 있고, `.env`·`server/config/`·`server/tts/` 는 제외된다.

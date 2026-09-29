@@ -20,6 +20,10 @@ export interface Secrets {
   naverClientSecret?: string;
   dashscopeApiKey?: string;
   ttsVoice?: string;
+  /** 오피넷 (fuel prices) and data.go.kr (chargers), and the owner's own charger rates. */
+  opinetKey?: string;
+  dataGoKrKey?: string;
+  evTariffs?: string;
   adminHash?: string;
   /** Streaming accounts: the app's client, and the owner's refresh token once connected. */
   spotifyClientId?: string;
@@ -39,6 +43,9 @@ const ENV: Record<SecretName, string | undefined> = {
   naverClientSecret: "NAVER_CLIENT_SECRET",
   dashscopeApiKey: "DASHSCOPE_API_KEY",
   ttsVoice: "TTS_VOICE",
+  opinetKey: "OPINET_KEY",
+  dataGoKrKey: "DATA_GO_KR_KEY",
+  evTariffs: "EV_TARIFFS",
   adminHash: undefined,
   spotifyClientId: "SPOTIFY_CLIENT_ID",
   spotifyClientSecret: "SPOTIFY_CLIENT_SECRET",
@@ -51,6 +58,7 @@ const ENV: Record<SecretName, string | undefined> = {
 /** The fields the page edits, in the order it shows them. */
 export const EDITABLE: SecretName[] = [
   "tmapAppKey", "kakaoRestKey", "naverClientId", "naverClientSecret", "dashscopeApiKey", "ttsVoice",
+  "opinetKey", "dataGoKrKey", "evTariffs",
   "spotifyClientId", "spotifyClientSecret", "tidalClientId", "tidalClientSecret",
 ];
 
@@ -105,7 +113,7 @@ export class Settings {
       out[name] = {
         set: !!value,
         from: saved ? "saved" : value ? "env" : null,
-        hint: value ? (name === "ttsVoice" ? value : "…" + value.slice(-4)) : "",
+        hint: value ? (name === "ttsVoice" || name === "evTariffs" ? value : "…" + value.slice(-4)) : "",
       };
     }
     return out;

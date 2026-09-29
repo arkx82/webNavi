@@ -15,8 +15,17 @@ const COLOURS: Record<number, string> = {
 
 export class RouteLayer {
   private ready = false;
+  private last: [Route | null, Route[]] = [null, []];
 
-  constructor(private map: maplibregl.Map) {}
+  constructor(private map: maplibregl.Map) {
+    // A new style (switching the ground, or the plain fallback) takes the
+    // sources with it; what was shown is drawn again on the new one.
+    map.on("style.load", () => {
+      if (!this.ready) return;
+      this.ready = false;
+      this.show(...this.last);
+    });
+  }
 
   private install() {
     if (this.ready) return;
@@ -52,6 +61,7 @@ export class RouteLayer {
   }
 
   show(route: Route | null, alternates: Route[] = []) {
+    this.last = [route, alternates];
     // A route can arrive before the style has: sources cannot be added
     // until it is, so the drawing waits for it.
     if (!this.map.isStyleLoaded()) {
@@ -92,6 +102,8 @@ export class RouteLayer {
       if (x < minX) minX = x; if (y < minY) minY = y;
       if (x > maxX) maxX = x; if (y > maxY) maxY = y;
     }
+    // The camera's own margins (kept from following the car) would add to these.
+    this.map.setPadding({ top: 0, bottom: 0, left: 0, right: 0 });
     this.map.fitBounds([[minX, minY], [maxX, maxY]], { padding: { top: 60, bottom: 60, left: 360, right: 60 }, pitch: 0, bearing: 0, duration: 800 });
   }
 }

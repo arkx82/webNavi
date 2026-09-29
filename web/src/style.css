@@ -9,6 +9,8 @@
 }
 html, body { margin: 0; height: 100%; background: #111; color: var(--ink); font-family: var(--font); }
 #map { position: absolute; inset: 0; }
+/* TMAP's or NAVER's ground, under MapLibre's transparent canvas (tmap-base.ts, naver-base.ts). */
+#ground { position: absolute; inset: 0; }
 #hud {
   position: absolute; top: 16px; left: 16px; width: 320px; max-height: calc(100% - 32px);
   padding: 16px; box-sizing: border-box; border-radius: 12px; background: var(--panel);
@@ -55,6 +57,12 @@ details > * + * { margin-top: 8px; }
 #mini { display: flex; align-items: center; gap: 12px; min-height: 64px; padding: 8px 12px 8px 10px; cursor: pointer; user-select: none; }
 #mini .titles { flex: 1; min-width: 0; }
 #mini-chevron { color: var(--dim); font-size: 14px; transition: transform 0.2s; }
+#mini-note { display: none; }
+/* Nothing playing and the player shut: the dock is a round button, the size of 현위치. */
+#music-dock.compact.closed { width: 60px; height: 60px; border-radius: 50%; box-shadow: 0 2px 10px rgba(0,0,0,.45); }
+#music-dock.compact.closed #mini { min-height: 60px; padding: 0; justify-content: center; }
+#music-dock.compact.closed #mini > :not(#mini-note) { display: none; }
+#music-dock.compact.closed #mini-note { display: block; color: var(--ink); }
 #music-dock.closed #mini-chevron { transform: rotate(180deg); }
 #music-dock.closed #full { display: none; }
 /* Open, it is the whole right column — never over the trip panel on the
@@ -126,8 +134,132 @@ button.primary { background: var(--accent); color: #000; font-weight: 600; min-h
 #eta b { font-size: 26px; font-variant-numeric: tabular-nums; }
 #eta small { color: var(--dim); }
 #eta-left { color: var(--dim); font-size: 15px; }
-/* Back onto the car, floating on the map by the panel's foot. */
-#recenter {
-  position: absolute; left: 16px; bottom: 16px; width: 56px; height: 56px; border-radius: 50%;
-  background: var(--panel); color: var(--accent); font-size: 28px; box-shadow: 0 2px 8px rgba(0,0,0,.4); z-index: 1;
+/* ---- on the map's right edge ---- */
+/* The column moves left of whatever holds the right side: the 주변 sheet
+   or the open player. */
+#controls {
+  position: absolute; top: 16px; right: 16px; z-index: 1; display: flex; flex-direction: column; gap: 10px;
+  transition: right 0.2s;
 }
+button.ctl {
+  flex: 0 0 auto; width: 60px; min-height: 60px; height: 60px; padding: 0; border-radius: 14px; background: var(--panel);
+  backdrop-filter: blur(6px); box-shadow: 0 2px 8px rgba(0,0,0,.35); display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 2px; line-height: 1; font-size: 26px;
+}
+button.ctl small { font-size: 12px; color: var(--dim); }
+button.ctl.on { background: var(--accent); color: #000; }
+button.ctl.on small { color: #000; }
+.ctl-pair { display: flex; flex-direction: column; border-radius: 14px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,.35); }
+.ctl-pair button.ctl { border-radius: 0; box-shadow: none; }
+.ctl-pair button.ctl + button.ctl { border-top: 1px solid #2a2a2e; }
+#view-ic { transition: transform 0.2s; }
+#locate {
+  position: absolute; right: 16px; bottom: 96px; z-index: 1; flex: 0 0 auto; width: 60px; height: 60px; min-height: 60px; padding: 0;
+  border-radius: 50%; background: #fff; color: #1a73e8; box-shadow: 0 2px 10px rgba(0,0,0,.45);
+  display: flex; align-items: center; justify-content: center; transition: right 0.2s;
+}
+/* Following the car, it is quiet; off the car, it asks to be pressed. */
+#locate.on { background: var(--panel); color: var(--accent); }
+body.side-open #controls, body.side-open #locate { right: 368px; }
+#base-menu {
+  position: absolute; right: 88px; z-index: 3; width: 260px; padding: 10px; box-sizing: border-box;
+  border-radius: 14px; background: var(--panel); backdrop-filter: blur(8px); box-shadow: 0 4px 16px rgba(0,0,0,.45);
+  display: flex; flex-direction: column; gap: 6px;
+}
+body.side-open #base-menu { right: 440px; }
+.menu-title { font-size: 13px; color: var(--dim); padding: 2px 4px 4px; }
+#base-options { display: flex; flex-direction: column; gap: 6px; }
+#base-options button {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-height: 56px; line-height: 1.2;
+  padding: 8px 12px; text-align: left; background: #26262b; border: 2px solid transparent;
+}
+#base-options button b { font-size: 16px; }
+#base-options button small { font-size: 12px; color: var(--dim); }
+#base-options button.on { border-color: var(--accent); background: #24313a; }
+#base-options button:disabled { opacity: 0.45; }
+
+/* The car: an arrow lying on the road, turned by its heading. */
+.car { width: 44px; height: 44px; filter: drop-shadow(0 2px 3px rgba(0,0,0,.5)); }
+
+/* ---- 모의 주행 ---- */
+.go-row button.primary { flex: 2; }
+#sim-bar { display: flex; align-items: center; gap: 8px; padding: 4px 8px 4px 12px; border-radius: 10px; background: #3a2d12; color: #ffcf70; }
+#sim-bar .sim-name { flex: 1; font-size: 14px; }
+#sim-bar b { font-size: 20px; font-variant-numeric: tabular-nums; min-width: 34px; text-align: right; }
+#sim-bar small { font-size: 12px; margin-right: 4px; }
+#sim-bar button.icon { width: 40px; height: 40px; min-height: 40px; background: #26262b; color: var(--ink); }
+
+/* ---- 안내 설정 ---- */
+.top-right { display: flex; align-items: center; gap: 6px; }
+.top-right button.icon { width: 40px; height: 40px; min-height: 40px; font-size: 18px; color: var(--dim); }
+#guide {
+  position: absolute; top: 16px; right: 16px; bottom: 96px; width: 340px; z-index: 2; box-sizing: border-box;
+  padding: 12px 14px; border-radius: 14px; background: var(--panel); backdrop-filter: blur(8px);
+  display: flex; flex-direction: column; gap: 8px; overflow: auto;
+}
+.gs-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid #2a2a2e; }
+.gs-row.wide { flex-direction: column; align-items: stretch; }
+.gs-row.off { opacity: 0.4; }
+.gs-label { font-size: 15px; }
+.gs-sub { font-size: 12px; color: var(--dim); margin-top: 2px; }
+.gs-row input[type="range"] { width: 100%; }
+.gs-row .seg button { flex: 1; }
+button.switch { flex: 0 0 auto; width: 52px; min-height: 30px; height: 30px; padding: 0; border-radius: 15px; background: #3a3a44; position: relative; }
+button.switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 24px; height: 24px; border-radius: 50%; background: #fff; transition: left 0.15s; }
+button.switch.on { background: var(--accent); }
+button.switch.on::after { left: 25px; }
+/* The limit ahead: a road sign, and what it is for. */
+#cam { display: flex; align-items: center; gap: 10px; padding: 6px 12px; border-radius: 10px; background: #26262b; font-size: 15px; }
+.limit-sign { width: 40px; height: 40px; border-radius: 50%; border: 5px solid #e5484d; background: #fff; color: #111; box-sizing: border-box; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 16px; }
+.big.over #speed { color: #ff4d4f; }
+
+/* ---- 주변 ---- */
+/* --cs is the category colour at a quarter strength (8-digit hex: the car's
+   Chromium may predate color-mix). */
+.chips { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+button.chip {
+  min-height: 56px; padding: 6px 0 4px; line-height: 1.1; font-size: 12px; border-radius: 10px; background: #26262b;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+}
+.chip-ic { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: var(--cs); color: var(--c); }
+button.chip.on { background: var(--cs); box-shadow: inset 0 0 0 2px var(--c); color: #fff; }
+button.chip.on .chip-ic { background: var(--c); color: #fff; }
+.chips.quick { margin-top: 2px; }
+#nearby {
+  position: absolute; top: 16px; right: 16px; bottom: 96px; width: 340px; z-index: 2; box-sizing: border-box;
+  padding: 12px 14px; border-radius: 14px; background: var(--panel); backdrop-filter: blur(8px);
+  display: flex; flex-direction: column; gap: 10px; overflow: hidden;
+}
+.nb-head { display: flex; align-items: center; justify-content: space-between; font-size: 18px; }
+#nb-listview, #nb-detail { display: flex; flex-direction: column; gap: 10px; min-height: 0; flex: 1; }
+.nb-opts { display: flex; flex-wrap: wrap; gap: 6px; }
+.nb-opts:empty { display: none; }
+.seg { display: flex; border-radius: 8px; overflow: hidden; background: #26262b; }
+.seg button { flex: 0 0 auto; min-height: 36px; line-height: 36px; padding: 0 10px; font-size: 13px; border-radius: 0; background: transparent; }
+.seg button.on { background: var(--accent); color: #000; }
+button.toggle { flex: 0 0 auto; min-height: 36px; line-height: 36px; padding: 0 12px; font-size: 13px; }
+#nb-list { list-style: none; margin: 0 -14px; padding: 0; overflow: auto; flex: 1; min-height: 0; }
+.nb-item { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid #2a2a2e; cursor: pointer; }
+.nb-ic { flex: 0 0 auto; width: 32px; height: 32px; border-radius: 50%; background: var(--c); color: #fff; display: flex; align-items: center; justify-content: center; }
+.nb-ic.big { width: 44px; height: 44px; }
+.nb-main { flex: 1; min-width: 0; }
+.nb-name { font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nb-sub { font-size: 12px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+.nb-side { flex: 0 0 auto; text-align: right; display: flex; flex-direction: column; align-items: flex-end; line-height: 1.15; }
+.nb-side b { font-size: 17px; font-variant-numeric: tabular-nums; }
+.nb-side small { font-size: 11px; color: var(--dim); }
+.nb-side b.free { color: #3ddc84; }
+.nb-side b.busy { color: #ff6b6b; }
+.low-tag { font-size: 10px; padding: 1px 6px; border-radius: 8px; background: #3ddc84; color: #000; margin-bottom: 2px; }
+button.back { flex: 0 0 auto; align-self: flex-start; min-height: 36px; line-height: 36px; font-size: 14px; padding: 0 10px; background: transparent; color: var(--accent); }
+.nb-d-head { display: flex; align-items: center; gap: 12px; }
+.nb-d-head .title { font-size: 19px; white-space: normal; }
+.prices { display: grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: 6px; }
+.price { padding: 8px 10px; border-radius: 10px; background: #26262b; display: flex; flex-direction: column; gap: 2px; }
+.price small { font-size: 12px; color: var(--dim); }
+.price b { font-size: 20px; font-variant-numeric: tabular-nums; }
+.price.on { box-shadow: inset 0 0 0 2px #f5821f; }
+#nb-d-rows { font-size: 14px; overflow: auto; }
+#nb-d-rows dd { font-variant-numeric: normal; }
+#nb-detail .primary { flex: 0 0 auto; margin-top: auto; }
+#nb-d-rows { flex: 0 1 auto; }

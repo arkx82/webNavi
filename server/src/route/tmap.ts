@@ -3,12 +3,13 @@ import { askJson, type LonLat, type Route, type RouteProvider, type RouteRequest
 /**
  * TMAP car route (SK open API). The answer is a GeoJSON FeatureCollection:
  * Point features are turn guides, LineString features are the road between
- * them. With trafficInfo=Y each LineString carries `traffic`: rows of
- * [fromIndex, toIndex, congestion, speed], congestion 0..4 (0 unknown,
- * 1 free, 2 slow, 3 delayed, 4 congested).
+ * them. With trafficInfo=Y each LineString's *geometry* (not its
+ * properties) carries `traffic`: rows of [fromIndex, toIndex, congestion,
+ * speed], congestion 0..4 (0 unknown, 1 free, 2 slow, 3 delayed —
+ * deprecated, 4 congested).
  */
 interface TmapFeature {
-  geometry: { type: "Point"; coordinates: LonLat } | { type: "LineString"; coordinates: LonLat[] };
+  geometry: { type: "Point"; coordinates: LonLat } | { type: "LineString"; coordinates: LonLat[]; traffic?: number[][] };
   properties: {
     totalDistance?: number;
     totalTime?: number;
@@ -55,7 +56,7 @@ export class Tmap implements RouteProvider {
       } else {
         const base = route.path.length;
         route.path.push(...feature.geometry.coordinates);
-        const rows = p.traffic ?? [];
+        const rows = feature.geometry.traffic ?? p.traffic ?? [];
         if (rows.length === 0) {
           route.segments.push({ from: base, to: route.path.length, congestion: 0 });
         }

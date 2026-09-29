@@ -7,3 +7,7 @@ server/tts/
 server/config/
 *.log
 .DS_Store
+
+# This machine only: editor colours, a code-scan tool.
+.vscode/
+.codesight/

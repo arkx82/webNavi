@@ -40,4 +40,50 @@ export interface Health {
   safetyFeatures: number;
   search: boolean;
   tts: boolean;
+  /** Which source answers fuel and chargers; null without any key. */
+  nearby?: { gas: "opinet" | "kakao" | null; ev: "env" | "kakao" | null; places: boolean };
+}
+
+// ---- nearby: mirrors server/src/nearby/types.ts ----
+
+export type Category = "gas" | "ev" | "parking" | "food" | "cafe" | "cvs" | "hospital" | "pharmacy" | "bank" | "rest";
+/** Opinet product codes: 휘발유, 고급휘발유, 경유, LPG. */
+export type Fuel = "B027" | "B034" | "D047" | "K015";
+
+export interface Price {
+  won: number;
+  unit: "L" | "kWh";
+  label: string;
+}
+
+export interface Chargers {
+  fastFree: number;
+  fastTotal: number;
+  slowFree: number;
+  slowTotal: number;
+  maxKw: number;
+  operator: string;
+  parkingFree?: boolean;
+  useTime?: string;
+  price?: Price;
+}
+
+export interface Poi {
+  id: string;
+  category: Category;
+  name: string;
+  address: string;
+  at: LonLat;
+  distanceM?: number;
+  detail?: string;
+  phone?: string;
+  price?: Price;
+  chargers?: Chargers;
+}
+
+export interface StationDetail {
+  address: string;
+  phone?: string;
+  prices: Price[];
+  extras: string[];
 }

@@ -1,4 +1,4 @@
-import type { Health, LonLat, Place, Provider, Route } from "./types";
+import type { Category, Fuel, Health, LonLat, Place, Poi, Provider, Route, StationDetail } from "./types";
 
 async function get<T>(path: string, params: Record<string, string | undefined>): Promise<T> {
   const url = new URL(path, location.origin);
@@ -18,4 +18,7 @@ export const api = {
     get<Route>("/api/route", { provider, start: pair(start), goal: pair(goal) }),
   routes: (start: LonLat, goal: LonLat) =>
     get<{ routes: Route[]; errors: string[] }>("/api/route", { provider: "all", start: pair(start), goal: pair(goal) }),
+  nearby: (category: Category, at: LonLat, radiusM: number, fuel?: Fuel) =>
+    get<Poi[]>("/api/nearby", { cat: category, at: pair(at), r: String(Math.round(radiusM)), fuel }),
+  gasDetail: (uniId: string) => get<StationDetail>(`/api/nearby/gas/${encodeURIComponent(uniId)}`, {}),
 };
