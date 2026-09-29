@@ -25,7 +25,7 @@ const STYLE_WAIT_S = 8;
 const GROUND: maplibregl.StyleSpecification = {
   version: 8, sources: {}, layers: [{ id: "ground", type: "background", paint: { "background-color": "#e6e2d8" } }],
 };
-const NAMES: Record<Provider, string> = { tmap: "티맵", kakao: "카카오", naver: "네이버" };
+const NAMES: Record<Provider, string> = { tmap: "티맵", kakao: "카카오", naver: "네이버", osrm: "OSM" };
 /** How often the road is asked again for a better way, and how much better it must be. */
 const RECHECK_MS = 6 * 60_000;
 const BETTER_BY_S = 3 * 60;
@@ -257,8 +257,10 @@ tracker.onOffRoute = async () => {
 function drawProviders() {
   const row = el("providers");
   row.replaceChildren();
-  for (const name of ["tmap", "kakao", "naver"] as Provider[]) {
+  for (const name of ["tmap", "kakao", "naver", "osrm"] as Provider[]) {
     if (health && !health.providers[name]) continue;
+    // The free road is shown only while it is the one being driven.
+    if (name === "osrm" && route?.provider !== "osrm") continue;
     const offer = offers.find((r) => r.provider === name);
     const b = document.createElement("button");
     b.textContent = NAMES[name];
@@ -569,22 +571,34 @@ el<HTMLInputElement>("replay").addEventListener("change", async (e) => {
 // ?demo fills the panel as it looks mid-trip — route, turn, offers, a song —
 // with no server, no car and no account, so the layout can be judged.
 
-if (demo) map.once("load", () => {
-  const path: LonLat[] = [];
-  for (let i = 0; i <= 60; i++) path.push([HOME[0] + i * 0.0006, HOME[1] + Math.sin(i / 8) * 0.0015 + i * 0.0003]);
+if (demo) map.once("load", async () => {
+  // A real road when OSRM can be reached (Gangnam station → Seolleung), else a drawn curve.
+  let path: LonLat[] = [];
+  let real: Route | null = null;
+  try {
+    real = await api.route("osrm", HOME, [127.0489, 37.5045]);
+    path = real.path;
+    log(`데모 경로: OSM 도로 ${path.length}점`);
+  } catch (e) {
+    for (let i = 0; i <= 60; i++) path.push([HOME[0] + i * 0.0006, HOME[1] + Math.sin(i / 8) * 0.0015 + i * 0.0003]);
+    log(`데모 경로: OSRM 못 닿음 (${(e as Error).message}) — 그린 곡선`);
+  }
+  const n = path.length;
+  const q = (k: number) => Math.round((n - 1) * k);
   const fake = (provider: Provider, durationS: number): Route => ({
-    provider, distanceM: 4200, durationS, path,
-    guides: [
-      { at: path[20], text: "테헤란로 방면 우회전", distanceM: 1300, turnType: 12 },
-      { at: path[45], text: "선릉로 방면 좌회전", distanceM: 1600, turnType: 13 },
+    provider, distanceM: real?.distanceM ?? 4200, durationS, path,
+    guides: real?.guides ?? [
+      { at: path[q(0.33)], text: "테헤란로 방면 우회전", distanceM: 1300, turnType: 12 },
+      { at: path[q(0.75)], text: "선릉로 방면 좌회전", distanceM: 1600, turnType: 13 },
     ],
+    // Traffic is painted on, since the free road has none.
     segments: [
-      { from: 0, to: 15, congestion: 1 }, { from: 15, to: 30, congestion: 2 },
-      { from: 30, to: 42, congestion: 3 }, { from: 42, to: 61, congestion: 1 },
+      { from: 0, to: q(0.25), congestion: 1 }, { from: q(0.25), to: q(0.5), congestion: 2 },
+      { from: q(0.5), to: q(0.7), congestion: 3 }, { from: q(0.7), to: n, congestion: 1 },
     ],
   });
-  health = { ok: true, providers: { tmap: true, kakao: true, naver: true }, safetyFeatures: 48210, search: true, tts: true };
-  goal = { name: "스타벅스 선릉역점", address: "서울 강남구 테헤란로 340", at: path[60] };
+  health = { ok: true, providers: { tmap: true, kakao: true, naver: true, osrm: true }, safetyFeatures: 48210, search: true, tts: true };
+  goal = { name: "스타벅스 선릉역점", address: "서울 강남구 테헤란로 340", at: path[n - 1] };
   offers = [fake("kakao", 14 * 60), fake("tmap", 16 * 60), fake("naver", 19 * 60)];
   el("trip").hidden = false;
   el("trip-name").textContent = goal.name;

@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { Tmap } from "./route/tmap.js";
 import { Kakao } from "./route/kakao.js";
 import { Naver } from "./route/naver.js";
+import { Osrm } from "./route/osrm.js";
 import { ProviderError, type LonLat, type Provider, type RouteProvider } from "./route/types.js";
 import { SafetyIndex } from "./safety/index.js";
 import { KakaoSearch } from "./search.js";
@@ -29,6 +30,9 @@ const providers: Record<Provider, RouteProvider> = {
   tmap: new Tmap(settings.reader("tmapAppKey")),
   kakao: new Kakao(settings.reader("kakaoRestKey")),
   naver: new Naver(settings.reader("naverClientId"), settings.reader("naverClientSecret")),
+  // OpenStreetMap roads with no key and no traffic: the desk's provider,
+  // and the road under the demo. Left out of "all" when a real one answers.
+  osrm: new Osrm(),
 };
 
 const search = new KakaoSearch(settings.reader("kakaoRestKey"));
@@ -71,7 +75,8 @@ app.get<{ Querystring: RouteQuery }>("/api/route", async (request, reply) => {
     const s = lonLat(start);
     const g = lonLat(goal);
     if (!s || !g) return reply.code(400).send({ error: "start and goal are lon,lat" });
-    const ready = Object.values(providers).filter((p) => p.ready);
+    const keyed = Object.values(providers).filter((p) => p.ready && p.name !== "osrm");
+    const ready = keyed.length ? keyed : [providers.osrm];
     if (ready.length === 0) return reply.code(503).send({ error: "no provider has a key on this server" });
     const settled = await Promise.allSettled(ready.map((p) => p.route({ start: s, goal: g })));
     const routes = settled.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
@@ -149,7 +154,7 @@ app.get<{ Querystring: { url: string } }>("/api/stream", async (request, reply) 
 // The settings page, and one real call per service to prove a key.
 const admin = registerAdmin(app, settings, {
   status: () => ({
-    tmap: providers.tmap.ready, kakao: providers.kakao.ready, naver: providers.naver.ready,
+    tmap: providers.tmap.ready, kakao: providers.kakao.ready, naver: providers.naver.ready, osrm: "키 없음(무료)",
     검색: search.ready, 음성: speaker.ready, 목소리: speaker.voice,
     시설물: safety.features.length,
     "멘트 캐시": existsSync(ttsDir) ? readdirSync(ttsDir).filter((f) => f.endsWith(".wav")).length : 0,

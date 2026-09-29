@@ -1,6 +1,6 @@
 /** Mirrors server/src/route/types.ts and search.ts — the wire shape. */
 
-export type Provider = "tmap" | "kakao" | "naver";
+export type Provider = "tmap" | "kakao" | "naver" | "osrm";
 export type LonLat = [number, number];
 export type Congestion = 0 | 1 | 2 | 3;
 

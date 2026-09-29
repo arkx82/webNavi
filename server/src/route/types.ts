@@ -1,6 +1,6 @@
 /** One shape for every provider's answer, so the client never sees three. */
 
-export type Provider = "tmap" | "kakao" | "naver";
+export type Provider = "tmap" | "kakao" | "naver" | "osrm";
 
 /** [lon, lat] — GeoJSON order, which is what MapLibre and Turf take. */
 export type LonLat = [number, number];
