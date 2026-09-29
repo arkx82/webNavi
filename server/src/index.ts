@@ -16,6 +16,7 @@ import { CATEGORIES, FUELS, Nearby, type Category, type Fuel } from "./nearby/in
 import { NearbyError } from "./nearby/util.js";
 import { Speaker, isMadeVoice, prerender } from "./tts.js";
 import { MadeVoices, SYSTEM_VOICES } from "./voices.js";
+import { KmaWeather } from "./weather.js";
 import { Readable } from "node:stream";
 import { Settings } from "./settings.js";
 import { registerAdmin } from "./admin.js";
@@ -148,6 +149,19 @@ app.get<{ Querystring: { cat: string; at: string; r?: string; fuel?: string } }>
     request.log.warn({ category }, (refused as Error).message);
     const status = refused instanceof NearbyError || refused instanceof ProviderError ? 502 : /no key/.test((refused as Error).message) ? 503 : 502;
     return reply.code(status).send({ error: plain((refused as Error).message) });
+  }
+});
+
+// The weather where the car is (기상청 단기·중기예보, the data.go.kr key).
+const weather = new KmaWeather(settings.reader("dataGoKrKey"));
+app.get<{ Querystring: { at: string } }>("/api/weather", async (request, reply) => {
+  const at = lonLat(request.query.at);
+  if (!at) return reply.code(400).send({ error: "at is lon,lat" });
+  if (!weather.ready) return reply.code(503).send({ error: "weather has no data.go.kr key on this server" });
+  try {
+    return await weather.at(at);
+  } catch (refused) {
+    return reply.code(502).send({ error: (refused as Error).message });
   }
 });
 

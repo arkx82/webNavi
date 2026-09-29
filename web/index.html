@@ -20,6 +20,8 @@
   </head>
   <body>
     <div id="ground" hidden></div>
+    <!-- OpenStreetMap's data asks to be credited on the map itself when it is the ground (TMAP and NAVER draw their own logos). -->
+    <div id="osm-credit" hidden>© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors · OpenFreeMap</div>
     <div id="map"></div>
     <aside id="hud">
       <div class="top">
@@ -149,6 +151,8 @@
     <!-- On the map's right edge, the way the car apps stack them: which way
          up, what is around, how close; 현위치 by the player. -->
     <div id="controls">
+      <!-- The weather here: its icon and the temperature; the forecast when tapped. -->
+      <button id="wx-open" class="ctl wx" type="button" title="날씨" hidden></button>
       <button id="view-mode" class="ctl" type="button" title="지도 방향">
         <svg id="view-ic" viewBox="0 0 24 24" width="22" height="22"><path d="M12 3 6 20l6-3.5 6 3.5z" fill="currentColor"/></svg>
         <small id="view-label">3D</small>
@@ -179,10 +183,31 @@
       <header><b id="here-title"></b><button id="here-close" class="icon" type="button">✕</button></header>
       <ul id="here-list"></ul>
     </div>
-    <!-- 안내 설정: what the voice says, and from how far. -->
+    <!-- 날씨: now, the next day by the hour, ten days. -->
+    <aside id="weather" class="sheet" hidden>
+      <header class="nb-head"><b>날씨</b><button id="wx-close" class="icon" type="button">✕</button></header>
+      <div id="wx-body"></div>
+    </aside>
+    <!-- 안내 설정: what the voice says, and from how far; and, at its foot, where everything comes from. -->
     <aside id="guide" class="sheet" hidden>
       <header class="nb-head"><b>안내 설정</b><button id="guide-close" class="icon" type="button">✕</button></header>
       <div id="guide-rows"></div>
+      <details id="licences">
+        <summary>라이선스 · 출처</summary>
+        <dl class="lic">
+          <dt>지도</dt><dd>티맵 지도 © TMAP Mobility · 네이버 지도 © NAVER Cloud · © OpenStreetMap contributors (ODbL), 타일 OpenFreeMap · MapLibre GL JS (BSD-3)</dd>
+          <dt>경로</dt><dd>TMAP API (SK open API) · 카카오모빌리티 길찾기 API · 네이버 클라우드 Directions 5 · OSRM (OpenStreetMap 데이터)</dd>
+          <dt>장소</dt><dd>카카오 로컬 API (검색, 주변, 주소)</dd>
+          <dt>주유 가격</dt><dd>한국석유공사 오피넷 유가정보 API</dd>
+          <dt>전기차 충전소</dt><dd>한국환경공단 전기자동차 충전소 정보 — 공공데이터포털</dd>
+          <dt>단속 카메라</dt><dd>전국무인교통단속카메라표준데이터 (경찰청·각 지자체) — 공공데이터포털</dd>
+          <dt>사고 다발 지역</dt><dd>한국도로교통공단 지자체별 교통사고 다발지역 · 자전거 교통사고 다발지역 — 공공데이터포털</dd>
+          <dt>날씨</dt><dd>기상청 단기예보 조회서비스 · 중기예보 조회서비스 — 공공데이터포털</dd>
+          <dt>음성</dt><dd>Alibaba Cloud Model Studio Qwen3-TTS</dd>
+          <dt>음악</dt><dd>Spotify Web Playback SDK · TIDAL Player SDK — 각 서비스의 약관을 따름</dd>
+        </dl>
+        <p class="lic-note">공공데이터포털(data.go.kr)의 자료는 각 제공기관의 저작물이며, 공공누리 등 해당 데이터의 이용허락 조건에 따라 출처를 표시해 이용합니다. 자료는 제공기관의 갱신 주기에 따르며 실제와 다를 수 있습니다.</p>
+      </details>
     </aside>
     <!-- 주변: kinds of place to put on the map, and the list of them. -->
     <aside id="nearby" hidden>

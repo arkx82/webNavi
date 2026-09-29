@@ -18,6 +18,7 @@ import { Nearby } from "./nearby";
 import { autoZoom } from "./autozoom";
 import { EVENTS, turnSpeech } from "./speech";
 import { drawGuide, loadGuide, wants, type VoiceList } from "./guide-settings";
+import { WeatherPanel } from "./weather";
 import { isFavourite, loadPlaces, samePlace, savePlaces, toggleFavourite } from "./places";
 import { OVERLAY_STYLE, TmapBase, tmapAvailable } from "./tmap-base";
 import { NaverBase, naverAvailable } from "./naver-base";
@@ -245,7 +246,7 @@ function centreFor(at: LonLat, to: { x: number; y: number }, camera: { bearing: 
 function carSpot(carLow = 0) {
   const canvas = map.getCanvas();
   const hud = el("hud").getBoundingClientRect();
-  const side = !el("nearby").hidden || !el("guide").hidden || !el("music-dock").classList.contains("closed");
+  const side = !el("nearby").hidden || !el("guide").hidden || !el("weather").hidden || !el("music-dock").classList.contains("closed");
   const right = canvas.clientWidth - (side ? 356 : 76);
   return { x: (hud.right + right) / 2, y: (canvas.clientHeight * (1 + carLow)) / 2 };
 }
@@ -364,6 +365,7 @@ function setBase(next: Base, remember = true) {
     return setBase("osm", false);
   }
   el("base-label").textContent = BASE_NAMES[base];
+  el("osm-credit").hidden = base !== "osm";
   drawBaseMenu();
 }
 
@@ -887,7 +889,7 @@ const nearby = new Nearby({
     map.easeTo({ center: at, zoom: Math.max(map.getZoom(), 16), offset: [middle.x - canvas.clientWidth / 2, 0], duration: 600 });
   },
   sheet: (open) => {
-    if (open) { openDock(false); el("guide").hidden = true; }
+    if (open) { openDock(false); el("guide").hidden = true; el("weather").hidden = true; }
     sideChanged();
   },
 });
@@ -897,7 +899,7 @@ setFollow(true);
 
 /** The right column's holder changed: the controls step aside, and the car re-centres. */
 function sideChanged() {
-  const open = !el("nearby").hidden || !el("guide").hidden || !el("music-dock").classList.contains("closed");
+  const open = !el("nearby").hidden || !el("guide").hidden || !el("weather").hidden || !el("music-dock").classList.contains("closed");
   document.body.classList.toggle("side-open", open);
   el("nearby-open").classList.toggle("on", nearby.isOpen);
 }
@@ -1039,6 +1041,25 @@ map.on("contextmenu", (e) => {
 
 // ---- 안내 설정 ----------------------------------------------------------------
 
+// ---- 날씨 --------------------------------------------------------------------
+
+const weather = new WeatherPanel(el("wx-open"), el("weather"), el("wx-body"), log);
+function openWeather(open: boolean) {
+  el("weather").hidden = !open;
+  if (open) {
+    nearby.show(false);
+    openDock(false);
+    el("guide").hidden = true;
+    weather.draw();
+  }
+  sideChanged();
+}
+el("wx-open").addEventListener("click", () => openWeather(el("weather").hidden));
+el("wx-close").addEventListener("click", () => openWeather(false));
+// Where the car is, every five minutes (the panel asks again only after 10 km or a quarter of an hour).
+setInterval(() => void weather.refresh(here()), 5 * 60_000);
+map.once("load", () => void weather.refresh(here()));
+
 const guide = loadGuide();
 function applyGuide() {
   voice.enabled = guide.voice;
@@ -1061,6 +1082,7 @@ function openGuide(open: boolean) {
   if (open) {
     nearby.show(false);
     openDock(false);
+    el("weather").hidden = true;
     drawGuide(el("guide-rows"), guide, applyGuide, loadVoices, voicePicked);
   }
   sideChanged();
@@ -1090,7 +1112,7 @@ function musicSay(text: string, bad = false) {
 function openDock(open: boolean) {
   el("music-dock").classList.toggle("closed", !open);
   if (open && nearby.isOpen) nearby.show(false);
-  if (open) el("guide").hidden = true;
+  if (open) { el("guide").hidden = true; el("weather").hidden = true; }
   sideChanged();
 }
 el("mini").addEventListener("click", () => openDock(el("music-dock").classList.contains("closed")));

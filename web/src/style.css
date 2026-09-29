@@ -271,6 +271,46 @@ button.saved small { font-size: 12px; color: var(--dim); white-space: nowrap; ov
 #sim-bar small { font-size: 12px; margin-right: 4px; }
 #sim-bar button.icon { width: 40px; height: 40px; min-height: 40px; background: #26262b; color: var(--ink); }
 
+/* ---- 날씨 ---- */
+button.ctl.wx { gap: 0; }
+button.ctl.wx small { color: var(--ink); font-size: 13px; font-weight: 700; }
+#weather {
+  position: absolute; top: 16px; right: 16px; bottom: 96px; width: 340px; z-index: 2; box-sizing: border-box;
+  padding: 12px 14px; border-radius: 22px; background: linear-gradient(180deg, #243552 0%, rgba(20, 22, 32, 0.96) 55%); backdrop-filter: blur(8px);
+  display: flex; flex-direction: column; gap: 10px; overflow: auto;
+}
+.wx-now { display: flex; align-items: center; gap: 16px; padding: 4px 6px; }
+.wx-temp { font-size: 46px; font-weight: 800; line-height: 1; }
+.wx-word { font-size: 16px; color: #cfd8ff; margin-top: 4px; }
+.wx-facts { display: flex; flex-wrap: wrap; gap: 6px; }
+.wx-facts span { font-size: 12px; padding: 4px 10px; border-radius: 999px; background: rgba(255,255,255,.08); }
+.wx-hours { display: flex; gap: 4px; overflow-x: auto; padding: 6px 2px; margin: 0 -4px; }
+.wx-hour { flex: 0 0 52px; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 8px 0; border-radius: 16px; background: rgba(255,255,255,.05); }
+.wx-hour small { font-size: 11px; color: var(--dim); }
+.wx-hour b { font-size: 14px; }
+.wx-pop { font-style: normal; font-size: 11px; color: #7cc4ff; font-weight: 700; }
+.wx-pop.none { color: transparent; }
+.wx-days { display: flex; flex-direction: column; }
+.wx-day { display: grid; grid-template-columns: 64px 50px 34px 30px 1fr 30px; align-items: center; gap: 4px; padding: 7px 2px; border-bottom: 1px solid rgba(255,255,255,.06); font-size: 14px; }
+.wx-name { font-weight: 600; }
+.wx-ampm { display: flex; gap: 2px; }
+.wx-pct { font-size: 12px; color: #7cc4ff; font-weight: 700; }
+.wx-t { font-size: 13px; text-align: right; font-variant-numeric: tabular-nums; }
+.wx-t:last-child { text-align: left; }
+.wx-bar { position: relative; height: 6px; border-radius: 3px; background: rgba(255,255,255,.1); }
+.wx-bar i { position: absolute; top: 0; bottom: 0; border-radius: 3px; background: linear-gradient(90deg, #8ec5ff, #ffd166); }
+.wx-src { font-size: 11px; color: var(--dim); padding: 4px 2px; }
+
+/* ---- 라이선스 · 출처 ---- */
+#licences { margin-top: 8px; }
+#licences summary { font-size: 13px; color: var(--dim); cursor: pointer; padding: 6px 0; }
+dl.lic { display: grid; grid-template-columns: 76px 1fr; gap: 6px 10px; font-size: 12px; margin: 6px 0; }
+dl.lic dt { color: var(--dim); }
+dl.lic dd { margin: 0; line-height: 1.45; font-variant-numeric: normal; }
+.lic-note { font-size: 11px; color: var(--dim); line-height: 1.5; margin: 6px 0 0; }
+#osm-credit { position: absolute; left: 352px; bottom: 6px; z-index: 1; font-size: 10px; color: #555; background: rgba(255,255,255,.7); padding: 1px 6px; border-radius: 6px; }
+#osm-credit a { color: inherit; }
+
 /* ---- 안내 설정 ---- */
 .top-right { display: flex; align-items: center; gap: 6px; }
 .top-right button.icon { width: 40px; height: 40px; min-height: 40px; font-size: 18px; color: var(--dim); }
