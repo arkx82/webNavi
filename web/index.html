@@ -214,31 +214,40 @@
       <div id="mini" role="button" tabindex="0" title="음악">
         <!-- Nothing playing: only this, a round button like 현위치. -->
         <svg id="mini-note" viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/></svg>
-        <div class="art small" id="mini-art"></div>
+        <!-- The cover as a little record, turning while it plays. -->
+        <div class="disc" id="mini-art"></div>
         <div class="titles">
           <div class="title" id="mini-title">음악</div>
           <div class="artist" id="mini-artist">Spotify · TIDAL</div>
         </div>
-        <button id="mini-toggle" class="icon" type="button" hidden>▶</button>
-        <button id="mini-next" class="icon" type="button" hidden>⏭</button>
+        <div class="eq" id="mini-eq" aria-hidden="true"><i></i><i></i><i></i></div>
+        <button id="mini-toggle" class="icon round" type="button" hidden></button>
+        <button id="mini-next" class="icon round" type="button" hidden></button>
         <span id="mini-chevron">▴</span>
       </div>
       <div id="full">
-        <div class="tabs" id="music-sources"></div>
+        <div class="tabs pills" id="music-sources"></div>
         <div id="player" hidden>
-          <div class="art big" id="now-art"></div>
-          <div class="titles center">
-            <div class="title" id="now-title"></div>
-            <div class="artist" id="now-artist"></div>
+          <div class="cover-wrap"><div class="art big" id="now-art"></div></div>
+          <div class="now-line">
+            <div class="titles">
+              <div class="title" id="now-title"></div>
+              <div class="artist" id="now-artist"></div>
+            </div>
+            <div class="eq big" id="now-eq" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
           </div>
-          <div class="progress"><div id="progress-bar"></div></div>
+          <div class="seek">
+            <input id="seek" type="range" min="0" max="1000" value="0" aria-label="재생 위치" />
+            <div class="times"><span id="t-at">0:00</span><span id="t-len">0:00</span></div>
+          </div>
           <div class="transport">
-            <button id="music-prev" class="icon" type="button">⏮</button>
-            <button id="music-toggle" class="icon main" type="button">▶</button>
-            <button id="music-next" class="icon" type="button">⏭</button>
+            <button id="music-prev" class="icon round" type="button" title="이전 곡"></button>
+            <button id="music-toggle" class="icon round main" type="button" title="재생"></button>
+            <button id="music-next" class="icon round" type="button" title="다음 곡"></button>
           </div>
         </div>
         <div class="hint" id="music-msg"></div>
+        <input id="list-filter" type="search" placeholder="플레이리스트 찾기 (초성도 돼요)" hidden />
         <ul id="music-lists" hidden></ul>
       </div>
     </aside>

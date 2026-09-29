@@ -27,6 +27,7 @@ interface SpotifyPlayer {
   nextTrack(): Promise<void>;
   previousTrack(): Promise<void>;
   setVolume(v: number): Promise<void>;
+  seek(ms: number): Promise<void>;
   activateElement(): Promise<void>;
 }
 
@@ -79,8 +80,8 @@ export class SpotifySource implements MusicSource {
   }
 
   async playlists(): Promise<Playlist[]> {
-    const j = (await this.api("GET", "/me/playlists?limit=50")) as { items: { id: string; name: string; uri: string; tracks: { total: number } }[] };
-    return j.items.map((p) => ({ id: p.id, name: p.name, uri: p.uri, count: p.tracks.total }));
+    const j = (await this.api("GET", "/me/playlists?limit=50")) as { items: { id: string; name: string; uri: string; tracks: { total: number }; images?: { url: string }[] | null }[] };
+    return j.items.map((p) => ({ id: p.id, name: p.name, uri: p.uri, count: p.tracks.total, art: p.images?.[p.images.length - 1]?.url }));
   }
 
   async play(uri: string): Promise<void> {
@@ -91,6 +92,7 @@ export class SpotifySource implements MusicSource {
   async toggle() { await this.player?.togglePlay(); }
   async next() { await this.player?.nextTrack(); }
   async previous() { await this.player?.previousTrack(); }
+  async seek(seconds: number) { await this.player?.seek(Math.max(0, seconds) * 1000); }
   setVolume(level: number) { void this.player?.setVolume(Math.max(0, Math.min(1, level))); }
 
   onState(listener: (now: NowPlaying) => void) { this.listeners.push(listener); }

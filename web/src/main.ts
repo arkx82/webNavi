@@ -10,6 +10,8 @@ import { Line, lerpAngle, metres } from "./geo";
 import { arrowSvg, maneuverOf } from "./maneuver";
 import { SpotifySource } from "./music/spotify";
 import { lazy, type MusicSource, type NowPlaying } from "./music/source";
+import { debounce, matches } from "./music/find";
+import { deep, pastel, tintOf } from "./music/tint";
 import { Voice } from "./voice";
 import { RouteWatch, phraseFor, type Feature } from "./warnings";
 import { Nearby } from "./nearby";
@@ -1135,7 +1137,32 @@ function duckBySource(level: number) {
 
 /** A playing (or paused mid-song) player keeps its bar; with nothing on, the dock shrinks to a button. */
 function drawDockSize() {
-  el("music-dock").classList.toggle("compact", !now.playing);
+  el("music-dock").classList.toggle("compact", !now.playing && !now.title);
+}
+
+/** Round, soft icons for the transport (an emoji font may be missing in the car). */
+const ICONS = {
+  play: `<svg viewBox="0 0 24 24" width="26" height="26"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.2-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z" fill="currentColor"/></svg>`,
+  pause: `<svg viewBox="0 0 24 24" width="26" height="26"><rect x="6" y="5" width="4.2" height="14" rx="2" fill="currentColor"/><rect x="13.8" y="5" width="4.2" height="14" rx="2" fill="currentColor"/></svg>`,
+  next: `<svg viewBox="0 0 24 24" width="22" height="22"><path d="M5 6.2v11.6a.9.9 0 0 0 1.4.75L14.5 13a1.2 1.2 0 0 0 0-2L6.4 5.45A.9.9 0 0 0 5 6.2z" fill="currentColor"/><rect x="16" y="5" width="3" height="14" rx="1.5" fill="currentColor"/></svg>`,
+  prev: `<svg viewBox="0 0 24 24" width="22" height="22"><path d="M19 6.2v11.6a.9.9 0 0 1-1.4.75L9.5 13a1.2 1.2 0 0 1 0-2l8.1-5.55A.9.9 0 0 1 19 6.2z" fill="currentColor"/><rect x="5" y="5" width="3" height="14" rx="1.5" fill="currentColor"/></svg>`,
+};
+el("music-prev").innerHTML = ICONS.prev;
+el("music-next").innerHTML = ICONS.next;
+el("mini-next").innerHTML = ICONS.next;
+
+/** The cover whose colour the player wears now, so a late answer for an old cover is not applied. */
+let tintFor = "";
+function wearTint(art: string | undefined) {
+  const dock = el("music-dock");
+  if (!art) { dock.style.removeProperty("--tint"); dock.style.removeProperty("--deep"); tintFor = ""; return; }
+  if (art === tintFor) return;
+  tintFor = art;
+  void tintOf(art).then((c) => {
+    if (tintFor !== art || !c) return;
+    dock.style.setProperty("--tint", pastel(c));
+    dock.style.setProperty("--deep", deep(c));
+  });
 }
 
 function showNow(state: NowPlaying) {
@@ -1143,6 +1170,7 @@ function showNow(state: NowPlaying) {
   nowAt = performance.now();
   drawDockSize();
   const has = !!state.title;
+  el("music-dock").classList.toggle("playing", state.playing);
   el("mini-title").textContent = state.title ?? "음악";
   el("mini-artist").textContent = state.artist ?? music?.label ?? "Spotify · TIDAL";
   el("now-title").textContent = state.title ?? "";
@@ -1150,25 +1178,92 @@ function showNow(state: NowPlaying) {
   for (const id of ["mini-art", "now-art"]) {
     el(id).style.backgroundImage = state.art ? `url("${state.art}")` : "";
   }
-  const glyph = state.playing ? "⏸" : "▶";
-  el("mini-toggle").textContent = glyph;
-  el("music-toggle").textContent = glyph;
+  wearTint(state.art);
+  const icon = state.playing ? ICONS.pause : ICONS.play;
+  el("mini-toggle").innerHTML = icon;
+  el("music-toggle").innerHTML = icon;
+  el("music-toggle").title = state.playing ? "일시정지" : "재생";
   el("mini-toggle").hidden = !has;
   el("mini-next").hidden = !has;
+  tellMediaSession(state);
   drawProgress();
 }
 
+/**
+ * The OS's own media controls (and a keyboard's play key) in step with the
+ * player: MediaSession, where the browser has it.
+ */
+let sessionWired = false;
+function tellMediaSession(state: NowPlaying) {
+  const ms = (navigator as Navigator & { mediaSession?: MediaSession }).mediaSession;
+  if (!ms || typeof MediaMetadata === "undefined") return;
+  if (state.title) ms.metadata = new MediaMetadata({ title: state.title, artist: state.artist ?? "", artwork: state.art ? [{ src: state.art, sizes: "300x300" }] : [] });
+  ms.playbackState = state.playing ? "playing" : "paused";
+  if (sessionWired) return;
+  sessionWired = true;
+  const on = (action: MediaSessionAction, fn: () => void) => { try { ms.setActionHandler(action, fn); } catch { /* not this one */ } };
+  on("play", () => void music?.toggle().catch(onMusicError));
+  on("pause", () => void music?.toggle().catch(onMusicError));
+  on("nexttrack", () => void music?.next().catch(onMusicError));
+  on("previoustrack", () => void music?.previous().catch(onMusicError));
+}
+
+const clock = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, "0")}`;
+/** A finger on the seek bar: the bar is theirs until they let go. */
+let seeking = false;
+
 /** The bar moves between state events while the track plays. */
 function drawProgress() {
+  const bar = el<HTMLInputElement>("seek");
   if (now.durationS == null || now.positionS == null) {
-    el("progress-bar").style.width = "0";
+    if (!seeking) { bar.value = "0"; bar.style.setProperty("--p", "0%"); }
+    el("t-at").textContent = "0:00";
+    el("t-len").textContent = now.durationS ? clock(now.durationS) : "0:00";
     return;
   }
   const elapsed = now.playing ? (performance.now() - nowAt) / 1000 : 0;
   const at = Math.min(now.durationS, now.positionS + elapsed);
-  el("progress-bar").style.width = `${(at / now.durationS) * 100}%`;
+  if (!seeking) {
+    bar.value = String(Math.round((at / now.durationS) * 1000));
+    bar.style.setProperty("--p", `${(at / now.durationS) * 100}%`);
+    el("t-at").textContent = clock(at);
+  }
+  el("t-len").textContent = clock(now.durationS);
 }
 setInterval(drawProgress, 1000);
+{
+  const bar = el<HTMLInputElement>("seek");
+  bar.addEventListener("input", () => {
+    seeking = true;
+    bar.style.setProperty("--p", `${Number(bar.value) / 10}%`);
+    if (now.durationS) el("t-at").textContent = clock((Number(bar.value) / 1000) * now.durationS);
+  });
+  bar.addEventListener("change", () => {
+    seeking = false;
+    if (!now.durationS) return;
+    const to = (Number(bar.value) / 1000) * now.durationS;
+    now = { ...now, positionS: to };
+    nowAt = performance.now();
+    if (music?.seek) void music.seek(to).catch(onMusicError);
+  });
+}
+
+/** One playlist row: its cover, its name, how many songs. */
+function listRow(name: string, count: number | undefined, art: string | undefined): HTMLLIElement {
+  const li = document.createElement("li");
+  li.innerHTML = `<div class="art thumb"></div><div class="li-words"><div class="li-name"></div><small></small></div>`;
+  if (art) (li.querySelector(".art") as HTMLElement).style.backgroundImage = `url("${art}")`;
+  li.querySelector(".li-name")!.textContent = name;
+  li.querySelector("small")!.textContent = count != null ? `${count}곡` : "";
+  li.dataset.name = name;
+  return li;
+}
+
+const filterLists = debounce(() => {
+  const q = el<HTMLInputElement>("list-filter").value;
+  for (const li of el("music-lists").querySelectorAll<HTMLLIElement>("li")) li.hidden = !matches(li.dataset.name ?? "", q);
+}, 250);
+el("list-filter").addEventListener("input", filterLists);
 
 async function showLists() {
   if (!music) return;
@@ -1177,7 +1272,7 @@ async function showLists() {
   try {
     const lists = await music.playlists();
     for (const p of lists) {
-      const li = item(p.name, p.count != null ? `${p.count}곡` : "");
+      const li = listRow(p.name, p.count, p.art);
       li.addEventListener("click", async () => {
         try {
           await music!.play(p.uri);
@@ -1189,6 +1284,7 @@ async function showLists() {
       ul.append(li);
     }
     ul.hidden = lists.length === 0;
+    el("list-filter").hidden = lists.length < 6;
   } catch (e) {
     musicSay((e as Error).message, true);
   }
@@ -1336,13 +1432,22 @@ if (demo) map.once("load", async () => {
     row.append(b);
   }
   el("player").hidden = false;
-  showNow({ playing: true, title: "Blue in Green", artist: "Miles Davis", positionS: 97, durationS: 337 });
+  showNow({ playing: true, title: "Blue in Green", artist: "Miles Davis", positionS: 97, durationS: 337, art: demoCover(262, 330) });
   const lists = el("music-lists");
-  for (const [name, n] of [["Drive", 48], ["Jazz at Night", 120], ["Daily Mix 1", 50]] as const) lists.append(item(name, `${n}곡`));
+  for (const [name, n, h1, h2] of [["드라이브 플레이리스트", 48, 200, 160], ["Jazz at Night", 120, 250, 290], ["Daily Mix 1", 50, 20, 340], ["출근길 신나는 노래", 64, 45, 10], ["잔잔한 새벽", 32, 190, 230], ["Lo-fi Beats", 88, 280, 200]] as const) {
+    lists.append(listRow(name, n, demoCover(h1, h2)));
+  }
   lists.hidden = false;
+  el("list-filter").hidden = false;
   if (new URLSearchParams(location.search).get("dock") === "open") openDock(true);
   setFollow(true);
 });
+
+/** A made-up cover for the demo: a soft two-colour wash with a little record on it. */
+function demoCover(h1: number, h2: number): string {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="300" viewBox="0 0 300 300"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="hsl(${h1},80%,72%)"/><stop offset="1" stop-color="hsl(${h2},75%,62%)"/></linearGradient></defs><rect width="300" height="300" fill="url(#g)"/><circle cx="210" cy="95" r="46" fill="rgba(255,255,255,.35)"/><circle cx="110" cy="190" r="70" fill="rgba(20,20,30,.55)"/><circle cx="110" cy="190" r="22" fill="hsl(${h1},80%,80%)"/><circle cx="110" cy="190" r="5" fill="#15151c"/></svg>`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
 
 // ?debug: a handle for scripted checks at a desk — what the voice said and
 // when, the music's level, the route and the watch. Nothing in the page

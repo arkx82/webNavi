@@ -12,6 +12,8 @@ export interface Playlist {
   /** What [MusicSource.play] takes. */
   uri: string;
   count?: number;
+  /** A cover, where the service has one. */
+  art?: string;
 }
 
 export interface NowPlaying {
@@ -34,6 +36,8 @@ export interface MusicSource {
   toggle(): Promise<void>;
   next(): Promise<void>;
   previous(): Promise<void>;
+  /** To [seconds] into the track, where the service allows it. */
+  seek?(seconds: number): Promise<void>;
   /** 0..1; called by the voice around every phrase. */
   setVolume(level: number): void;
   onState(listener: (now: NowPlaying) => void): void;
@@ -81,6 +85,7 @@ export function lazy(id: MusicSource["id"], label: string, load: () => Promise<M
     toggle: () => real!.toggle(),
     next: () => real!.next(),
     previous: () => real!.previous(),
+    seek: (s) => real?.seek?.(s) ?? Promise.resolve(),
     setVolume: (level) => real?.setVolume(level),
     onState(listener) { if (real) real.onState(listener); else pending.push(listener); },
     disconnect() { real?.disconnect(); },

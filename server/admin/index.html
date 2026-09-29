@@ -75,7 +75,7 @@
         <label><b>Spotify</b> Client Secret <span class="hint" data-hint="spotifyClientSecret"></span><input name="spotifyClientSecret" /></label>
         <div class="row"><a class="button" id="link-spotify" href="/admin/music/spotify/login">Spotify 연결</a><button type="button" data-disconnect="spotify">해제</button><span class="hint" id="state-spotify"></span></div>
         <label><b>TIDAL</b> Client ID <span class="hint" data-hint="tidalClientId"></span><input name="tidalClientId" /></label>
-        <label><b>TIDAL</b> Client Secret <span class="hint" data-hint="tidalClientSecret"></span><input name="tidalClientSecret" /></label>
+        <label><b>TIDAL</b> Client Secret (선택 — 로그인은 PKCE 라 없어도 됨) <span class="hint" data-hint="tidalClientSecret"></span><input name="tidalClientSecret" /></label>
         <div class="row"><a class="button" id="link-tidal" href="/admin/music/tidal/login">TIDAL 연결</a><button type="button" data-disconnect="tidal">해제</button><span class="hint" id="state-tidal"></span></div>
         <h2>이 페이지</h2>
         <label>새 비밀번호 (바꿀 때만)<input name="password" type="password" autocomplete="new-password" /></label>
@@ -151,7 +151,7 @@ async function load() {
   const m = await call("/api/music/state");
   for (const name of ["spotify", "tidal"]) {
     const st = m[name] || {};
-    $("state-" + name).textContent = st.connected ? "연결됨" : st.configured ? "미연결" : "ID/Secret 먼저";
+    $("state-" + name).textContent = st.connected ? "연결됨" : st.configured ? "미연결" : st.needsSecret ? "ID/Secret 먼저" : "Client ID 먼저";
     $("state-" + name).className = "hint" + (st.connected ? " saved" : "");
     $("redir-" + name).textContent = location.origin + "/api/music/" + name + "/callback";
   }

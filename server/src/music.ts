@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { Settings } from "./settings.js";
 
@@ -7,8 +8,12 @@ import type { Settings } from "./settings.js";
  * token: it asks this server for a short-lived access token when the
  * player SDK wants one, and the server refreshes it here.
  *
- * Both services speak OAuth 2 authorization-code with a confidential
- * client, so the flow is the same and the differences are a table.
+ * Both speak OAuth 2 authorization-code, with a difference in how the app
+ * proves itself: Spotify as a confidential client (Client ID + Secret),
+ * TIDAL with PKCE — a one-time verifier made here and its hash sent with
+ * the login — and no secret at all for a user's login (TIDAL's SDK docs:
+ * the secret is only for app-only client credentials). A TIDAL secret, if
+ * typed, is still sent to the token endpoint, as the SDK does.
  */
 interface Service {
   name: "spotify" | "tidal";
@@ -20,6 +25,8 @@ interface Service {
   refreshField: "spotifyRefresh" | "tidalRefresh";
   /** Extra query on the authorize step. */
   extra?: Record<string, string>;
+  /** Proof by PKCE; the secret is then optional. */
+  pkce?: boolean;
 }
 
 const SERVICES: Service[] = [
@@ -41,6 +48,7 @@ const SERVICES: Service[] = [
     tokenUrl: "https://auth.tidal.com/v1/oauth2/token",
     scope: "user.read collection.read playlists.read playback",
     idField: "tidalClientId", secretField: "tidalClientSecret", refreshField: "tidalRefresh",
+    pkce: true,
   },
 ];
 
@@ -54,6 +62,9 @@ interface TokenAnswer {
 
 export function registerMusic(app: FastifyInstance, settings: Settings, adminOnly: (r: FastifyRequest, reply: FastifyReply) => Promise<unknown>) {
   const cached = new Map<string, { token: string; until: number }>();
+  /** PKCE verifiers by login, kept here (never in the URL) until the callback or ten minutes. */
+  const verifiers = new Map<string, { verifier: string; at: number }>();
+  const ready = (s: Service) => !!settings.get(s.idField) && (s.pkce || !!settings.get(s.secretField));
 
   const origin = (request: FastifyRequest) => {
     const proto = (request.headers["x-forwarded-proto"] as string | undefined) ?? request.protocol;
@@ -68,7 +79,7 @@ export function registerMusic(app: FastifyInstance, settings: Settings, adminOnl
     // has no cookie, knows it began here.
     app.get(`/admin/music/${s.name}/login`, { preHandler: adminOnly }, async (request, reply) => {
       const id = settings.get(s.idField);
-      if (!id || !settings.get(s.secretField)) return reply.code(400).send({ error: `${s.name} client id/secret first` });
+      if (!id || !ready(s)) return reply.code(400).send({ error: s.pkce ? `${s.name} client id first` : `${s.name} client id/secret first` });
       const stamp = String(Date.now());
       const url = new URL(s.authorizeUrl);
       url.searchParams.set("client_id", id);
@@ -77,6 +88,13 @@ export function registerMusic(app: FastifyInstance, settings: Settings, adminOnl
       url.searchParams.set("scope", s.scope);
       url.searchParams.set("state", `${stamp}~${settings.sign(`${s.name}:${stamp}`)}`);
       for (const [k, v] of Object.entries(s.extra ?? {})) url.searchParams.set(k, v);
+      if (s.pkce) {
+        const verifier = randomBytes(48).toString("base64url");
+        for (const [k, v] of verifiers) if (Date.now() - v.at > 600_000) verifiers.delete(k);
+        verifiers.set(`${s.name}:${stamp}`, { verifier, at: Date.now() });
+        url.searchParams.set("code_challenge", createHash("sha256").update(verifier).digest("base64url"));
+        url.searchParams.set("code_challenge_method", "S256");
+      }
       return reply.redirect(url.toString());
     });
 
@@ -87,9 +105,14 @@ export function registerMusic(app: FastifyInstance, settings: Settings, adminOnl
         return reply.code(400).send({ error: "state" });
       }
       if (error || !code) return reply.redirect(`/admin?music=${s.name}&error=${encodeURIComponent(error ?? "no code")}`);
-      const answer = await exchange(s, settings, {
-        grant_type: "authorization_code", code, redirect_uri: redirectFor(request, s),
-      });
+      const form: Record<string, string> = { grant_type: "authorization_code", code, redirect_uri: redirectFor(request, s) };
+      if (s.pkce) {
+        const kept = verifiers.get(`${s.name}:${stamp}`);
+        verifiers.delete(`${s.name}:${stamp}`);
+        if (!kept) return reply.redirect(`/admin?music=${s.name}&error=${encodeURIComponent("login expired — start again")}`);
+        form.code_verifier = kept.verifier;
+      }
+      const answer = await exchange(s, settings, form);
       if (!answer.refresh_token) return reply.redirect(`/admin?music=${s.name}&error=${encodeURIComponent(answer.error_description ?? answer.error ?? "no refresh token")}`);
       settings.set({ [s.refreshField]: answer.refresh_token });
       cached.set(s.name, { token: answer.access_token, until: Date.now() + (answer.expires_in - 60) * 1000 });
@@ -125,20 +148,17 @@ export function registerMusic(app: FastifyInstance, settings: Settings, adminOnl
 
   /** Which services are connected, for the car page and the admin. */
   app.get("/api/music/state", async () => Object.fromEntries(
-    SERVICES.map((s) => [s.name, { configured: !!settings.get(s.idField) && !!settings.get(s.secretField), connected: !!settings.get(s.refreshField) }]),
+    SERVICES.map((s) => [s.name, { configured: ready(s), connected: !!settings.get(s.refreshField), needsSecret: !s.pkce }]),
   ));
 }
 
 async function exchange(s: Service, settings: Settings, form: Record<string, string>): Promise<TokenAnswer> {
   const id = settings.get(s.idField)!;
-  const secret = settings.get(s.secretField)!;
-  const answer = await fetch(s.tokenUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      Authorization: `Basic ${Buffer.from(`${id}:${secret}`).toString("base64")}`,
-    },
-    body: new URLSearchParams({ ...form, client_id: id }).toString(),
-  });
+  const secret = settings.get(s.secretField);
+  const headers: Record<string, string> = { "Content-Type": "application/x-www-form-urlencoded" };
+  // A confidential client says who it is in the header; a PKCE one by its client_id alone (with the secret if one was typed).
+  if (!s.pkce) headers.Authorization = `Basic ${Buffer.from(`${id}:${secret}`).toString("base64")}`;
+  const body = new URLSearchParams({ ...form, client_id: id, ...(s.pkce && secret ? { client_secret: secret } : {}) });
+  const answer = await fetch(s.tokenUrl, { method: "POST", headers, body: body.toString() });
   return (await answer.json().catch(() => ({ error: `${answer.status}` }))) as TokenAnswer;
 }

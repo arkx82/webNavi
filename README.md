@@ -268,6 +268,16 @@ Spotify/TIDAL 은 DRM 이라 Web Audio 그래프 밖이므로 SDK 의 볼륨으�
 왼쪽 열 전체를 덮는 **풀 플레이어**(서비스 탭, 큰 아트, 진행 바, ⏮⏯⏭, 재생목록).
 목록에서 고르면 도로 미니바로 접힌다. 계정 연결은 `/admin` 에서 한 번:
 
+**로그인 방식이 둘이 다르다.** Spotify 는 Client ID + Client Secret(서버가 비밀을 들고 코드 교환). TIDAL 은
+**Client ID + PKCE** — 서버가 일회용 verifier 를 만들어 그 해시를 로그인에 보내고, 코드 교환 때 verifier 로
+증명한다. TIDAL SDK 문서대로 사용자 로그인에는 Client Secret 을 쓰지 않는다(Secret 은 사용자 없는 앱 전용
+토큰용이라 넣어도 되고 안 넣어도 된다). 범위: `user.read collection.read playlists.read playback`.
+
+화면(`web/src/music/`): YesPlayMusic 같은 앨범 중심 구성에 둥글고 파스텔인 스타일 — 커버에서 뽑은 색
+(`tint.ts`, fast-average-color 와 같은 방식)으로 플레이어 배경과 버튼 색이 바뀌고, 미니바의 커버는 재생 중에
+레코드처럼 돈다. 끌어서 옮기는 진행 막대(`seek`), 재생 중 흔들리는 이퀄라이저, 초성으로도 찾는 플레이리스트
+검색(250 ms debounce, `find.ts`), MediaSession(OS 미디어 키와 동기화).
+
 1. developer.spotify.com / developer.tidal.com 에서 앱을 만든다. Redirect URI 는
    `https://<도메인>/api/music/spotify/callback` (TIDAL 도 같은 꼴). Spotify 는
    2025-11 부터 http 리다이렉트를 받지 않는다(루프백 `127.0.0.1` 만 예외).

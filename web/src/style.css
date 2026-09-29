@@ -48,13 +48,18 @@ details summary { color: var(--dim); cursor: pointer; }
 details > * + * { margin-top: 8px; }
 #log { margin: 0; max-height: 30vh; font-size: 11px; line-height: 1.35; color: var(--dim); overflow: auto; white-space: pre-wrap; }
 
-/* The player: a mini bar, or the full player above it. */
+/* ---- the player ----
+   Cute, the way the note asked: round everything, a pastel accent taken
+   from the cover (--tint), the background washed in the cover's colour
+   (--deep), a record that turns in the mini bar, equaliser bars that
+   bounce while it plays, and buttons that give a little when pressed. */
 #music-dock {
+  --tint: #c7b8ff; --deep: #2a2340;
   position: absolute; right: 16px; bottom: 16px; width: 320px; box-sizing: border-box;
-  border-radius: 14px; background: var(--panel); backdrop-filter: blur(8px); overflow: hidden;
-  display: flex; flex-direction: column-reverse;
+  border-radius: 22px; background: var(--panel); backdrop-filter: blur(10px); overflow: hidden;
+  display: flex; flex-direction: column-reverse; transition: background 0.6s;
 }
-#mini { display: flex; align-items: center; gap: 12px; min-height: 64px; padding: 8px 12px 8px 10px; cursor: pointer; user-select: none; }
+#mini { display: flex; align-items: center; gap: 10px; min-height: 64px; padding: 8px 10px 8px 8px; cursor: pointer; user-select: none; }
 #mini .titles { flex: 1; min-width: 0; }
 #mini-chevron { color: var(--dim); font-size: 14px; transition: transform 0.2s; }
 #mini-note { display: none; }
@@ -65,33 +70,79 @@ details > * + * { margin-top: 8px; }
 #music-dock.compact.closed #mini-note { display: block; color: var(--ink); }
 #music-dock.closed #mini-chevron { transform: rotate(180deg); }
 #music-dock.closed #full { display: none; }
-/* Open, it is the whole right column — never over the trip panel on the
-   left — and the mini bar stays at its foot to close it. */
-#music-dock:not(.closed) { top: 16px; z-index: 2; }
-#full { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; padding: 16px 16px 4px; border-bottom: 1px solid #2a2a2e; overflow: auto; }
-.art { background: linear-gradient(135deg, #3a3a44, #1e1e24); background-size: cover; background-position: center; border-radius: 8px; flex: 0 0 auto; }
-.art.small { width: 48px; height: 48px; }
-.art.big { width: 100%; aspect-ratio: 1; border-radius: 12px; }
+/* Open, it is the whole right column — never over the trip panel on the left. */
+#music-dock:not(.closed) { top: 16px; z-index: 2; background: linear-gradient(180deg, var(--deep) 0%, rgba(20, 18, 28, 0.96) 62%); }
+#full { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 14px; padding: 16px 16px 6px; overflow: auto; }
+
+.disc {
+  flex: 0 0 auto; width: 46px; height: 46px; border-radius: 50%; background: radial-gradient(circle, #1a1a22 18%, transparent 19%), linear-gradient(135deg, #c7b8ff, #ffb3d9);
+  background-size: cover; background-position: center; box-shadow: 0 0 0 3px rgba(255,255,255,.14);
+  animation: spin 9s linear infinite; animation-play-state: paused; position: relative;
+}
+/* The spindle hole, so it reads as a record. */
+.disc::after { content: ""; position: absolute; inset: 40%; border-radius: 50%; background: #15151c; box-shadow: 0 0 0 2px rgba(255,255,255,.25); }
+#music-dock.playing .disc { animation-play-state: running; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.art { background: linear-gradient(135deg, #c7b8ff, #ffb3d9 55%, #a8e6cf); background-size: cover; background-position: center; flex: 0 0 auto; }
+.cover-wrap { padding: 6px 10px 0; }
+.art.big {
+  width: 100%; aspect-ratio: 1; border-radius: 28px;
+  box-shadow: 0 16px 34px rgba(0,0,0,.45), 0 0 0 4px rgba(255,255,255,.06); transition: transform 0.5s cubic-bezier(.34,1.56,.64,1);
+  transform: scale(0.94);
+}
+#music-dock.playing .art.big { transform: scale(1); animation: breathe 3.6s ease-in-out infinite; }
+@keyframes breathe { 50% { transform: scale(1.018); } }
+
 .titles { min-width: 0; }
-.titles.center { text-align: center; }
-.title { font-size: 16px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.title { font-size: 16px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .artist { font-size: 13px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#player .title { font-size: 18px; }
-.progress { height: 4px; border-radius: 2px; background: #2a2a2e; overflow: hidden; }
-#progress-bar { height: 100%; width: 0; background: var(--ink); }
-.transport { display: flex; justify-content: center; align-items: center; gap: 24px; }
-button.icon { flex: 0 0 auto; width: 48px; height: 48px; min-height: 48px; padding: 0; border-radius: 50%; font-size: 20px; background: transparent; }
-button.icon.main { width: 64px; height: 64px; background: var(--ink); color: #000; font-size: 24px; }
+.now-line { display: flex; align-items: center; gap: 10px; padding: 0 4px; }
+.now-line .titles { flex: 1; }
+#player .title { font-size: 20px; }
+
+/* Equaliser: three or four little bars that hop while playing, still otherwise. */
+.eq { display: flex; align-items: flex-end; gap: 3px; height: 16px; flex: 0 0 auto; opacity: 0; transition: opacity 0.3s; }
+.eq.big { height: 22px; gap: 4px; }
+.eq i { display: block; width: 4px; height: 30%; border-radius: 3px; background: var(--tint); }
+.eq.big i { width: 5px; }
+#music-dock.playing .eq { opacity: 1; }
+#music-dock.playing .eq i { animation: hop 0.9s ease-in-out infinite; }
+.eq i:nth-child(2) { animation-delay: -0.3s !important; }
+.eq i:nth-child(3) { animation-delay: -0.6s !important; }
+.eq i:nth-child(4) { animation-delay: -0.15s !important; }
+@keyframes hop { 0%, 100% { height: 25%; } 50% { height: 100%; } }
+
+/* The seek bar: a soft rounded track in the cover's colour, a round thumb. */
+.seek { padding: 0 4px; }
+#seek { -webkit-appearance: none; appearance: none; width: 100%; height: 22px; background: transparent; margin: 0; }
+#seek::-webkit-slider-runnable-track { height: 6px; border-radius: 3px; background: linear-gradient(90deg, var(--tint) var(--p, 0%), rgba(255,255,255,.16) var(--p, 0%)); }
+#seek::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; margin-top: -6px; border-radius: 50%; background: #fff; box-shadow: 0 0 0 4px var(--tint); }
+.times { display: flex; justify-content: space-between; font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; margin-top: 2px; }
+
+/* Round buttons that squish a little under a finger. */
+.transport { display: flex; justify-content: center; align-items: center; gap: 22px; padding-bottom: 4px; }
+button.icon { flex: 0 0 auto; width: 48px; height: 48px; min-height: 48px; padding: 0; border-radius: 50%; font-size: 20px; background: transparent; display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
+button.icon.round { background: rgba(255,255,255,.08); transition: transform 0.25s cubic-bezier(.34,1.56,.64,1), background 0.2s; }
+button.icon.round:active { transform: scale(0.86); }
+button.icon.main { width: 74px; height: 74px; background: var(--tint); color: #1d1a2b; box-shadow: 0 8px 22px rgba(0,0,0,.35); }
+#mini button.icon.round { width: 40px; height: 40px; min-height: 40px; }
+
 .tabs { display: flex; gap: 8px; }
-.tabs button { font-size: 14px; min-height: 40px; }
-#music-lists { list-style: none; margin: 0 -16px; padding: 0; flex: 1; min-height: 120px; overflow: auto; }
-#music-lists li { padding: 10px 16px; border-bottom: 1px solid #2a2a2e; font-size: 15px; }
+.tabs.pills button { flex: 0 0 auto; min-height: 36px; line-height: 36px; padding: 0 16px; border-radius: 999px; font-size: 14px; font-weight: 600; background: rgba(255,255,255,.08); }
+.tabs.pills button.on { background: var(--tint); color: #1d1a2b; }
+
+#list-filter { flex: 0 0 auto; min-height: 42px; border-radius: 999px; padding: 0 16px; font-size: 15px; background: rgba(255,255,255,.08); }
+#music-lists { list-style: none; margin: 0 -8px; padding: 0; flex: 1; min-height: 120px; overflow: auto; }
+#music-lists li { display: flex; align-items: center; gap: 12px; padding: 8px; border-radius: 16px; font-size: 15px; cursor: pointer; transition: background 0.2s, transform 0.2s cubic-bezier(.34,1.56,.64,1); }
+#music-lists li:active { transform: scale(0.97); background: rgba(255,255,255,.08); }
+#music-lists li .art.thumb { width: 46px; height: 46px; border-radius: 14px; }
+#music-lists li .li-words { flex: 1; min-width: 0; }
+#music-lists li .li-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
 #music-lists li small { display: block; color: var(--dim); font-size: 12px; }
 .sim { display: flex; flex-direction: column; gap: 6px; padding-top: 4px; border-top: 1px solid #2a2a2e; }
 .slider { font-size: 13px; color: var(--dim); }
 .slider input { width: 100%; }
-#music-lists { list-style: none; margin: 0; padding: 0; max-height: 30vh; overflow: auto; }
-#music-lists li { padding: 10px 8px; border-bottom: 1px solid #2a2a2e; font-size: 15px; }
 .hint { font-size: 13px; color: var(--dim); }
 
 /* An author display rule must not undo the hidden attribute. */

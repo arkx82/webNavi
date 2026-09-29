@@ -1,6 +1,7 @@
 import * as auth from "@tidal-music/auth";
 import * as Player from "@tidal-music/player";
 import type { MusicSource, NowPlaying, Playlist } from "./source";
+import { isoSeconds } from "./tidal-time";
 
 /**
  * TIDAL through its Player SDK — the only route TIDAL allows third
@@ -22,7 +23,9 @@ interface Track {
   title: string;
   artist: string;
   art?: string;
+  durationS?: number;
 }
+
 
 export class TidalSource implements MusicSource {
   readonly id = "tidal" as const;
@@ -88,11 +91,19 @@ export class TidalSource implements MusicSource {
   }
 
   async play(playlistId: string): Promise<void> {
-    const j = (await this.api(`/playlists/${playlistId}/relationships/items?include=items,items.artists,items.albums.coverArt`)) as {
+    const j = (await this.api(`/playlists/${playlistId}/relationships/items?include=items,items.artists,items.albums,items.albums.coverArt`)) as {
       data: { id: string; type: string }[];
       included?: { id: string; type: string; attributes: Record<string, unknown>; relationships?: Record<string, { data: { id: string }[] }> }[];
     };
     const inc = new Map((j.included ?? []).map((i) => [`${i.type}:${i.id}`, i]));
+    // A track's cover: its album's coverArt artwork, the smallest file of 300 px or more.
+    const coverOf = (albumId?: string): string | undefined => {
+      const artId = albumId ? inc.get(`albums:${albumId}`)?.relationships?.coverArt?.data?.[0]?.id : undefined;
+      const files = (artId ? inc.get(`artworks:${artId}`)?.attributes.files : undefined) as { href: string; meta?: { width?: number } }[] | undefined;
+      if (!files?.length) return undefined;
+      const sorted = [...files].sort((a, b) => (a.meta?.width ?? 0) - (b.meta?.width ?? 0));
+      return (sorted.find((f) => (f.meta?.width ?? 0) >= 300) ?? sorted[sorted.length - 1]).href;
+    };
     this.queue = j.data.filter((d) => d.type === "tracks").map((d) => {
       const t = inc.get(`tracks:${d.id}`);
       const artistIds = t?.relationships?.artists?.data?.map((a) => a.id) ?? [];
@@ -100,6 +111,8 @@ export class TidalSource implements MusicSource {
         id: d.id,
         title: String(t?.attributes.title ?? d.id),
         artist: artistIds.map((id) => String(inc.get(`artists:${id}`)?.attributes.name ?? "")).filter(Boolean).join(", "),
+        art: coverOf(t?.relationships?.albums?.data?.[0]?.id),
+        durationS: isoSeconds(t?.attributes.duration),
       };
     });
     this.at = -1;
@@ -119,7 +132,14 @@ export class TidalSource implements MusicSource {
 
   private emitNow() {
     const t = this.queue[this.at];
-    for (const l of this.listeners) l({ playing: this.playing, title: t?.title, artist: t?.artist, art: t?.art });
+    let positionS: number | undefined;
+    try { positionS = Player.getAssetPosition(); } catch { /* nothing loaded */ }
+    for (const l of this.listeners) l({ playing: this.playing, title: t?.title, artist: t?.artist, art: t?.art, positionS, durationS: t?.durationS });
+  }
+
+  async seek(seconds: number) {
+    await Player.seek(Math.max(0, seconds));
+    this.emitNow();
   }
 
   async toggle() {
