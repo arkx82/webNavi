@@ -1,4 +1,4 @@
-# tesla-nav
+# WebNavi
 
 > 계획서 대비 진행 상황: [docs/STATUS.md](docs/STATUS.md)
 
@@ -54,7 +54,7 @@ docker compose up -d --build   # NUC: nav + caddy. DOMAIN 이 .env 에 있어야
 ## NUC 에 올리기
 
 ```bash
-git clone … tesla-nav && cd tesla-nav
+git clone git@github.com:arkx82/webNavi.git && cd webNavi
 cp .env.example .env            # DOMAIN=nav.example.com 만 채운다
 mkdir -p server/data            # 표준데이터 CSV를 여기에
 docker compose up -d --build    # 이미지 328 MB, 첫 빌드 수 분

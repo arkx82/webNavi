@@ -15,7 +15,7 @@ import { isoSeconds } from "./tidal-time";
  * is a queue kept here and fed on `ended`. Untested against a real
  * account at the time of writing; see the README.
  */
-const CLIENT_UNIQUE_KEY = "tesla-nav";
+const CLIENT_UNIQUE_KEY = "webnavi";
 const SCOPES = ["user.read", "collection.read", "playlists.read", "playback", "recommendations.read", "search.read", "r_usr"];
 /** A playlist's tracks come twenty a page; ten pages is plenty for a drive. */
 const QUEUE_PAGES = 10;
@@ -70,7 +70,7 @@ export class TidalSource implements MusicSource {
   async connect(): Promise<void> {
     const first = await this.fetchToken();
     this.clientId = first.clientId;
-    await auth.init({ clientId: this.clientId, clientUniqueKey: CLIENT_UNIQUE_KEY, credentialsStorageKey: "tesla-nav-tidal", scopes: SCOPES });
+    await auth.init({ clientId: this.clientId, clientUniqueKey: CLIENT_UNIQUE_KEY, credentialsStorageKey: "webnavi-tidal", scopes: SCOPES });
     await this.giveToken(first.token, first.expiresIn);
     Player.setCredentialsProvider(auth.credentialsProvider);
     // The SDK plays nothing without somewhere to report what was played (TIDAL pays artists by it):
@@ -79,7 +79,7 @@ export class TidalSource implements MusicSource {
     if (!eventsStarted) {
       eventsStarted = true;
       await EventProducer.init({
-        appInfo: { appName: "tesla-nav", appVersion: "1" },
+        appInfo: { appName: "WebNavi", appVersion: "1" },
         blockedConsentCategories: { NECESSARY: false, PERFORMANCE: true, TARGETING: true },
         credentialsProvider: auth.credentialsProvider,
         platform: browserOf(navigator.userAgent),
@@ -292,7 +292,7 @@ export class TidalSource implements MusicSource {
     const track = this.queue[this.at];
     if (!track) return;
     try {
-      await Player.load({ productId: track.id, productType: "track", sourceId: "tesla-nav", sourceType: "PLAYLIST" }, 0);
+      await Player.load({ productId: track.id, productType: "track", sourceId: "webnavi", sourceType: "PLAYLIST" }, 0);
       await Player.play();
     } catch (e) {
       if (skips < 5 && this.queue[this.at + 1]) return this.advance(skips + 1);
@@ -317,7 +317,7 @@ export class TidalSource implements MusicSource {
 
   private queueNext() {
     const next = this.queue[this.at + 1];
-    if (next) Player.setNext({ productId: next.id, productType: "track", sourceId: "tesla-nav", sourceType: "PLAYLIST" });
+    if (next) Player.setNext({ productId: next.id, productType: "track", sourceId: "webnavi", sourceType: "PLAYLIST" });
   }
 
   private emitNow() {

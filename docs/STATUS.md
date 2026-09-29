@@ -75,7 +75,7 @@
 ## 로컬에서 보기
 
 ```bash
-cd tesla-nav && npm install && npm run build
+cd webNavi && npm install && npm run build
 PORT=8080 node server/dist/index.js
 # http://localhost:8080/?demo    http://localhost:8080/?demo&screen=preview    http://localhost:8080/admin
 npm test    # 서버 20개 + 웹 22개

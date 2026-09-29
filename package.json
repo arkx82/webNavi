@@ -1,5 +1,5 @@
 {
-  "name": "tesla-nav",
+  "name": "webnavi",
   "private": true,
   "workspaces": [
     "server",

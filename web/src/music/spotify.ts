@@ -2,7 +2,7 @@ import { loadScript, tokenFor, type MusicSource, type NowPlaying, type Playlist 
 
 /**
  * Spotify through the Web Playback SDK: this page becomes a Spotify
- * Connect device ("Tesla Nav") and playback is moved onto it. Needs a
+ * Connect device ("WebNavi") and playback is moved onto it. Needs a
  * Premium account, and a browser with Widevine — whether the car's has
  * it is the first thing to find out.
  */
@@ -54,7 +54,7 @@ export class SpotifySource implements MusicSource {
     await loadScript("https://sdk.scdn.co/spotify-player.js");
     await ready;
     const player = new window.Spotify!.Player({
-      name: "Tesla Nav",
+      name: "WebNavi",
       getOAuthToken: (cb) => void tokenFor("spotify").then(cb),
       volume: 1,
     });

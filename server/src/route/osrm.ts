@@ -33,7 +33,7 @@ export class Osrm implements RouteProvider {
 
   async route({ start, goal }: RouteRequest): Promise<Route> {
     const url = `${this.base}/route/v1/driving/${start[0]},${start[1]};${goal[0]},${goal[1]}?overview=full&geometries=geojson&steps=true`;
-    const answer = await askJson<OsrmAnswer>(url, { headers: { "User-Agent": "tesla-nav (personal)" } }, this.name);
+    const answer = await askJson<OsrmAnswer>(url, { headers: { "User-Agent": "WebNavi (personal)" } }, this.name);
     const first = answer.routes?.[0];
     if (answer.code !== "Ok" || !first) throw new Error(`osrm: ${answer.message ?? answer.code}`);
     const guides = first.legs.flatMap((leg) =>
