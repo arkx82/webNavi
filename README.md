@@ -49,6 +49,24 @@ docker compose up -d --build   # NUC: nav + caddy. DOMAIN 이 .env 에 있어야
 도커에서는 `nav_config` 볼륨이 `/config`, `nav_tts` 가 `/tts` 라 이미지를 다시
 빌드해도 남는다.
 
+## NUC 에 올리기
+
+```bash
+git clone … tesla-nav && cd tesla-nav
+cp .env.example .env            # DOMAIN=nav.example.com 만 채운다
+mkdir -p server/data            # 표준데이터 CSV를 여기에
+docker compose up -d --build    # 이미지 328 MB, 첫 빌드 수 분
+open https://nav.example.com/admin   # 비밀번호 정하고 키 입력, 연결 확인
+```
+
+- 도메인의 A 레코드가 집 공인 IP 를 가리키고 80/443 이 NUC 로 포워딩돼 있어야
+  Caddy 가 인증서를 받는다. 포트를 못 여는 회선이면 Caddy 대신 Cloudflare Tunnel
+  을 `nav:8080` 앞에 두면 된다(HTTPS 는 터널이 끝낸다).
+- 차에서는 `https://nav.example.com` 을 브라우저 즐겨찾기로. `/admin` 은 같은 주소
+  뒤에 있으니 비밀번호가 곧 방어선이다 — 짧게 짓지 말 것.
+- 확인된 것(2026-09-29): 이미지 빌드, 컨테이너에서 웹·`/admin`·`/api/*` 응답,
+  재시작 뒤 볼륨의 설정 유지. Caddy 는 실제 도메인이 있어야 해서 아직 안 띄워 봤다.
+
 ## API
 
 | 호출 | 답 |
