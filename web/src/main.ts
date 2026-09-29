@@ -9,7 +9,7 @@ import { Tracker, type Shown } from "./tracker";
 import { Line, lerpAngle, metres } from "./geo";
 import { arrowSvg, maneuverOf } from "./maneuver";
 import { SpotifySource } from "./music/spotify";
-import { lazy, type MusicSource, type NowPlaying } from "./music/source";
+import { lazy, type MusicSource, type NowPlaying, type Playlist } from "./music/source";
 import { debounce, matches } from "./music/find";
 import { deep, pastel, tintOf } from "./music/tint";
 import { Voice } from "./voice";
@@ -1115,11 +1115,17 @@ function openDock(open: boolean) {
   if (open) { el("guide").hidden = true; el("weather").hidden = true; }
   sideChanged();
 }
-el("mini").addEventListener("click", () => openDock(el("music-dock").classList.contains("closed")));
+el("mini").addEventListener("click", () => {
+  const opening = el("music-dock").classList.contains("closed");
+  openDock(opening);
+  // With a single account connected there is nothing to choose: it is connected at once.
+  if (opening && !music && !demo) void drawSources().then((connected) => { if (connected.length === 1 && !music) void pickSource(connected[0]); });
+});
 drawDockSize();
 
-async function drawSources() {
-  if (demo) return;
+/** The buttons for the connected accounts; answers which those are. */
+async function drawSources(): Promise<MusicSource[]> {
+  if (demo) return [];
   const row = el("music-sources");
   row.replaceChildren();
   let state: Record<string, { connected: boolean }> = {};
@@ -1136,6 +1142,7 @@ async function drawSources() {
     el("mini-artist").textContent = "설정 페이지에서 계정을 연결하세요";
     musicSay("연결된 음악 계정이 없습니다. /admin 에서 Spotify 나 TIDAL 을 연결하면 여기에 나타납니다.");
   }
+  return connected;
 }
 
 async function pickSource(s: MusicSource) {
@@ -1152,6 +1159,7 @@ async function pickSource(s: MusicSource) {
   await drawSources();
   try {
     await s.connect();
+    if (shuffleOn) await s.shuffle?.(true).catch(() => undefined);
     s.onState(showNow);
     voice.duckers.add(duckBySource);
     el("player").hidden = false;
@@ -1181,6 +1189,7 @@ const ICONS = {
   prev: `<svg viewBox="0 0 24 24" width="22" height="22"><path d="M19 6.2v11.6a.9.9 0 0 1-1.4.75L9.5 13a1.2 1.2 0 0 1 0-2l8.1-5.55A.9.9 0 0 1 19 6.2z" fill="currentColor"/><rect x="5" y="5" width="3" height="14" rx="1.5" fill="currentColor"/></svg>`,
 };
 el("music-prev").innerHTML = ICONS.prev;
+el("music-shuffle").innerHTML = `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h3.5c2.2 0 3.6 1.1 4.8 3l1.4 2.2c1.2 1.9 2.6 3 4.8 3H20"/><path d="M3 17h3.5c1.4 0 2.4-.4 3.3-1.2M14.2 8.2c.9-.8 1.9-1.2 3.3-1.2H20"/><path d="M17.5 4.5 20 7l-2.5 2.5M17.5 12.7 20 15.2l-2.5 2.5"/></svg>`;
 el("music-next").innerHTML = ICONS.next;
 el("mini-next").innerHTML = ICONS.next;
 
@@ -1220,7 +1229,12 @@ function showNow(state: NowPlaying) {
   el("mini-next").hidden = !has;
   tellMediaSession(state);
   drawProgress();
+  if (state.note !== undefined || lastNote !== undefined) {
+    if (state.note !== lastNote) musicSay(state.note ?? "", state.noteBad);
+    lastNote = state.note;
+  }
 }
+let lastNote: string | undefined;
 
 /**
  * The OS's own media controls (and a keyboard's play key) in step with the
@@ -1281,13 +1295,13 @@ setInterval(drawProgress, 1000);
   });
 }
 
-/** One playlist row: its cover, its name, how many songs. */
-function listRow(name: string, count: number | undefined, art: string | undefined): HTMLLIElement {
+/** One playlist row: its cover, its name, how many songs (or [sub], a song's artist). */
+function listRow(name: string, count: number | undefined, art: string | undefined, sub?: string): HTMLLIElement {
   const li = document.createElement("li");
   li.innerHTML = `<div class="art thumb"></div><div class="li-words"><div class="li-name"></div><small></small></div>`;
   if (art) (li.querySelector(".art") as HTMLElement).style.backgroundImage = `url("${art}")`;
   li.querySelector(".li-name")!.textContent = name;
-  li.querySelector("small")!.textContent = count != null ? `${count}곡` : "";
+  li.querySelector("small")!.textContent = sub ?? (count != null ? `${count}곡` : "");
   li.dataset.name = name;
   return li;
 }
@@ -1296,37 +1310,68 @@ const filterLists = debounce(() => {
   const q = el<HTMLInputElement>("list-filter").value;
   for (const li of el("music-lists").querySelectorAll<HTMLLIElement>("li")) li.hidden = !matches(li.dataset.name ?? "", q);
 }, 250);
-el("list-filter").addEventListener("input", filterLists);
+/** The service's own search, a little after the typing stops; what it finds sits above the lists. */
+let searchRun = 0;
+const searchService = debounce(async () => {
+  const q = el<HTMLInputElement>("list-filter").value.trim();
+  const found = el<HTMLUListElement>("music-found");
+  const run = ++searchRun;
+  if (!music?.search || q.length < 2) { found.hidden = true; found.replaceChildren(); return; }
+  try {
+    const hits = await music.search(q);
+    if (run !== searchRun) return;
+    drawRows(found, hits);
+    found.hidden = hits.length === 0;
+    if (hits.length === 0) musicSay(`"${q}" 에 맞는 곡이 없습니다`);
+    else musicSay("");
+  } catch (e) {
+    if (run === searchRun) musicSay((e as Error).message, true);
+  }
+}, 600);
+el("list-filter").addEventListener("input", () => { filterLists(); void searchService(); });
+
+/** Rows into [ul], with a heading wherever the shelf changes; a tap plays the row. */
+function drawRows(ul: HTMLUListElement, lists: Playlist[]) {
+  ul.replaceChildren();
+  let shelf: string | undefined;
+  for (const p of lists) {
+    if (p.group && p.group !== shelf) {
+      shelf = p.group;
+      const h = document.createElement("li");
+      h.className = "shelf";
+      h.textContent = p.group;
+      h.dataset.name = "";
+      ul.append(h);
+    }
+    const li = listRow(p.name, p.count, p.art, p.sub);
+    li.addEventListener("click", async () => {
+      try {
+        musicSay("");
+        lastNote = undefined; // the service's word (a preview) is said again for the new song
+        await music!.play(p.uri);
+        openDock(false);
+      } catch (e) {
+        musicSay((e as Error).message, true);
+      }
+    });
+    ul.append(li);
+  }
+}
 
 async function showLists() {
   if (!music) return;
   const ul = el<HTMLUListElement>("music-lists");
   ul.replaceChildren();
+  el("music-found").hidden = true;
+  const filter = el<HTMLInputElement>("list-filter");
+  filter.value = "";
+  filter.placeholder = music.search ? `${music.label} 에서 곡·재생목록 찾기` : "플레이리스트 찾기 (초성도 돼요)";
+  filter.hidden = !music.search;
   try {
     const lists = await music.playlists();
-    let shelf: string | undefined;
-    for (const p of lists) {
-      if (p.group && p.group !== shelf) {
-        shelf = p.group;
-        const h = document.createElement("li");
-        h.className = "shelf";
-        h.textContent = p.group;
-        h.dataset.name = "";
-        ul.append(h);
-      }
-      const li = listRow(p.name, p.count, p.art);
-      li.addEventListener("click", async () => {
-        try {
-          await music!.play(p.uri);
-          openDock(false);
-        } catch (e) {
-          musicSay((e as Error).message, true);
-        }
-      });
-      ul.append(li);
-    }
+    drawRows(ul, lists);
     ul.hidden = lists.length === 0;
-    el("list-filter").hidden = lists.length < 6;
+    filter.hidden = !music.search && lists.length < 6;
     if (lists.length === 0) musicSay(`${music.label}: 재생목록이 없습니다`);
   } catch (e) {
     musicSay((e as Error).message, true);
@@ -1334,6 +1379,19 @@ async function showLists() {
 }
 
 const onMusicError = (e: Error) => musicSay(e.message, true);
+// 셔플: remembered across drives, and told to whichever service is playing.
+let shuffleOn = (() => { try { return localStorage.getItem("music-shuffle") === "1"; } catch { return false; } })();
+function drawShuffle() {
+  el("music-shuffle").classList.toggle("on", shuffleOn);
+  el("music-shuffle").setAttribute("aria-pressed", String(shuffleOn));
+}
+drawShuffle();
+el("music-shuffle").addEventListener("click", () => {
+  shuffleOn = !shuffleOn;
+  try { localStorage.setItem("music-shuffle", shuffleOn ? "1" : "0"); } catch { /* not kept */ }
+  drawShuffle();
+  void music?.shuffle?.(shuffleOn).catch(onMusicError);
+});
 el("music-toggle").addEventListener("click", () => void music?.toggle().catch(onMusicError));
 el("music-next").addEventListener("click", () => void music?.next().catch(onMusicError));
 el("music-prev").addEventListener("click", () => void music?.previous().catch(onMusicError));

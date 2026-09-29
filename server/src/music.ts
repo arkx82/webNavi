@@ -46,8 +46,9 @@ const SERVICES: Service[] = [
     name: "tidal",
     authorizeUrl: "https://login.tidal.com/authorize",
     tokenUrl: "https://auth.tidal.com/v1/oauth2/token",
-    // recommendations.read for the 추천 믹스 shelf; a login made before it was asked for needs connecting again.
-    scope: "user.read collection.read playlists.read playback recommendations.read",
+    // recommendations.read for the 추천 shelf, search.read for finding songs, r_usr as TIDAL's own
+    // player asks; a login made before these were asked for needs connecting again.
+    scope: "user.read collection.read playlists.read playback recommendations.read search.read r_usr",
     idField: "tidalClientId", secretField: "tidalClientSecret", refreshField: "tidalRefresh",
     pkce: true,
   },
@@ -144,6 +145,24 @@ export function registerMusic(app: FastifyInstance, settings: Settings, adminOnl
       settings.set({ [s.refreshField]: "" });
       cached.delete(s.name);
       return { ok: true };
+    });
+  }
+
+  // TIDAL's player plays only with somewhere to report what it played (artists are paid by those
+  // reports), and TIDAL's collector does not answer a browser from another origin: the car page
+  // posts its batches here, and they go on to TIDAL as they came.
+  app.addContentTypeParser("application/x-www-form-urlencoded", { parseAs: "string", bodyLimit: 1_000_000 }, (_r, body, done) => done(null, body));
+  for (const [route, upstream] of [["/api/music/tidal/events", "https://ec.tidal.com/api/event-batch"], ["/api/music/tidal/events/public", "https://ec.tidal.com/api/public/event-batch"]]) {
+    app.post(route, async (req, reply) => {
+      const headers: Record<string, string> = { "Content-Type": "application/x-www-form-urlencoded" };
+      if (req.headers.authorization) headers.Authorization = req.headers.authorization;
+      try {
+        const a = await fetch(upstream, { method: "POST", headers, body: String(req.body ?? ""), signal: AbortSignal.timeout(10_000) });
+        reply.code(a.status).header("Content-Type", a.headers.get("content-type") ?? "text/xml");
+        return a.text();
+      } catch {
+        return reply.code(502).send("");
+      }
     });
   }
 

@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@tidal-music/auth": "^1.6.2",
+    "@tidal-music/event-producer": "^2.5.0",
     "@tidal-music/player": "^0.20.1",
     "maplibre-gl": "^5.0.0"
   },

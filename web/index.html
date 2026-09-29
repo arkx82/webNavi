@@ -266,13 +266,17 @@
             <div class="times"><span id="t-at">0:00</span><span id="t-len">0:00</span></div>
           </div>
           <div class="transport">
+            <button id="music-shuffle" class="icon round small" type="button" title="셔플" aria-pressed="false"></button>
             <button id="music-prev" class="icon round" type="button" title="이전 곡"></button>
             <button id="music-toggle" class="icon round main" type="button" title="재생"></button>
             <button id="music-next" class="icon round" type="button" title="다음 곡"></button>
+            <span class="transport-pad" aria-hidden="true"></span>
           </div>
         </div>
         <div class="hint" id="music-msg"></div>
         <input id="list-filter" type="search" placeholder="플레이리스트 찾기 (초성도 돼요)" hidden />
+        <!-- What the service found for the words above (TIDAL: songs and playlists across the catalogue). -->
+        <ul id="music-found" hidden></ul>
         <ul id="music-lists" hidden></ul>
       </div>
     </aside>

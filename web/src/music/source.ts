@@ -14,8 +14,10 @@ export interface Playlist {
   count?: number;
   /** A cover, where the service has one. */
   art?: string;
-  /** Which shelf it sits on: 내 재생목록, 저장한 재생목록, 추천 믹스. */
+  /** Which shelf it sits on: 내 재생목록, 저장한 재생목록, 추천, 곡. */
   group?: string;
+  /** The small line under the name, instead of the song count: a song's artist. */
+  sub?: string;
 }
 
 export interface NowPlaying {
@@ -26,6 +28,9 @@ export interface NowPlaying {
   /** Seconds into the track, and its length, when the source says. */
   positionS?: number;
   durationS?: number;
+  /** A word from the service to show under the player (a preview, a failure), and whether it is a failure. */
+  note?: string;
+  noteBad?: boolean;
 }
 
 export interface MusicSource {
@@ -34,10 +39,14 @@ export interface MusicSource {
   /** Brings the SDK up and the account with it; throws with a reason to show. */
   connect(): Promise<void>;
   playlists(): Promise<Playlist[]>;
+  /** Songs and lists across the whole service, where it has a search. */
+  search?(q: string): Promise<Playlist[]>;
   play(uri: string): Promise<void>;
   toggle(): Promise<void>;
   next(): Promise<void>;
   previous(): Promise<void>;
+  /** Songs in a random order from here on (a playlist's rest), or back in the list's own order. */
+  shuffle?(on: boolean): Promise<void>;
   /** To [seconds] into the track, where the service allows it. */
   seek?(seconds: number): Promise<void>;
   /** 0..1; called by the voice around every phrase. */
@@ -83,11 +92,13 @@ export function lazy(id: MusicSource["id"], label: string, load: () => Promise<M
       await real.connect();
     },
     playlists: () => real!.playlists(),
+    search: (q) => real?.search?.(q) ?? Promise.resolve([]),
     play: (uri) => real!.play(uri),
     toggle: () => real!.toggle(),
     next: () => real!.next(),
     previous: () => real!.previous(),
     seek: (s) => real?.seek?.(s) ?? Promise.resolve(),
+    shuffle: (on) => real?.shuffle?.(on) ?? Promise.resolve(),
     setVolume: (level) => real?.setVolume(level),
     onState(listener) { if (real) real.onState(listener); else pending.push(listener); },
     disconnect() { real?.disconnect(); },

@@ -86,7 +86,15 @@ export class SpotifySource implements MusicSource {
 
   async play(uri: string): Promise<void> {
     await this.player?.activateElement().catch(() => undefined);
+    // Shuffle belongs to the device in Spotify; said again so a new list starts the way it was chosen.
+    if (this.shuffled) await this.shuffle(true).catch(() => undefined);
     await this.api("PUT", `/me/player/play?device_id=${this.deviceId}`, { context_uri: uri });
+  }
+
+  private shuffled = false;
+  async shuffle(on: boolean) {
+    this.shuffled = on;
+    if (this.deviceId) await this.api("PUT", `/me/player/shuffle?state=${on}&device_id=${this.deviceId}`);
   }
 
   async toggle() { await this.player?.togglePlay(); }

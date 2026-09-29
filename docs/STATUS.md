@@ -44,7 +44,7 @@
 | 서비스 | 결과 | 이유 |
 |---|---|---|
 | Spotify | 구현 | Web Playback SDK. Premium과 Widevine 필요 |
-| TIDAL | 구현 | 공식 Player SDK가 제3자에게 허용된 유일한 재생 경로. Widevine 필요 |
+| TIDAL | 확인(30초) | 공식 Player SDK로 재생 확인. 개발자 앱 등급 제한으로 30초 미리듣기만(`FULL_REQUIRES_HIGHER_ACCESS_TIER`). 검색·추천 믹스·셔플 |
 | 유튜브 뮤직 | 불가 | 제3자 재생 API가 없음. 테슬라 순정 앱(2024.26 업데이트)은 구글과의 제휴라 웹페이지에서는 쓸 수 없음. IFrame(영상)은 주행 중 차단됨 |
 | 멜론 | 불가 | 제3자 재생 API가 없음(메타데이터만 제공) |
 | 스트림 URL | 화면에서 뺌 | 보기 좋지 않아서. 서버의 `/api/stream` CORS 중계는 남겨 둠 |
