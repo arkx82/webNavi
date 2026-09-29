@@ -16,6 +16,7 @@ import { Nearby } from "./nearby";
 import { autoZoom } from "./autozoom";
 import { EVENTS, turnSpeech } from "./speech";
 import { drawGuide, loadGuide, wants } from "./guide-settings";
+import { isFavourite, loadPlaces, samePlace, savePlaces, toggleFavourite } from "./places";
 import { OVERLAY_STYLE, TmapBase, tmapAvailable } from "./tmap-base";
 import { NaverBase, naverAvailable } from "./naver-base";
 import type { Health, LonLat, Place, Provider, Route } from "./types";
@@ -511,6 +512,94 @@ function drawRecents() {
   el("recent-box").hidden = list.length === 0;
 }
 
+// -- 집 · 회사 · 즐겨찾기 --
+
+let saved = loadPlaces();
+/** Waiting for the next place chosen to become 집 or 회사. */
+let saving: "home" | "work" | null = null;
+const SAVED_NAMES = { home: "집", work: "회사" } as const;
+
+function drawSaved() {
+  el("home-sub").textContent = saved.home?.name ?? "설정하기";
+  el("work-sub").textContent = saved.work?.name ?? "설정하기";
+  const ul = el<HTMLUListElement>("favs");
+  ul.replaceChildren();
+  for (const p of saved.favourites) {
+    const li = item(p.name, p.address);
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "del";
+    del.textContent = "✕";
+    del.title = "즐겨찾기에서 빼기";
+    del.addEventListener("click", (e) => {
+      e.stopPropagation();
+      saved = toggleFavourite(saved, p);
+      savePlaces(saved);
+      drawSaved();
+    });
+    li.prepend(del);
+    li.addEventListener("click", () => void choose(p));
+    ul.append(li);
+  }
+  el("fav-box").hidden = saved.favourites.length === 0;
+}
+
+function startSaving(kind: "home" | "work" | null) {
+  saving = kind;
+  el("saving").hidden = !kind;
+  const input = el<HTMLInputElement>("q");
+  if (kind) {
+    el("saving-text").textContent = `${SAVED_NAMES[kind]}으로 저장할 곳을 검색하세요`;
+    input.placeholder = `${SAVED_NAMES[kind]} 주소나 이름`;
+    input.focus();
+  } else {
+    input.placeholder = "어디로 갈까요?";
+  }
+}
+el("saving-cancel").addEventListener("click", () => startSaving(null));
+for (const kind of ["home", "work"] as const) {
+  el(kind === "home" ? "go-home" : "go-work").addEventListener("click", () => {
+    const place = saved[kind];
+    if (place) void choose(place);
+    else startSaving(kind);
+  });
+}
+
+function setSaved(kind: "home" | "work", place: Place) {
+  saved = { ...saved, [kind]: place };
+  savePlaces(saved);
+  drawSaved();
+}
+
+/** The ☆ on the route cards: filled when the place is 집, 회사 or a favourite; the menu says which. */
+function drawSaveMenu() {
+  if (!goal) return;
+  const isHome = samePlace(saved.home, goal), isWork = samePlace(saved.work, goal), fav = isFavourite(saved, goal);
+  el("pv-save").textContent = isHome || isWork || fav ? "★" : "☆";
+  el("pv-save").classList.toggle("on", isHome || isWork || fav);
+  el("save-home").textContent = isHome ? "집 ✓" : "집으로 설정";
+  el("save-work").textContent = isWork ? "회사 ✓" : "회사로 설정";
+  el("save-fav").textContent = fav ? "즐겨찾기에서 빼기" : "즐겨찾기에 추가";
+  el("save-home").classList.toggle("on", isHome);
+  el("save-work").classList.toggle("on", isWork);
+  el("save-fav").classList.toggle("on", fav);
+}
+el("pv-save").addEventListener("click", () => {
+  drawSaveMenu();
+  el("save-menu").hidden = !el("save-menu").hidden;
+});
+el("save-home").addEventListener("click", () => { if (goal) setSaved("home", goal); drawSaveMenu(); el("save-menu").hidden = true; });
+el("save-work").addEventListener("click", () => { if (goal) setSaved("work", goal); drawSaveMenu(); el("save-menu").hidden = true; });
+el("save-fav").addEventListener("click", () => {
+  if (!goal) return;
+  saved = toggleFavourite(saved, goal);
+  savePlaces(saved);
+  drawSaved();
+  drawSaveMenu();
+  el("save-menu").hidden = true;
+});
+drawSaved();
+
 el<HTMLFormElement>("search-form").addEventListener("submit", (e) => {
   e.preventDefault();
   const input = el<HTMLInputElement>("q");
@@ -529,6 +618,14 @@ el<HTMLFormElement>("search-form").addEventListener("submit", (e) => {
 async function choose(place: Place) {
   goal = place;
   el("results").hidden = true;
+  el("save-menu").hidden = true;
+  // Chosen while 집 or 회사 was being set: that is where it is now.
+  if (saving) {
+    setSaved(saving, place);
+    log(`${SAVED_NAMES[saving]} 저장: ${place.name}`);
+    startSaving(null);
+  }
+  drawSaveMenu();
   el("pv-name").textContent = place.name;
   el("pv-addr").textContent = place.address;
   el("pv-msg").textContent = "경로 찾는 중…";
@@ -625,9 +722,14 @@ function startDrive(r: Route) {
   routeLayer.show(route);
   tracker.setRoute(route);
   sim?.follow(route);
-  watch = new RouteWatch(route, () => ({ wants: (k) => wants(guide, k), cameraFromM: guide.cameraFromM }));
+  // What was said is kept across a re-route or a faster way to the same
+  // place (the same camera, the same junction, once); a new place starts afresh.
+  if (fresh || elsewhere) {
+    turnsSaid.clear();
+    warningsSaid.clear();
+  }
+  watch = new RouteWatch(route, () => ({ wants: (k) => wants(guide, k), cameraFromM: guide.cameraFromM }), warningsSaid);
   watchedAt = null;
-  turnsSaid.clear();
   arrived = false;
   showScreen("drive");
   setFollow(true);
@@ -712,6 +814,10 @@ tracker.onOffRoute = async () => {
 
 /** The rungs already spoken, per guide (speech.ts decides which and when). */
 const turnsSaid = new Map<string, Set<number>>();
+/** The same for the road's warnings, by feature. */
+const warningsSaid = new Map<string, Set<number>>();
+/** A junction's key: its place to about 20 m, since each provider puts the same turn a few metres apart. */
+const junction = (at: LonLat) => `${Math.round(at[0] * 5000)},${Math.round(at[1] * 5000)}`;
 let arrived = false;
 
 function showTurn(shown: Shown) {
@@ -742,7 +848,7 @@ function showTurn(shown: Shown) {
   } else {
     el("then").hidden = true;
   }
-  const key = `${g.at[0]},${g.at[1]}`;
+  const key = junction(g.at);
   const said = turnsSaid.get(key) ?? new Set<number>();
   turnsSaid.set(key, said);
   const sentence = turnSpeech(maneuverOf(route.provider, g), shown.nextGuide.inM, shown.speedMps * 3.6, said, g.text);
@@ -843,6 +949,90 @@ function showLimit(held: ReturnType<RouteWatch["limitAt"]>, speedMps: number | n
     chimedAt = Date.now();
     voice.chime();
   }
+}
+
+// ---- a finger on the map ----------------------------------------------------
+// A tap on a shop's icon brings up that shop (and its neighbours) to drive
+// to; holding anywhere drops a pin and offers the spot's own address. The
+// ground (TMAP, NAVER) cannot say what its icons are, so Kakao is asked
+// what is at the point — its places sit where those maps draw them.
+
+const HOLD_MS = 600;
+let herePin: maplibregl.Marker | null = null;
+/** A hold has just shown the card: the click the browser sends after it is not a tap. */
+let heldAt = 0;
+
+function closeHere() {
+  el("here-card").hidden = true;
+  herePin?.remove();
+  herePin = null;
+}
+el("here-close").addEventListener("click", closeHere);
+
+async function showHere(at: LonLat, held: boolean) {
+  let answer: Awaited<ReturnType<typeof api.here>>;
+  try {
+    answer = await api.here(at, held ? 60 : 25, held);
+  } catch (e) {
+    if (held) { el("here-title").textContent = `찾지 못함: ${(e as Error).message}`; el("here-list").replaceChildren(); el("here-card").hidden = false; }
+    return;
+  }
+  const rows: Place[] = [];
+  if (held) rows.push({ name: answer.address?.name || "이 위치", address: answer.address?.address ?? `${at[1].toFixed(5)}, ${at[0].toFixed(5)}`, at });
+  for (const p of answer.places.slice(0, held ? 4 : 3)) rows.push({ name: p.name, address: [p.detail, p.address].filter(Boolean).join(" · "), at: p.at });
+  // A tap on nothing in particular is only a tap.
+  if (!held && rows.length === 0) return closeHere();
+  el("here-title").textContent = held ? "이 위치" : "여기";
+  const ul = el<HTMLUListElement>("here-list");
+  ul.replaceChildren();
+  for (const place of rows) {
+    const li = document.createElement("li");
+    li.innerHTML = `<div class="here-words"><div class="here-name"></div><div class="here-sub"></div></div><button type="button">여기로 안내</button>`;
+    li.querySelector(".here-name")!.textContent = place.name;
+    li.querySelector(".here-sub")!.textContent = place.address;
+    li.querySelector("button")!.addEventListener("click", () => { closeHere(); void choose(place); });
+    ul.append(li);
+  }
+  el("here-card").hidden = false;
+  herePin?.remove();
+  const dot = document.createElement("div");
+  dot.className = "here-pin";
+  herePin = new maplibregl.Marker({ element: dot }).setLngLat(held ? at : rows[0].at).addTo(map);
+}
+
+map.on("click", (e) => {
+  if (Date.now() - heldAt < 800) return;
+  // The 주변 pins answer their own taps.
+  if (map.getLayer("pins-dot") && map.queryRenderedFeatures(e.point, { layers: ["pins-dot", "pins-label"] }).length) return;
+  void showHere([e.lngLat.lng, e.lngLat.lat], false);
+});
+map.on("contextmenu", (e) => {
+  heldAt = Date.now();
+  void showHere([e.lngLat.lng, e.lngLat.lat], true);
+});
+{
+  // A finger held still: the browser's own long-press is not to be relied on in the car.
+  let timer = 0;
+  let from: { x: number; y: number } | null = null;
+  const cancel = () => { clearTimeout(timer); from = null; };
+  box.addEventListener("pointerdown", (e) => {
+    if (e.pointerType === "mouse") return; // right-click is contextmenu
+    cancel();
+    const rect = box.getBoundingClientRect();
+    from = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    const point = from;
+    timer = window.setTimeout(() => {
+      heldAt = Date.now();
+      const at = map.unproject([point.x, point.y]);
+      void showHere([at.lng, at.lat], true);
+    }, HOLD_MS);
+  });
+  box.addEventListener("pointermove", (e) => {
+    if (!from) return;
+    const rect = box.getBoundingClientRect();
+    if (Math.hypot(e.clientX - rect.left - from.x, e.clientY - rect.top - from.y) > 10) cancel();
+  });
+  for (const kind of ["pointerup", "pointercancel"] as const) box.addEventListener(kind, cancel);
 }
 
 // ---- 안내 설정 ----------------------------------------------------------------
@@ -1153,6 +1343,27 @@ if (demo) map.once("load", async () => {
   if (new URLSearchParams(location.search).get("dock") === "open") openDock(true);
   setFollow(true);
 });
+
+// ?debug: a handle for scripted checks at a desk — what the voice said and
+// when, the music's level, the route and the watch. Nothing in the page
+// uses it; without ?debug it is not there.
+if (new URLSearchParams(location.search).has("debug")) {
+  const said: { t: number; text: string }[] = [];
+  const say = voice.say.bind(voice);
+  voice.say = (text: string) => {
+    // Where the next turn was when this was said, to tell one junction said twice from two junctions.
+    const next = tracker.frame()?.nextGuide;
+    said.push({ t: Date.now(), text, guide: next ? `${junction(next.guide.at)} in ${Math.round(next.inM)}m` : "" } as { t: number; text: string });
+    say(text);
+  };
+  (window as unknown as { nav: unknown }).nav = {
+    said, voice, tracker, gps, map,
+    get route() { return route; },
+    get watch() { return watch; },
+    get sim() { return sim; },
+    recheck: () => recheckRoute(),
+  };
+}
 
 // Audio only starts after a tap; the first one anywhere on the page does it.
 document.addEventListener("pointerdown", () => void voice.unlock().then(() => { el("voice").textContent = voice.context.state; }), { once: true });

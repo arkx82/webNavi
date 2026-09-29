@@ -26,6 +26,14 @@ test("a turn first seen close in is only 잠시 후, not every rung in one breat
   assert.equal(turnSpeech("right", 100, 50, said, ""), null);
 });
 
+test("a turn first known well inside a far rung waits for 잠시 후 rather than say the wrong distance", () => {
+  const said = new Set<number>();
+  assert.equal(turnSpeech("right", 171, 90, said, ""), null); // not "500미터 앞" at 171 m
+  assert.equal(turnSpeech("right", 160, 90, said, ""), null);
+  assert.equal(turnSpeech("right", 145, 90, said, ""), "잠시 후 우회전입니다");
+  assert.equal(turnSpeech("right", 380, 90, new Set(), ""), "500미터 앞에서 우회전입니다"); // 76 %: close enough
+});
+
 test("straight on and the arrival are said once, close in", () => {
   assert.equal(turnSpeech("straight", 290, 50, new Set(), ""), null);
   assert.equal(turnSpeech("straight", 140, 50, new Set(), ""), "잠시 후 직진입니다");

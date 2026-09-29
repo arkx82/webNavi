@@ -75,6 +75,57 @@ export class KakaoPlaces {
   }
 
   /**
+   * What is at a point on the map: the places Kakao has within [radiusM]
+   * of it, nearest first, across the kinds a map shows as icons — the
+   * answer to a finger on a shop's icon, whatever map is drawn underneath.
+   */
+  async around(at: LonLat, radiusM: number): Promise<Poi[]> {
+    const key = `around:${at[0].toFixed(4)}:${at[1].toFixed(4)}:${radiusM}`;
+    return this.cache.get(key, async () => {
+      const codes = ["FD6", "CE7", "CS2", "HP8", "PM9", "BK9", "MT1", "AT4", "AD5", "CT1", "PO3", "OL7", "PK6", "SW8", "SC4", "AC5"];
+      const answers = await Promise.all(codes.map(async (code) => {
+        const url = new URL("https://dapi.kakao.com/v2/local/search/category.json");
+        url.searchParams.set("category_group_code", code);
+        url.searchParams.set("x", String(at[0]));
+        url.searchParams.set("y", String(at[1]));
+        url.searchParams.set("radius", String(Math.round(radiusM)));
+        url.searchParams.set("sort", "distance");
+        url.searchParams.set("size", "5");
+        const answer = await ask<{ documents: Doc[] }>(url, this.auth(), "kakao").catch(() => ({ documents: [] as Doc[] }));
+        return answer.documents;
+      }));
+      const seen = new Set<string>();
+      return answers.flat()
+        .filter((d) => !seen.has(d.id) && !!seen.add(d.id))
+        .map((d) => ({
+          id: `kakao:${d.id}`,
+          category: "food" as Category,
+          name: d.place_name,
+          address: d.road_address_name || d.address_name,
+          at: [Number(d.x), Number(d.y)] as LonLat,
+          distanceM: Number(d.distance),
+          detail: d.category_name.split(">").map((x) => x.trim()).slice(-1)[0],
+          phone: d.phone || undefined,
+        }))
+        .sort((a, b) => (a.distanceM ?? 0) - (b.distanceM ?? 0))
+        .slice(0, 6);
+    });
+  }
+
+  /** The address at a point, road address first, with the building's name where it has one. */
+  async address(at: LonLat): Promise<{ name: string; address: string } | null> {
+    const url = new URL("https://dapi.kakao.com/v2/local/geo/coord2address.json");
+    url.searchParams.set("x", String(at[0]));
+    url.searchParams.set("y", String(at[1]));
+    const answer = await ask<{ documents: { road_address?: { address_name: string; building_name?: string } | null; address?: { address_name: string } | null }[] }>(url, this.auth(), "kakao");
+    const d = answer.documents[0];
+    if (!d) return null;
+    const road = d.road_address?.address_name, lot = d.address?.address_name;
+    const address = road || lot || "";
+    return { name: d.road_address?.building_name || address, address: road && lot ? `${road} (${lot.split(" ").slice(-2).join(" ")})` : address };
+  }
+
+  /**
    * The five-digit 시군구 code (법정동) of a point, which is how the
    * charger feed is sliced. Null off the land.
    */

@@ -38,8 +38,24 @@
           <input id="q" type="search" placeholder="어디로 갈까요?" enterkeyhint="search" />
           <button type="submit" class="narrow">검색</button>
         </form>
+        <!-- 집 and 회사, one tap away; unset, a tap asks where they are. -->
+        <div class="saved-row">
+          <button id="go-home" type="button" class="saved">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 11.5 12 4l9 7.5M6 10v10h12V10"/></svg>
+            <span><b>집</b><small id="home-sub">설정하기</small></span>
+          </button>
+          <button id="go-work" type="button" class="saved">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="4" y="7" width="16" height="13" rx="1.5"/><path d="M9 7V4.5h6V7M4 12.5h16"/></svg>
+            <span><b>회사</b><small id="work-sub">설정하기</small></span>
+          </button>
+        </div>
+        <div id="saving" hidden><span id="saving-text"></span><button id="saving-cancel" class="narrow" type="button">취소</button></div>
         <div id="quick-cats" class="chips quick"></div>
         <ul id="results" class="places" hidden></ul>
+        <div id="fav-box" hidden>
+          <h4>즐겨찾기</h4>
+          <ul id="favs" class="places"></ul>
+        </div>
         <div id="recent-box" hidden>
           <h4>최근 목적지</h4>
           <ul id="recent" class="places"></ul>
@@ -53,8 +69,15 @@
             <div class="title" id="pv-name"></div>
             <div class="artist" id="pv-addr"></div>
           </div>
+          <button id="pv-save" class="icon" type="button" title="저장">☆</button>
           <button id="pv-close" class="icon" type="button">✕</button>
         </header>
+        <!-- Where this place is kept: as 집, as 회사, among the favourites. -->
+        <div id="save-menu" hidden>
+          <button id="save-home" type="button">집으로 설정</button>
+          <button id="save-work" type="button">회사로 설정</button>
+          <button id="save-fav" type="button">즐겨찾기에 추가</button>
+        </div>
         <ul id="offers"></ul>
         <div class="hint" id="pv-msg"></div>
         <div class="row go-row">
@@ -151,6 +174,11 @@
     <button id="locate" type="button" title="현위치">
       <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="6.5"/><circle cx="12" cy="12" r="2.2" fill="currentColor"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
     </button>
+    <!-- A finger on the map: the shop there, or (held) the spot's address, to drive to. -->
+    <div id="here-card" hidden>
+      <header><b id="here-title"></b><button id="here-close" class="icon" type="button">✕</button></header>
+      <ul id="here-list"></ul>
+    </div>
     <!-- 안내 설정: what the voice says, and from how far. -->
     <aside id="guide" class="sheet" hidden>
       <header class="nb-head"><b>안내 설정</b><button id="guide-close" class="icon" type="button">✕</button></header>

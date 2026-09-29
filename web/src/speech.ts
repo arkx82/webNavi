@@ -10,6 +10,9 @@ import type { Maneuver } from "./maneuver";
  */
 export { EVENTS };
 
+/** A far rung is said only this close to its distance: 500 m from 350 m out, not from 170. */
+const FAR_ENOUGH = 0.7;
+
 /** The distances a turn is spoken at, for the speed the car is doing. */
 export function turnRungs(speedKmh: number): number[] {
   return speedKmh >= 70 ? [1000, 500, TURN_NEAR_M] : [300, TURN_NEAR_M];
@@ -36,6 +39,9 @@ export function turnSpeech(maneuver: Maneuver, inM: number, speedKmh: number, sa
   const rung = Math.min(...inside);
   if (said.has(rung)) return null;
   for (const r of rungs) if (r >= rung) said.add(r);
+  // First seen well inside a far rung (just re-routed, or a guide that
+  // came late): "500미터 앞" at 170 m is wrong, so wait for 잠시 후 instead.
+  if (rung > TURN_NEAR_M && inM < rung * FAR_ENOUGH) return null;
   if (maneuver === "arrive") return EVENTS.nearGoal;
   if (TURNS.has(maneuver)) return turnPhrase(maneuver as Turn, rung);
   const short = spokenGuide(guideText);

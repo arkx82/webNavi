@@ -181,6 +181,37 @@ body.side-open #base-menu { right: 440px; }
 /* The car: an arrow lying on the road, turned by its heading. */
 .car { width: 44px; height: 44px; filter: drop-shadow(0 2px 3px rgba(0,0,0,.5)); }
 
+/* ---- a finger on the map ---- */
+#here-card {
+  position: absolute; left: 352px; bottom: 16px; width: 380px; max-height: 50vh; z-index: 3; box-sizing: border-box;
+  padding: 10px 12px; border-radius: 14px; background: var(--panel); backdrop-filter: blur(8px); box-shadow: 0 4px 16px rgba(0,0,0,.45);
+  display: flex; flex-direction: column; gap: 6px; overflow: auto;
+}
+#here-card header { display: flex; align-items: center; justify-content: space-between; font-size: 14px; color: var(--dim); }
+#here-list { list-style: none; margin: 0; padding: 0; }
+#here-list li { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #2a2a2e; }
+#here-list li:last-child { border-bottom: 0; }
+#here-list .here-words { flex: 1; min-width: 0; }
+#here-list .here-name { font-size: 16px; }
+#here-list .here-sub { font-size: 12px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#here-list button { flex: 0 0 auto; min-height: 40px; line-height: 40px; padding: 0 14px; font-size: 14px; background: var(--accent); color: #000; font-weight: 600; }
+.here-pin { width: 18px; height: 18px; border-radius: 50%; background: #e5484d; border: 3px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.5); }
+
+/* ---- 집 · 회사 · 즐겨찾기 ---- */
+.saved-row { display: flex; gap: 8px; }
+button.saved { display: flex; align-items: center; gap: 10px; text-align: left; line-height: 1.2; padding: 8px 12px; min-height: 56px; }
+button.saved span { display: flex; flex-direction: column; min-width: 0; }
+button.saved b { font-size: 15px; }
+button.saved small { font-size: 12px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 90px; }
+#saving { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 10px; background: #24313a; font-size: 14px; }
+#saving span { flex: 1; }
+#saving button { min-height: 36px; line-height: 36px; font-size: 13px; }
+#save-menu { display: flex; flex-direction: column; gap: 6px; }
+#save-menu button { min-height: 44px; line-height: 44px; font-size: 15px; text-align: left; }
+#save-menu button.on { box-shadow: inset 0 0 0 2px var(--accent); }
+#pv-save.on { color: #ffc53d; }
+.places li .del { float: right; margin: -6px -4px 0 8px; width: 36px; height: 36px; min-height: 36px; font-size: 14px; color: var(--dim); background: transparent; }
+
 /* ---- 모의 주행 ---- */
 .go-row button.primary { flex: 2; }
 #sim-bar { display: flex; align-items: center; gap: 8px; padding: 4px 8px 4px 12px; border-radius: 10px; background: #3a2d12; color: #ffcf70; }

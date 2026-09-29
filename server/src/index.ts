@@ -150,6 +150,24 @@ app.get<{ Querystring: { cat: string; at: string; r?: string; fuel?: string } }>
   }
 });
 
+// A finger on the map: the shops right there, and (for a long press) the
+// address of the spot itself, so anywhere can be driven to.
+app.get<{ Querystring: { at: string; r?: string; address?: string } }>("/api/here", async (request, reply) => {
+  const at = lonLat(request.query.at);
+  if (!at) return reply.code(400).send({ error: "at is lon,lat" });
+  if (!nearby.kakao.ready) return reply.code(503).send({ error: "kakao has no key on this server" });
+  const r = Math.min(200, Math.max(10, Number(request.query.r ?? 30) || 30));
+  try {
+    const [places, address] = await Promise.all([
+      nearby.kakao.around(at, r),
+      request.query.address ? nearby.kakao.address(at).catch(() => null) : Promise.resolve(null),
+    ]);
+    return { places, address };
+  } catch (refused) {
+    return reply.code(502).send({ error: plain((refused as Error).message) });
+  }
+});
+
 // One station's every price, address and phone (the list call has only the one fuel).
 app.get<{ Params: { id: string } }>("/api/nearby/gas/:id", async (request, reply) => {
   if (!nearby.opinet.ready) return reply.code(503).send({ error: "opinet has no key on this server" });

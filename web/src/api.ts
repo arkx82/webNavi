@@ -20,5 +20,7 @@ export const api = {
     get<{ routes: Route[]; errors: string[] }>("/api/route", { provider: "all", start: pair(start), goal: pair(goal) }),
   nearby: (category: Category, at: LonLat, radiusM: number, fuel?: Fuel) =>
     get<Poi[]>("/api/nearby", { cat: category, at: pair(at), r: String(Math.round(radiusM)), fuel }),
+  here: (at: LonLat, radiusM: number, withAddress: boolean) =>
+    get<{ places: Poi[]; address: { name: string; address: string } | null }>("/api/here", { at: pair(at), r: String(radiusM), address: withAddress ? "1" : undefined }),
   gasDetail: (uniId: string) => get<StationDetail>(`/api/nearby/gas/${encodeURIComponent(uniId)}`, {}),
 };

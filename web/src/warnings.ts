@@ -48,10 +48,12 @@ export class RouteWatch {
   private line: Line;
   /** Every feature on the route, sorted by where it is along it. */
   private onRoute: { feature: Feature; alongM: number }[] = [];
-  /** feature id → the rungs already spoken. */
-  private spoken = new Map<string, Set<number>>();
-
-  constructor(private route: Route, private prefs: () => WatchPrefs = () => ALL) {
+  /**
+   * @param spoken feature id → the rungs already spoken. Handed on from the
+   *   last watch when the same trip is re-routed, so a camera said before the
+   *   wrong turn is not said again after it.
+   */
+  constructor(private route: Route, private prefs: () => WatchPrefs = () => ALL, private spoken = new Map<string, Set<number>>()) {
     this.line = new Line(route.path);
     for (const c of findCurves(route)) this.place(c);
   }

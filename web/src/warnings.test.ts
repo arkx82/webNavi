@@ -102,3 +102,15 @@ test("an accident hotspot whose circle the route passes through is on the route"
   const due = watch.due(320);
   assert.equal(phraseFor(due[0]), "300미터 앞 사고 다발 지역입니다");
 });
+
+test("a camera said before a re-route is not said again on the new route to the same place", () => {
+  const spoken = new Map<string, Set<number>>();
+  const cam: Feature = { id: "cam", kind: "speed", ...lonLat(offset(start, 0, 800)), limit: 50 };
+  const first = new RouteWatch(route, undefined, spoken);
+  first.add([cam]);
+  assert.equal(first.due(250).length, 1); // 600 m rung said
+  const again = new RouteWatch(route, undefined, spoken);
+  again.add([cam]);
+  assert.equal(again.due(260).length, 0);
+  assert.equal(again.due(520)[0].rungM, 300); // the next rung still comes
+});
