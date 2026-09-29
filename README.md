@@ -282,6 +282,13 @@ Spotify/TIDAL 은 DRM 이라 Web Audio 그래프 밖이므로 SDK 의 볼륨으�
 왼쪽 열 전체를 덮는 **풀 플레이어**(서비스 탭, 큰 아트, 진행 바, ⏮⏯⏭, 재생목록).
 목록에서 고르면 도로 미니바로 접힌다. 계정 연결은 `/admin` 에서 한 번:
 
+**TIDAL 의 현실(2026-09 확인)**: 공식 경로(developer.tidal.com 앱의 Client ID + PKCE + 공식 Player SDK)가 제3자에게
+허용된 유일한 재생 방법인데, 지금은 **30초 미리듣기만** 나온다는 보고가 이어지고 TIDAL 은 답이 없다
+(tidal-sdk-web #133, discussions #179·#214 — 2025-06 ~ 2026-09). 전곡 재생을 여는 앱 심사도 열리지 않았다.
+spofree 같은 곳은 TIDAL 자체 앱의 Client ID/Secret 을 빌린 비공식 "HiFi API" 로 원본 음원을 받는 방식이라
+약관 위반이고, TIDAL 이 그런 계정을 대량 차단 중이다(spofree README 경고) — 쓰지 않는다. 테슬라에는 순정 TIDAL
+앱이 있으니 TIDAL 은 그쪽으로 듣고 이 페이지는 안내 음성만 내는 편이 현실적이다.
+
 **로그인 방식이 둘이 다르다.** Spotify 는 Client ID + Client Secret(서버가 비밀을 들고 코드 교환). TIDAL 은
 **Client ID + PKCE** — 서버가 일회용 verifier 를 만들어 그 해시를 로그인에 보내고, 코드 교환 때 verifier 로
 증명한다. TIDAL SDK 문서대로 사용자 로그인에는 Client Secret 을 쓰지 않는다(Secret 은 사용자 없는 앱 전용
