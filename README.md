@@ -271,7 +271,7 @@ GPS 로그 저장, 모의 주행)은 `?debug` 나 `?demo` 에서만 보인다.
 | 서비스 | 되나 | 이유 |
 |---|---|---|
 | **Spotify** | 만듦, 실차 미확인 | Web Playback SDK 로 페이지가 Connect 기기가 됨. Premium 필요, Widevine 필요 — 테슬라 브라우저에 Widevine 이 있는지가 관건 |
-| **TIDAL** | 실제 계정으로 확인 (30초 미리듣기) | 공식 Player SDK(`@tidal-music/player`)가 제3자에게 허용된 유일한 재생 경로. 좋아요한 곡·내/저장한 재생목록·추천 믹스, 곡 검색, 셔플 |
+| **TIDAL** | 실제 계정으로 확인 (전곡은 TIDAL 임베드로) | 공식 Player SDK(`@tidal-music/player`)가 제3자에게 허용된 유일한 재생 경로. 좋아요한 곡·내/저장한 재생목록·추천 믹스, 곡 검색, 셔플 |
 | **유튜브 뮤직** | 안 함 | 재생 API 가 없고 유일한 경로가 영상 iframe 인데, **테슬라는 주행 중 브라우저 영상 재생을 막는다**. 정차 중에만 되는 음악은 내비에 의미가 없다. 브랜드 계정 여부와 무관 |
 | **멜론** | 안 함 | 제3자 재생 API 자체가 없음 (검색·차트 메타데이터만). 스크래핑은 약관 위반 |
 | 스트림 URL | 화면에서 뺌 | 인터넷 라디오는 되지만 볼품이 없어 페이지에서 내렸다. 서버의 `/api/stream` CORS 중계는 남아 있다 |
@@ -285,7 +285,16 @@ Spotify/TIDAL 은 DRM 이라 Web Audio 그래프 밖이므로 SDK 의 볼륨으�
 **TIDAL 의 현실(2026-09-29 실제 계정으로 확인)**: 공식 경로(developer.tidal.com 앱의 Client ID + PKCE + 공식 Player SDK)가 제3자에게
 허용된 유일한 재생 방법인데, TIDAL 의 `/v2/trackManifests` 가 `trackPresentation: PREVIEW`,
 `previewReason: FULL_REQUIRES_HIGHER_ACCESS_TIER` 로 답한다 — 사용자 구독이 아니라 **개발자 앱의 등급** 때문에
-**30초 미리듣기만** 나온다. 전곡은 TIDAL 이 앱 등급을 올려 줘야 하고(파트너 문의), 그 전까지는 플레이어 아래에 그렇게 표시한다.
+**30초 미리듣기만** 나온다. TIDAL 디자인 가이드라인도 같은 말을 한다: "Only TIDAL subscribers will be able to listen
+to the full-length song Playbacks within TIDAL Embeds" — 전곡은 **TIDAL Embeds 안에서만**.
+
+그래서 **전곡 재생**(기본 켜짐)은 곡을 TIDAL 의 임베드 플레이어(`embed.tidal.com/tracks/<id>`)에 한 곡씩 넣는다.
+목록·검색·추천·셔플·다음 곡은 우리 것이고, 소리는 TIDAL 화면에서 난다. 30초 뒤 그 화면에 뜨는 Log in 으로
+구독 계정에 한 번 로그인해 두면 그 뒤로 전곡이 나온다(iframe 안의 tidal.com 로그인이라 브라우저가 제3자 쿠키를
+막으면 유지되지 않는다 — 차에서 확인할 것). 임베드는 `play`/`pause` 명령만 받고 아무것도 알려 주지 않아서
+(미디어 이벤트 코드는 있으나 보내지 않음), 곡의 끝은 곡 길이와 우리가 튼 시간으로 가늠한다. 그러니 곡 넘김·멈춤은
+임베드 버튼 말고 우리 버튼으로. 소리를 줄일 수 없으므로 안내 음성 동안은 잠깐 멈춘다(안내 설정에서 끌 수 있음).
+끄면 예전처럼 SDK 로 30초.
 SDK 는 재생 기록 전송기(`@tidal-music/event-producer`)가 없으면 아무것도 틀지 않는다. TIDAL 수집 서버가 다른 출처의
 브라우저에 답하지 않아 `/api/music/tidal/events` 로 서버가 그대로 넘겨 준다. TIDAL 은 요청이 몰리면 429 를 주므로
 긴 재생목록은 첫 페이지만 받고 곧장 틀며, 나머지는 2초 간격으로 뒤따라 받는다

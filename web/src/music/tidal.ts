@@ -2,6 +2,7 @@ import * as auth from "@tidal-music/auth";
 import * as EventProducer from "@tidal-music/event-producer";
 import * as Player from "@tidal-music/player";
 import type { MusicSource, NowPlaying, Playlist } from "./source";
+import { TidalEmbed } from "./tidal-embed";
 import { isoSeconds } from "./tidal-time";
 
 /**
@@ -25,6 +26,8 @@ const TRACK_INCLUDE = (rel: string) => `${rel},${rel}.artists,${rel}.albums,${re
 const MIXES = ["userDailyMixes", "userDiscoveryMixes", "userNewReleaseMixes"];
 /** TIDAL's own reason when it hands over 30 seconds instead of the song. */
 const PREVIEW_NOTE = "TIDAL 이 이 앱에는 30초 미리듣기만 허락합니다 (TIDAL 개발자 앱 등급 제한)";
+/** Under the embed: it cannot say whether its login is there, so this says what the login does. */
+const EMBED_NOTE = "30초 뒤 TIDAL 화면에 Log in 이 뜨면 한 번 로그인해 두세요. 그 뒤로 전곡이 나옵니다 (구독 계정). 곡 넘김·멈춤은 아래 버튼으로";
 
 type Resource = { id: string; type: string; attributes: Record<string, unknown>; relationships?: Record<string, { data?: { id: string }[] }> };
 type Page = { data: { id: string; type: string }[] | { id: string; type: string }; included?: Resource[]; links?: { next?: string } };
@@ -63,6 +66,11 @@ export class TidalSource implements MusicSource {
   private failure: string | undefined;
   /** TIDAL handed over 30 seconds of the song playing, not all of it. */
   private preview = false;
+  /** TIDAL's own player in the page, when whole songs are wanted; null plays through the SDK. */
+  private embed: TidalEmbed | null = null;
+  private pauseForVoice = true;
+  /** The embed was stopped for the voice, and starts again when it is done. */
+  private ducked = false;
   private failedInRow = 0;
   /** Requests one after another, a little apart: TIDAL answers 429 to a burst. */
   private gate: Promise<unknown> = Promise.resolve();
@@ -291,6 +299,12 @@ export class TidalSource implements MusicSource {
     this.at++;
     const track = this.queue[this.at];
     if (!track) return;
+    if (this.embed) {
+      this.ducked = false;
+      this.embed.load(track.id, track.durationS);
+      this.emitNow();
+      return;
+    }
     try {
       await Player.load({ productId: track.id, productType: "track", sourceId: "webnavi", sourceType: "PLAYLIST" }, 0);
       await Player.play();
@@ -316,12 +330,36 @@ export class TidalSource implements MusicSource {
   }
 
   private queueNext() {
+    if (this.embed) return; // the embed is handed each song as it comes
     const next = this.queue[this.at + 1];
     if (next) Player.setNext({ productId: next.id, productType: "track", sourceId: "webnavi", sourceType: "PLAYLIST" });
   }
 
+  embedInto(box: HTMLElement | null, pauseForVoice: boolean) {
+    this.pauseForVoice = pauseForVoice;
+    if (!box === !this.embed) return;
+    const at = this.at;
+    if (box) {
+      try { Player.pause(); } catch { /* nothing loaded */ }
+      this.embed = new TidalEmbed(box, () => void this.advance().catch(() => undefined));
+    } else {
+      this.embed?.dispose();
+      this.embed = null;
+    }
+    // The song playing goes on in the other player, from its start.
+    if (at >= 0 && this.queue[at]) {
+      this.at = at - 1;
+      void this.advance().catch(() => undefined);
+    }
+  }
+
   private emitNow() {
     const t = this.queue[this.at];
+    if (this.embed) {
+      const playing = this.embed.playing || this.ducked;
+      for (const l of this.listeners) l({ playing, title: t?.title, artist: t?.artist, art: t?.art, positionS: this.embed.positionS, durationS: t?.durationS, note: t ? EMBED_NOTE : undefined, canSeek: false });
+      return;
+    }
     let positionS: number | undefined;
     try { positionS = Player.getAssetPosition(); } catch { /* nothing loaded */ }
     // A preview is 30 seconds, whatever the song's own length.
@@ -333,11 +371,18 @@ export class TidalSource implements MusicSource {
   }
 
   async seek(seconds: number) {
+    if (this.embed) return; // the embed takes only play and pause
     await Player.seek(Math.max(0, seconds));
     this.emitNow();
   }
 
   async toggle() {
+    if (this.embed) {
+      this.ducked = false;
+      if (this.embed.playing) this.embed.pause(); else this.embed.play();
+      this.emitNow();
+      return;
+    }
     if (this.playing) Player.pause(); else await Player.play();
   }
   async next() { await this.advance(); }
@@ -345,12 +390,23 @@ export class TidalSource implements MusicSource {
     this.at = Math.max(-1, this.at - 2);
     await this.advance();
   }
-  setVolume(level: number) { Player.setVolumeLevel(Math.max(0, Math.min(1, level))); }
+  setVolume(level: number) {
+    if (this.embed) {
+      // The embed has no volume: stopped while the voice speaks, if so chosen, and started again after.
+      if (!this.pauseForVoice) return;
+      if (level < 0.99 && this.embed.playing) { this.embed.pause(); this.ducked = true; }
+      else if (level >= 0.99 && this.ducked) { this.ducked = false; this.embed.play(); }
+      return;
+    }
+    Player.setVolumeLevel(Math.max(0, Math.min(1, level)));
+  }
 
   onState(listener: (now: NowPlaying) => void) { this.listeners.push(listener); }
 
   disconnect() {
-    Player.pause();
+    this.embed?.dispose();
+    this.embed = null;
+    try { Player.pause(); } catch { /* nothing loaded */ }
     if (this.refresh != null) clearTimeout(this.refresh);
     this.refresh = null;
     this.queue = [];
