@@ -4,7 +4,7 @@
  * pixels averaged, the near-black and near-white ones left out so a white
  * border or a black sleeve does not wash the colour away.
  *
- * Needs the image to allow it (CORS); Spotify's and TIDAL's image hosts
+ * Needs the image to allow it (CORS); TIDAL's image hosts
  * do. Where one does not, or it will not load, the answer is null and the
  * player keeps its own colour.
  */

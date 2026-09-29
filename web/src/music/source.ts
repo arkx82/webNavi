@@ -3,8 +3,8 @@
  * [setVolume] — that is the ducking — and the panel needs the rest.
  *
  * A stream from a URL runs through the page's audio graph and is ducked
- * with a GainNode; Spotify and TIDAL play under DRM inside their SDKs,
- * out of the graph's reach, so they are ducked through their own volume.
+ * with a GainNode; TIDAL plays under DRM inside its SDK, out of the
+ * graph's reach, so it is ducked through its own volume.
  */
 export interface Playlist {
   id: string;
@@ -34,7 +34,7 @@ export interface NowPlaying {
 }
 
 export interface MusicSource {
-  readonly id: "stream" | "spotify" | "tidal";
+  readonly id: "stream" | "tidal";
   readonly label: string;
   /** Brings the SDK up and the account with it; throws with a reason to show. */
   connect(): Promise<void>;
@@ -69,7 +69,7 @@ export function loadScript(src: string): Promise<void> {
 }
 
 /** A live access token from the server, which holds the refresh token. */
-export async function tokenFor(service: "spotify" | "tidal"): Promise<string> {
+export async function tokenFor(service: "tidal"): Promise<string> {
   const a = await fetch(`/api/music/${service}/token`);
   const j = (await a.json().catch(() => ({}))) as { token?: string; error?: string };
   if (!a.ok || !j.token) throw new Error(j.error ?? `${service}: ${a.status}`);

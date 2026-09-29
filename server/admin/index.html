@@ -70,10 +70,7 @@
         <label><b>DashScope</b> API 키 (Qwen3-TTS) <span class="hint" data-hint="dashscopeApiKey"></span><input name="dashscopeApiKey" /></label>
         <label><b>기본 목소리</b> Sohee(한국어) · Cherry · Serena · Ethan … — 차 화면 안내 설정에서 직접 만든 목소리까지 골라 바꿀 수 있습니다 <span class="hint" data-hint="ttsVoice"></span><input name="ttsVoice" placeholder="Cherry" /></label>
         <h2>음악 계정</h2>
-        <p class="hint">각 서비스의 개발자 포털에서 앱을 만들고 Redirect URI 에 <code id="redir-spotify"></code> / <code id="redir-tidal"></code> 를 등록한 뒤, <b>Spotify 는 Client ID 와 Secret</b>, <b>TIDAL 은 Client ID 만</b> 저장하고(TIDAL 로그인은 PKCE 라 Secret 이 필요 없습니다) <b>연결</b>을 누르면 그 계정으로 로그인합니다. 토큰은 서버에 암호화되어 남고, 차의 화면은 짧은 접근 토큰만 받습니다.</p>
-        <label><b>Spotify</b> Client ID <span class="hint" data-hint="spotifyClientId"></span><input name="spotifyClientId" /></label>
-        <label><b>Spotify</b> Client Secret <span class="hint" data-hint="spotifyClientSecret"></span><input name="spotifyClientSecret" /></label>
-        <div class="row"><a class="button" id="link-spotify" href="/admin/music/spotify/login">Spotify 연결</a><button type="button" data-disconnect="spotify">해제</button><span class="hint" id="state-spotify"></span></div>
+        <p class="hint">developer.tidal.com 에서 앱을 만들고 Redirect URI 에 <code id="redir-tidal"></code> 를 등록한 뒤, <b>Client ID</b> 를 저장하고(로그인은 PKCE 라 Secret 이 필요 없습니다) <b>연결</b>을 누르면 그 계정으로 로그인합니다. 토큰은 서버에 암호화되어 남고, 차의 화면은 짧은 접근 토큰만 받습니다. TIDAL 이 제3자 앱에 허락하는 재생은 30초 미리듣기입니다.</p>
         <label><b>TIDAL</b> Client ID <span class="hint" data-hint="tidalClientId"></span><input name="tidalClientId" /></label>
         <label><b>TIDAL</b> Client Secret (선택 — 로그인은 PKCE 라 없어도 됨) <span class="hint" data-hint="tidalClientSecret"></span><input name="tidalClientSecret" /></label>
         <div class="row"><a class="button" id="link-tidal" href="/admin/music/tidal/login">TIDAL 연결</a><button type="button" data-disconnect="tidal">해제</button><span class="hint" id="state-tidal"></span></div>
@@ -149,9 +146,9 @@ async function load() {
   showFields(r.fields);
   showStatus(r.status);
   const m = await call("/api/music/state");
-  for (const name of ["spotify", "tidal"]) {
+  for (const name of ["tidal"]) {
     const st = m[name] || {};
-    $("state-" + name).textContent = st.connected ? "연결됨" : st.configured ? "미연결" : st.needsSecret ? "ID/Secret 먼저" : "Client ID 먼저";
+    $("state-" + name).textContent = st.connected ? "연결됨" : st.configured ? "미연결" : "Client ID 먼저";
     $("state-" + name).className = "hint" + (st.connected ? " saved" : "");
     $("redir-" + name).textContent = location.origin + "/api/music/" + name + "/callback";
   }

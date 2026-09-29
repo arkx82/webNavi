@@ -8,7 +8,6 @@ import { RouteLayer } from "./route-layer";
 import { Tracker, type Shown } from "./tracker";
 import { Line, lerpAngle, metres } from "./geo";
 import { arrowSvg, maneuverOf } from "./maneuver";
-import { SpotifySource } from "./music/spotify";
 import { lazy, type MusicSource, type NowPlaying, type Playlist } from "./music/source";
 import { debounce, matches } from "./music/find";
 import { deep, pastel, tintOf } from "./music/tint";
@@ -1097,7 +1096,6 @@ el("guide-close").addEventListener("click", () => openGuide(false));
 // the driver should be looking at.
 
 const sources: MusicSource[] = [
-  new SpotifySource(),
   lazy("tidal", "TIDAL", async () => new (await import("./music/tidal")).TidalSource()),
 ];
 let music: MusicSource | null = null;
@@ -1140,7 +1138,7 @@ async function drawSources(): Promise<MusicSource[]> {
   }
   if (connected.length === 0) {
     el("mini-artist").textContent = "설정 페이지에서 계정을 연결하세요";
-    musicSay("연결된 음악 계정이 없습니다. /admin 에서 Spotify 나 TIDAL 을 연결하면 여기에 나타납니다.");
+    musicSay("연결된 음악 계정이 없습니다. /admin 에서 TIDAL 을 연결하면 여기에 나타납니다.");
   }
   return connected;
 }
@@ -1214,7 +1212,7 @@ function showNow(state: NowPlaying) {
   const has = !!state.title;
   el("music-dock").classList.toggle("playing", state.playing);
   el("mini-title").textContent = state.title ?? "음악";
-  el("mini-artist").textContent = state.artist ?? music?.label ?? "Spotify · TIDAL";
+  el("mini-artist").textContent = state.artist ?? music?.label ?? "TIDAL";
   el("now-title").textContent = state.title ?? "";
   el("now-artist").textContent = state.artist ?? "";
   for (const id of ["mini-art", "now-art"]) {
@@ -1526,7 +1524,7 @@ if (demo) map.once("load", async () => {
     startSim();
   }
   const row = el("music-sources");
-  for (const [name, on] of [["Spotify", true], ["TIDAL", false]] as const) {
+  for (const [name, on] of [["TIDAL", true]] as const) {
     const b = document.createElement("button");
     b.textContent = name;
     b.classList.toggle("on", on);

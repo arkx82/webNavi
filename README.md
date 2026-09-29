@@ -270,14 +270,14 @@ GPS 로그 저장, 모의 주행)은 `?debug` 나 `?demo` 에서만 보인다.
 
 | 서비스 | 되나 | 이유 |
 |---|---|---|
-| **Spotify** | 만듦, 실차 미확인 | Web Playback SDK 로 페이지가 Connect 기기가 됨. Premium 필요, Widevine 필요 — 테슬라 브라우저에 Widevine 이 있는지가 관건 |
+| **Spotify** | 뺌 (2026-09-29) | 테슬라에 순정 앱이 있어 이 페이지에서 틀 이유가 없다. Web Playback SDK 로 만들었다가 내비에 집중하려고 걷어냈다 |
 | **TIDAL** | 실제 계정으로 확인 (30초 미리듣기) | 공식 Player SDK(`@tidal-music/player`)가 제3자에게 허용된 유일한 재생 경로. 좋아요한 곡·내/저장한 재생목록·추천 믹스, 곡 검색, 셔플 |
 | **유튜브 뮤직** | 안 함 | 재생 API 가 없고 유일한 경로가 영상 iframe 인데, **테슬라는 주행 중 브라우저 영상 재생을 막는다**. 정차 중에만 되는 음악은 내비에 의미가 없다. 브랜드 계정 여부와 무관 |
 | **멜론** | 안 함 | 제3자 재생 API 자체가 없음 (검색·차트 메타데이터만). 스크래핑은 약관 위반 |
 | 스트림 URL | 화면에서 뺌 | 인터넷 라디오는 되지만 볼품이 없어 페이지에서 내렸다. 서버의 `/api/stream` CORS 중계는 남아 있다 |
 
 구조 (`web/src/music/`): `MusicSource` 하나의 얼굴(연결·목록·재생·⏮⏯⏭·`setVolume`).
-Spotify/TIDAL 은 DRM 이라 Web Audio 그래프 밖이므로 SDK 의 볼륨으로 덕킹한다
+TIDAL 은 DRM 이라 Web Audio 그래프 밖이므로 SDK 의 볼륨으로 덕킹한다
 (`Voice.duckers`). 화면은 음악 앱들처럼 **아래 미니바**(아트·곡명·⏯⏭)와, 탭하면
 왼쪽 열 전체를 덮는 **풀 플레이어**(서비스 탭, 큰 아트, 진행 바, ⏮⏯⏭, 재생목록).
 목록에서 고르면 도로 미니바로 접힌다. 계정 연결은 `/admin` 에서 한 번:
@@ -294,28 +294,27 @@ SDK 는 재생 기록 전송기(`@tidal-music/event-producer`)가 없으면 아�
 긴 재생목록은 첫 페이지만 받고 곧장 틀며, 나머지는 2초 간격으로 뒤따라 받는다
 (tidal-sdk-web #133, discussions #179·#214 — 2025-06 ~ 2026-09). 전곡 재생을 여는 앱 심사도 열리지 않았다.
 spofree 같은 곳은 TIDAL 자체 앱의 Client ID/Secret 을 빌린 비공식 "HiFi API" 로 원본 음원을 받는 방식이라
-약관 위반이고, TIDAL 이 그런 계정을 대량 차단 중이다(spofree README 경고) — 쓰지 않는다. 테슬라에는 순정 TIDAL
-앱이 있으니 TIDAL 은 그쪽으로 듣고 이 페이지는 안내 음성만 내는 편이 현실적이다.
+약관 위반이고, TIDAL 이 그런 계정을 대량 차단 중이다(spofree README 경고) — 쓰지 않는다. tidal.com 웹 플레이어는
+`frame-ancestors 'self'` 라 이 페이지 안의 작은 창(iframe)에 넣을 수 없다. 남은 길은 차 브라우저의 **다른 탭**에서
+tidal.com 이나 Music Assistant 웹 플레이어를 여는 것인데, 실차에서 되는지 확인해야 한다.
 
-**로그인 방식이 둘이 다르다.** Spotify 는 Client ID + Client Secret(서버가 비밀을 들고 코드 교환). TIDAL 은
-**Client ID + PKCE** — 서버가 일회용 verifier 를 만들어 그 해시를 로그인에 보내고, 코드 교환 때 verifier 로
+**로그인은 Client ID + PKCE** — 서버가 일회용 verifier 를 만들어 그 해시를 로그인에 보내고, 코드 교환 때 verifier 로
 증명한다. TIDAL SDK 문서대로 사용자 로그인에는 Client Secret 을 쓰지 않는다(Secret 은 사용자 없는 앱 전용
-토큰용이라 넣어도 되고 안 넣어도 된다). 범위: `user.read collection.read playlists.read playback`.
+토큰용이라 넣어도 되고 안 넣어도 된다). 범위: `user.read collection.read playlists.read playback recommendations.read`
+(`r_usr`·`w_usr` 는 INTERNAL 이라 요청하면 로그인 화면이 "Something went wrong" 이 된다).
 
 화면(`web/src/music/`): YesPlayMusic 같은 앨범 중심 구성에 둥글고 파스텔인 스타일 — 커버에서 뽑은 색
 (`tint.ts`, fast-average-color 와 같은 방식)으로 플레이어 배경과 버튼 색이 바뀌고, 미니바의 커버는 재생 중에
 레코드처럼 돈다. 끌어서 옮기는 진행 막대(`seek`), 재생 중 흔들리는 이퀄라이저, 초성으로도 찾는 플레이리스트
 검색(250 ms debounce, `find.ts`), MediaSession(OS 미디어 키와 동기화).
 
-1. developer.spotify.com / developer.tidal.com 에서 앱을 만든다. Redirect URI 는
-   `https://<도메인>/api/music/spotify/callback` (TIDAL 도 같은 꼴). Spotify 는
-   2025-11 부터 http 리다이렉트를 받지 않는다(루프백 `127.0.0.1` 만 예외).
-2. `/admin` 에 Client ID/Secret 저장 → **연결** → 그 서비스에 로그인.
+1. developer.tidal.com 에서 앱을 만든다. Redirect URI 는 `https://<도메인>/api/music/tidal/callback`.
+2. `/admin` 에 Client ID 저장 → **연결** → TIDAL 에 로그인.
 3. 서버가 refresh token 을 `settings.enc` 에 넣고, 차의 페이지는
-   `/api/music/<서비스>/token` 으로 짧은 access token 만 받는다.
+   `/api/music/tidal/token` 으로 짧은 access token 만 받는다.
 
 **열린 문제 — 차 페이지의 인증.** `/api/music/*/token` 은 차 브라우저가
-로그인 없이 부르므로, 도메인을 아는 누구나 소유자의 Spotify 를 조종할 수 있다
+로그인 없이 부르므로, 도메인을 아는 누구나 소유자의 TIDAL 토큰을 받아 갈 수 있다
 (경로·TTS 호출도 마찬가지로 소유자 비용). 다음 단계: `/admin` 에서 만든 긴 키를
 차 브라우저에 한 번 넣게 하고(`?key=` → localStorage → 헤더) 모든 `/api/*` 가
 그것을 요구하게 한다.
@@ -334,7 +333,8 @@ spofree 같은 곳은 TIDAL 자체 앱의 Client ID/Secret 을 빌린 비공식 
       `player.ts` 는 `/api/stream` 을 통해 CORS 붙은 스트림만 그래프에 넣을 수 있음)
 - [x] BYOK → `/admin` 설정 페이지로 대신함 (키는 서버에 암호화 저장)
 - [ ] 차 페이지 접근 키 (위 "열린 문제")
-- [ ] Spotify / TIDAL 을 실제 계정으로, 그리고 차에서 (Widevine)
+- [x] TIDAL 을 실제 계정으로 (30초 미리듣기까지; 전곡은 제3자에게 막혀 있음)
+- [ ] 차에서: 다른 탭의 tidal.com 웹 플레이어나 Music Assistant 웹 플레이어로 TIDAL 전곡이 되는지
 - [x] CSV 로그 재생 모드(진단 → 재생, `?speedup=4`)
 - [x] 모의 주행(진단 → 모의 주행): 경로를 따라 1 Hz 가짜 GPS, 속도 슬라이더, 터널 10초
       (추측 항법 확인), 이탈(60 m 옆 → 재탐색 확인). `?demo` 는 가짜 경로로 자동 시작

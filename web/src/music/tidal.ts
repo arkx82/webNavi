@@ -9,7 +9,7 @@ import { isoSeconds } from "./tidal-time";
  * parties to play its bytes. The SDK expects to hold the account's
  * credentials itself; here it is handed a short-lived token from our
  * server and a fresh one before it expires, so the refresh token stays
- * on the server like Spotify's.
+ * on the server.
  *
  * The SDK plays one track at a time (`load` + `setNext`), so a playlist
  * is a queue kept here and fed on `ended`. Untested against a real

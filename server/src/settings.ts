@@ -25,10 +25,7 @@ export interface Secrets {
   dataGoKrKey?: string;
   evTariffs?: string;
   adminHash?: string;
-  /** Streaming accounts: the app's client, and the owner's refresh token once connected. */
-  spotifyClientId?: string;
-  spotifyClientSecret?: string;
-  spotifyRefresh?: string;
+  /** TIDAL: the app's client, and the owner's refresh token once connected. */
   tidalClientId?: string;
   tidalClientSecret?: string;
   tidalRefresh?: string;
@@ -47,9 +44,6 @@ const ENV: Record<SecretName, string | undefined> = {
   dataGoKrKey: "DATA_GO_KR_KEY",
   evTariffs: "EV_TARIFFS",
   adminHash: undefined,
-  spotifyClientId: "SPOTIFY_CLIENT_ID",
-  spotifyClientSecret: "SPOTIFY_CLIENT_SECRET",
-  spotifyRefresh: undefined,
   tidalClientId: "TIDAL_CLIENT_ID",
   tidalClientSecret: "TIDAL_CLIENT_SECRET",
   tidalRefresh: undefined,
@@ -59,7 +53,7 @@ const ENV: Record<SecretName, string | undefined> = {
 export const EDITABLE: SecretName[] = [
   "tmapAppKey", "kakaoRestKey", "naverClientId", "naverClientSecret", "dashscopeApiKey", "ttsVoice",
   "opinetKey", "dataGoKrKey", "evTariffs",
-  "spotifyClientId", "spotifyClientSecret", "tidalClientId", "tidalClientSecret",
+  "tidalClientId", "tidalClientSecret",
 ];
 
 export class Settings {

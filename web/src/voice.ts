@@ -3,7 +3,7 @@
  * the music down while it speaks. Phrases are queued: two warnings a
  * second apart play one after the other, never on top of each other.
  *
- * The car's own audio is out of reach — the browser cannot duck Spotify —
+ * The car's own audio is out of reach — the browser cannot duck the car's apps —
  * which is why the music lives in this page too; see [Player].
  */
 /** The same sentence is not said twice within this. */
