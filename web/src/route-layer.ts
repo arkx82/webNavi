@@ -44,6 +44,12 @@ export class RouteLayer {
   }
 
   show(route: Route | null) {
+    // A route can arrive before the style has: sources cannot be added
+    // until it is, so the drawing waits for it.
+    if (!this.map.isStyleLoaded()) {
+      this.map.once("style.load", () => this.show(route));
+      return;
+    }
     this.install();
     const lines: GeoJSON.Feature[] = [];
     const dots: GeoJSON.Feature[] = [];

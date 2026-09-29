@@ -15,8 +15,13 @@ import type { Health, LonLat, Place, Provider, Route } from "./types";
 
 // A key-free vector style; swap for a Mapbox/VWorld style URL through
 // VITE_MAP_STYLE once Korean coverage has been compared in the car.
-const style = import.meta.env.VITE_MAP_STYLE ?? "https://tiles.openfreemap.org/styles/liberty";
 const HOME: LonLat = [127.0276, 37.4979];
+/** ?demo: a made-up trip fills the panel, for judging the layout at a desk. */
+const demo = new URLSearchParams(location.search).has("demo");
+// The demo draws on a plain ground with no tiles, so it needs no network.
+const style: string | maplibregl.StyleSpecification = demo
+  ? { version: 8, sources: {}, layers: [{ id: "ground", type: "background", paint: { "background-color": "#e6e2d8" } }] }
+  : import.meta.env.VITE_MAP_STYLE ?? "https://tiles.openfreemap.org/styles/liberty";
 const NAMES: Record<Provider, string> = { tmap: "티맵", kakao: "카카오", naver: "네이버" };
 /** How often the road is asked again for a better way, and how much better it must be. */
 const RECHECK_MS = 6 * 60_000;
@@ -364,6 +369,7 @@ function musicSay(text: string, bad = false) {
 }
 
 async function drawSources() {
+  if (demo) return;
   const row = el("music-sources");
   row.replaceChildren();
   let state: Record<string, { connected: boolean }> = {};
@@ -482,12 +488,54 @@ el<HTMLInputElement>("replay").addEventListener("change", async (e) => {
   replay.start();
 });
 
+// ---- a made-up drive, for the desk --------------------------------------
+// ?demo fills the panel as it looks mid-trip — route, turn, offers, a song —
+// with no server, no car and no account, so the layout can be judged.
+
+if (demo) map.once("load", () => {
+  const path: LonLat[] = [];
+  for (let i = 0; i <= 60; i++) path.push([HOME[0] + i * 0.0006, HOME[1] + Math.sin(i / 8) * 0.0015 + i * 0.0003]);
+  const fake = (provider: Provider, durationS: number): Route => ({
+    provider, distanceM: 4200, durationS, path,
+    guides: [
+      { at: path[20], text: "테헤란로 방면 우회전", distanceM: 1300, turnType: 12 },
+      { at: path[45], text: "선릉로 방면 좌회전", distanceM: 1600, turnType: 13 },
+    ],
+    segments: [
+      { from: 0, to: 15, congestion: 1 }, { from: 15, to: 30, congestion: 2 },
+      { from: 30, to: 42, congestion: 3 }, { from: 42, to: 61, congestion: 1 },
+    ],
+  });
+  health = { ok: true, providers: { tmap: true, kakao: true, naver: true }, safetyFeatures: 48210, search: true, tts: true };
+  goal = { name: "스타벅스 선릉역점", address: "서울 강남구 테헤란로 340", at: path[60] };
+  offers = [fake("kakao", 14 * 60), fake("tmap", 16 * 60), fake("naver", 19 * 60)];
+  el("trip").hidden = false;
+  el("trip-name").textContent = goal.name;
+  drive(offers[0], false);
+  drawProviders();
+  gps.feed({ t: Date.now(), lon: path[12][0], lat: path[12][1], accM: 6, speed: 17.2, heading: 62, course: 62 });
+  el("music-controls").hidden = false;
+  el("now").hidden = false;
+  el("now-title").textContent = "Blue in Green";
+  el("now-artist").textContent = "Miles Davis";
+  el("music-toggle").textContent = "⏸";
+  const row = el("music-sources");
+  for (const [name, on] of [["스트림 URL", false], ["Spotify", true], ["TIDAL", false]] as const) {
+    const b = document.createElement("button");
+    b.textContent = name;
+    b.classList.toggle("on", on);
+    row.append(b);
+  }
+  el("music-form").hidden = true;
+  setFollow(true);
+});
+
 // Audio only starts after a tap; the first one anywhere on the page does it.
 document.addEventListener("pointerdown", () => void voice.unlock().then(() => { el("voice").textContent = voice.context.state; }), { once: true });
 
 map.on("load", async () => {
   log(`UA ${navigator.userAgent}`);
-  log(`secure=${window.isSecureContext} style=${style}`);
+  log(`secure=${window.isSecureContext} style=${typeof style === "string" ? style : "demo"}`);
   el("wake").textContent = await keepAwake();
   gps.start();
   try {
