@@ -1065,8 +1065,6 @@ function applyGuide() {
   voice.enabled = guide.voice;
   voice.voiceName = guide.voiceName;
   voice.setVolume(guide.volume);
-  // After this module has run: the music is set up further down.
-  queueMicrotask(applyTidalMode);
 }
 /** A voice chosen from the list: heard at once, and its sentences made ahead on the server. */
 function voicePicked(name: string | null) {
@@ -1125,28 +1123,6 @@ el("mini").addEventListener("click", () => {
 });
 drawDockSize();
 
-/**
- * TIDAL's whole songs play only inside TIDAL's own player (its terms), so
- * with 전곡 재생 on, that player takes the cover's place; off, ours plays
- * the 30 seconds TIDAL allows it. Remembered; on unless turned off.
- */
-let tidalFull = (() => { try { return localStorage.getItem("tidal-full") !== "0"; } catch { return true; } })();
-function applyTidalMode() {
-  const isTidal = music?.id === "tidal";
-  const on = isTidal && tidalFull;
-  el("tidal-mode").hidden = !isTidal;
-  el<HTMLInputElement>("tidal-full").checked = tidalFull;
-  el("player").classList.toggle("embedded", on);
-  el("tidal-box").hidden = !on;
-  if (isTidal) music!.embedInto?.(on ? el("tidal-box") : null, guide.musicPause);
-}
-el("tidal-full").addEventListener("change", () => {
-  tidalFull = el<HTMLInputElement>("tidal-full").checked;
-  try { localStorage.setItem("tidal-full", tidalFull ? "1" : "0"); } catch { /* not kept */ }
-  lastNote = undefined;
-  applyTidalMode();
-});
-
 /** The buttons for the connected accounts; answers which those are. */
 async function drawSources(): Promise<MusicSource[]> {
   if (demo) return [];
@@ -1176,7 +1152,6 @@ async function pickSource(s: MusicSource) {
     voice.duckers.delete(duckBySource);
   }
   music = s;
-  applyTidalMode();
   showNow({ playing: false });
   el("player").hidden = true;
   el("music-lists").hidden = true;
@@ -1185,7 +1160,6 @@ async function pickSource(s: MusicSource) {
   try {
     await s.connect();
     if (shuffleOn) await s.shuffle?.(true).catch(() => undefined);
-    applyTidalMode();
     s.onState(showNow);
     voice.duckers.add(duckBySource);
     el("player").hidden = false;
@@ -1302,7 +1276,6 @@ function drawProgress() {
     el("t-at").textContent = clock(at);
   }
   el("t-len").textContent = clock(now.durationS);
-  el<HTMLInputElement>("seek").disabled = now.canSeek === false;
 }
 setInterval(drawProgress, 1000);
 {

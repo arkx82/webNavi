@@ -31,8 +31,6 @@ export interface NowPlaying {
   /** A word from the service to show under the player (a preview, a failure), and whether it is a failure. */
   note?: string;
   noteBad?: boolean;
-  /** False where the player cannot be moved within a song (TIDAL's embed). */
-  canSeek?: boolean;
 }
 
 export interface MusicSource {
@@ -49,13 +47,6 @@ export interface MusicSource {
   previous(): Promise<void>;
   /** Songs in a random order from here on (a playlist's rest), or back in the list's own order. */
   shuffle?(on: boolean): Promise<void>;
-  /**
-   * TIDAL only: play through TIDAL's own embedded player in [box] (whole
-   * songs, for a subscriber logged in there), or, with null, through the
-   * SDK here (30 seconds). [pauseForVoice]: the embed cannot be turned
-   * down, so it stops while the voice speaks.
-   */
-  embedInto?(box: HTMLElement | null, pauseForVoice: boolean): void;
   /** To [seconds] into the track, where the service allows it. */
   seek?(seconds: number): Promise<void>;
   /** 0..1; called by the voice around every phrase. */
@@ -108,7 +99,6 @@ export function lazy(id: MusicSource["id"], label: string, load: () => Promise<M
     previous: () => real!.previous(),
     seek: (s) => real?.seek?.(s) ?? Promise.resolve(),
     shuffle: (on) => real?.shuffle?.(on) ?? Promise.resolve(),
-    embedInto: (box, pauseForVoice) => real?.embedInto?.(box, pauseForVoice),
     setVolume: (level) => real?.setVolume(level),
     onState(listener) { if (real) real.onState(listener); else pending.push(listener); },
     disconnect() { real?.disconnect(); },

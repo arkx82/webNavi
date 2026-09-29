@@ -11,8 +11,6 @@ export interface GuideSettings {
   voiceName: string | null;
   /** 0..1, the voice's own level (the music is ducked separately). */
   volume: number;
-  /** TIDAL's embed cannot be turned down: stop it while the voice speaks. */
-  musicPause: boolean;
   turns: boolean;
   cameras: boolean;
   /** Where camera warnings start: 1000, 600 or 300 m ahead. */
@@ -30,7 +28,7 @@ export interface GuideSettings {
 }
 
 export const DEFAULTS: GuideSettings = {
-  voice: true, voiceName: null, volume: 1, musicPause: true, turns: true,
+  voice: true, voiceName: null, volume: 1, turns: true,
   cameras: true, cameraFromM: 600, sections: true, bumps: true, schools: true, curves: true, accidents: true, bikeAccidents: true,
   overspeed: true, overspeedBy: 0,
 };
@@ -80,7 +78,6 @@ const ROWS: Row[] = [
   { key: "voice", label: "음성 안내", kind: "toggle" },
   { key: "voiceName", label: "목소리", kind: "voices" },
   { key: "volume", label: "안내 음량", kind: "slider" },
-  { key: "musicPause", label: "안내할 때 TIDAL 전곡 잠깐 멈춤", kind: "toggle", sub: "TIDAL 화면은 소리를 줄일 수 없어 멈췄다가 이어 틉니다" },
   { key: "turns", label: "회전 안내", kind: "toggle", sub: "300미터 앞, 잠시 후 (고속에서는 1킬로미터·500미터)" },
   { key: "cameras", label: "과속·신호 단속 카메라", kind: "toggle" },
   { key: "cameraFromM", label: "카메라 안내 시작", kind: "choice", options: [[1000, "1km 앞"], [600, "600m 앞"], [300, "300m 앞"]] },
