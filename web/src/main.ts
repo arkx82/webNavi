@@ -6,7 +6,8 @@ import { Replay } from "./replay";
 import { Simulator } from "./simulate";
 import { RouteLayer } from "./route-layer";
 import { Tracker, type Shown } from "./tracker";
-import { metres } from "./geo";
+import { Line, metres } from "./geo";
+import { arrowSvg, maneuverOf } from "./maneuver";
 import { SpotifySource } from "./music/spotify";
 import { lazy, type MusicSource, type NowPlaying } from "./music/source";
 import { Voice } from "./voice";
@@ -124,10 +125,9 @@ requestAnimationFrame(frame);
 
 function setFollow(on: boolean) {
   follow = on;
-  el("follow").classList.toggle("on", on);
-  if (on && gps.last) map.easeTo({ center: [gps.last.lon, gps.last.lat], pitch: 45, zoom: Math.max(map.getZoom(), 15) });
+  el("recenter").hidden = on;
+  if (on && gps.last) map.easeTo({ center: [gps.last.lon, gps.last.lat], pitch: 45, zoom: Math.max(map.getZoom(), 16) });
 }
-el("follow").addEventListener("click", () => setFollow(!follow));
 map.on("dragstart", () => setFollow(false));
 
 /** Where a route starts: the car, or the map's middle before the first fix. */
@@ -139,31 +139,43 @@ function here(): LonLat {
 }
 
 // ---- the trip --------------------------------------------------------------
+// Three screens, the way the car apps do it: where to; the ways there,
+// as cards, with every offer on the map and the chosen one in colour;
+// then the drive — the turn, the one after, the arrival time. 경로 on the
+// way brings the cards back without stopping the guidance.
 
+type Screen = "search" | "preview" | "drive";
 let health: Health | null = null;
 let goal: Place | null = null;
-/** Every provider's answer for this goal, and the one being driven. */
+/** Every provider's answer for this goal, quickest first, and the one chosen. */
 let offers: Route[] = [];
+let chosen: Route | null = null;
+/** The route being driven; null before 안내 시작. */
 let route: Route | null = null;
-/** Set when the driver tapped a provider; else the fastest is driven. */
-let preferred: Provider | null = null;
 let recheck: number | null = null;
 let rerouting = false;
 const routeLayer = new RouteLayer(map);
+
+function showScreen(name: Screen) {
+  el("s-search").hidden = name !== "search";
+  el("s-preview").hidden = name !== "preview";
+  el("s-drive").hidden = name !== "drive";
+  el("go").textContent = route ? "이 경로로" : "안내 시작";
+}
+
+// -- 1. where to --
 
 async function search(q: string) {
   const results = el<HTMLUListElement>("results");
   results.replaceChildren();
   results.hidden = false;
+  el("recent-box").hidden = true;
   try {
     const places = await api.search(q, gps.last ? here() : undefined);
     if (places.length === 0) results.append(item("결과 없음", ""));
     for (const p of places) {
       const li = item(p.name, `${p.address}${p.distanceM != null ? ` · ${km(p.distanceM)}` : ""}`);
-      li.addEventListener("click", () => {
-        results.hidden = true;
-        void go(p);
-      });
+      li.addEventListener("click", () => void choose(p));
       results.append(li);
     }
   } catch (e) {
@@ -180,151 +192,25 @@ function item(title: string, sub: string) {
   return li;
 }
 
-/** Ask every provider; drive the preferred one, else the quickest. */
-async function go(place: Place, quietly = false) {
-  goal = place;
-  el("trip").hidden = false;
-  el("trip-name").textContent = place.name;
-  if (!quietly) el("trip-sum").textContent = "경로 찾는 중…";
-  try {
-    const answer = await api.routes(here(), place.at);
-    for (const e of answer.errors) log(`경로 실패 ${e}`);
-    if (answer.routes.length === 0) throw new Error(answer.errors.join("; ") || "경로 없음");
-    offers = answer.routes.sort((a, b) => a.durationS - b.durationS);
-    const chosen = offers.find((r) => r.provider === preferred) ?? offers[0];
-    drive(chosen, !quietly);
-    log(`경로 ${offers.map((r) => `${r.provider} ${minutes(r.durationS)}`).join(", ")} → ${chosen.provider}`);
-  } catch (e) {
-    if (!quietly) {
-      route = null;
-      routeLayer.show(null);
-      el("trip-sum").textContent = `경로 실패: ${(e as Error).message}`;
-    }
-  }
-  drawProviders();
-  if (recheck == null) recheck = window.setInterval(() => void recheckRoute(), RECHECK_MS);
+/** The last few places driven to, kept in the browser. */
+function recents(): Place[] {
+  try { return JSON.parse(localStorage.getItem("nav-recent") ?? "[]"); } catch { return []; }
 }
-
-function drive(chosen: Route, fitView: boolean) {
-  route = chosen;
-  sim?.follow(chosen);
-  routeLayer.show(route);
-  tracker.setRoute(route);
-  watch = new RouteWatch(route);
-  watchedAt = null;
-  turnsSaid.clear();
-  arrived = false;
-  el("trip-sum").textContent = `${km(route.distanceM)} · ${minutes(route.durationS)} · ${NAMES[route.provider]}`;
-  if (fitView) {
-    setFollow(false);
-    routeLayer.fit(route);
-  }
+function remember(place: Place) {
+  const kept = [place, ...recents().filter((p) => p.name !== place.name)].slice(0, 6);
+  try { localStorage.setItem("nav-recent", JSON.stringify(kept)); } catch { /* private window */ }
 }
-
-/** Every few minutes on the way: a much quicker route from any provider wins. */
-async function recheckRoute() {
-  if (!goal || !route || !gps.last || rerouting) return;
-  const current = tracker.frame()?.remainingS ?? route.durationS;
-  try {
-    const answer = await api.routes(here(), goal.at);
-    const best = answer.routes.sort((a, b) => a.durationS - b.durationS)[0];
-    if (best && best.durationS < current - BETTER_BY_S) {
-      offers = answer.routes;
-      log(`더 빠른 길: ${best.provider} ${minutes(best.durationS)} (지금 ${minutes(current)})`);
-      voice.say("더 빠른 길로 안내합니다");
-      drive(best, false);
-      drawProviders();
-    }
-  } catch (e) {
-    log(`재확인 실패 ${(e as Error).message}`);
+function drawRecents() {
+  const list = recents();
+  const ul = el<HTMLUListElement>("recent");
+  ul.replaceChildren();
+  for (const p of list) {
+    const li = item(p.name, p.address);
+    li.addEventListener("click", () => void choose(p));
+    ul.append(li);
   }
+  el("recent-box").hidden = list.length === 0;
 }
-
-// Off the road for three seconds: the route is asked again from here.
-tracker.onOffRoute = async () => {
-  if (!goal || rerouting) return;
-  rerouting = true;
-  log("경로 이탈 — 재탐색");
-  voice.say("경로를 벗어나 다시 찾습니다");
-  el("trip-sum").textContent = "경로 이탈 · 재탐색 중…";
-  try {
-    await go(goal, true);
-  } finally {
-    rerouting = false;
-  }
-};
-
-function drawProviders() {
-  const row = el("providers");
-  row.replaceChildren();
-  for (const name of ["tmap", "kakao", "naver", "osrm"] as Provider[]) {
-    if (health && !health.providers[name]) continue;
-    // The free road is shown only while it is the one being driven.
-    if (name === "osrm" && route?.provider !== "osrm") continue;
-    const offer = offers.find((r) => r.provider === name);
-    const b = document.createElement("button");
-    b.textContent = NAMES[name];
-    const small = document.createElement("small");
-    small.textContent = offer ? minutes(offer.durationS) : "–";
-    b.append(small);
-    b.classList.toggle("on", name === route?.provider);
-    b.disabled = !offer;
-    b.addEventListener("click", () => {
-      preferred = name;
-      if (offer) {
-        drive(offer, true);
-        drawProviders();
-      }
-    });
-    row.append(b);
-  }
-}
-
-/** Distances at which a turn is spoken; each once per guide. */
-const TURN_RUNGS_M = [500, 150];
-const turnsSaid = new Map<string, Set<number>>();
-let arrived = false;
-
-function showTurn(shown: Shown) {
-  const turn = el("turn");
-  if (!route || !shown.nextGuide) {
-    turn.hidden = true;
-    if (route && shown.remainingM != null && shown.remainingM < 30 && !arrived) {
-      arrived = true;
-      voice.say("목적지에 도착했습니다");
-    }
-    return;
-  }
-  turn.hidden = false;
-  el("turn-in").textContent = km(shown.nextGuide.inM);
-  el("turn-text").textContent = shown.nextGuide.guide.text;
-  const key = `${shown.nextGuide.guide.at[0]},${shown.nextGuide.guide.at[1]}`;
-  const said = turnsSaid.get(key) ?? new Set<number>();
-  for (const rung of TURN_RUNGS_M) {
-    if (said.has(rung) || shown.nextGuide.inM > rung) continue;
-    said.add(rung);
-    turnsSaid.set(key, said);
-    voice.say(`${rung}미터 앞 ${shown.nextGuide.guide.text}`);
-    break;
-  }
-  if (shown.remainingM != null && shown.remainingS != null) {
-    el("trip-sum").textContent = `남은 ${km(shown.remainingM)} · ${minutes(shown.remainingS)} · ${NAMES[route.provider]}`;
-  }
-}
-
-el("clear").addEventListener("click", () => {
-  goal = null;
-  route = null;
-  offers = [];
-  preferred = null;
-  routeLayer.show(null);
-  tracker.setRoute(null);
-  watch = null;
-  el("trip").hidden = true;
-  if (recheck != null) clearInterval(recheck);
-  recheck = null;
-  setFollow(true);
-});
 
 el<HTMLFormElement>("search-form").addEventListener("submit", (e) => {
   e.preventDefault();
@@ -334,16 +220,240 @@ el<HTMLFormElement>("search-form").addEventListener("submit", (e) => {
   if (!q) return;
   // A bare "lon,lat" routes without a search key, for the desk.
   const m = q.match(/^(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)$/);
-  if (m) {
-    el("results").hidden = true;
-    void go({ name: q, address: "", at: [Number(m[1]), Number(m[2])] });
+  if (m) void choose({ name: q, address: "", at: [Number(m[1]), Number(m[2])] });
+  else void search(q);
+});
+
+// -- 2. the ways there --
+
+/** A destination picked: ask everyone, show the cards. */
+async function choose(place: Place) {
+  goal = place;
+  el("results").hidden = true;
+  el("pv-name").textContent = place.name;
+  el("pv-addr").textContent = place.address;
+  el("pv-msg").textContent = "경로 찾는 중…";
+  el("offers").replaceChildren();
+  showScreen("preview");
+  await fetchOffers();
+}
+
+async function fetchOffers(): Promise<boolean> {
+  if (!goal) return false;
+  try {
+    const answer = await api.routes(here(), goal.at);
+    for (const e of answer.errors) log(`경로 실패 ${e}`);
+    if (answer.routes.length === 0) throw new Error(answer.errors.join("; ") || "경로 없음");
+    offers = answer.routes.sort((a, b) => a.durationS - b.durationS);
+    // Keep the driven provider if it answered again, else the quickest.
+    chosen = offers.find((r) => r.provider === (chosen ?? route)?.provider) ?? offers[0];
+    el("pv-msg").textContent = "";
+    drawOffers();
+    routeLayer.show(chosen, offers);
+    setFollow(false);
+    routeLayer.fit(...offers);
+    log(`경로 ${offers.map((r) => `${r.provider} ${minutes(r.durationS)}`).join(", ")}`);
+    return true;
+  } catch (e) {
+    el("pv-msg").textContent = `경로 실패: ${(e as Error).message}`;
+    return false;
+  }
+}
+
+function drawOffers() {
+  const ul = el<HTMLUListElement>("offers");
+  ul.replaceChildren();
+  const quickest = offers[0];
+  const shortest = [...offers].sort((a, b) => a.distanceM - b.distanceM)[0];
+  for (const r of offers) {
+    const li = document.createElement("li");
+    li.className = "offer" + (r === chosen ? " on" : "");
+    const tag = r === quickest ? `<span class="tag">가장 빠름</span>` : r === shortest ? `<span class="tag alt">최단 거리</span>` : "";
+    li.innerHTML =
+      `<div class="l1"><b>${minutes(r.durationS)}</b><span>${arrivalAt(r.durationS)} 도착</span>${tag}</div>` +
+      `<div class="l2">${km(r.distanceM)} · ${NAMES[r.provider]}${r.provider === "osrm" ? " (교통 정보 없음)" : ""}</div>` +
+      `<div class="bar">${trafficBar(r)}</div>`;
+    li.addEventListener("click", () => {
+      chosen = r;
+      drawOffers();
+      routeLayer.show(chosen, offers);
+    });
+    ul.append(li);
+  }
+}
+
+/** The road's colours in proportion, as a strip. */
+function trafficBar(r: Route): string {
+  const line = new Line(r.path);
+  const parts: string[] = [];
+  for (const s of r.segments) {
+    const a = line.along[Math.min(s.from, r.path.length - 1)];
+    const b = line.along[Math.min(s.to, r.path.length - 1)];
+    const share = line.lengthM ? ((b - a) / line.lengthM) * 100 : 0;
+    if (share > 0) parts.push(`<i class="c${s.congestion}" style="width:${share}%"></i>`);
+  }
+  return parts.join("");
+}
+
+el("go").addEventListener("click", () => {
+  if (chosen) startDrive(chosen);
+});
+el("pv-close").addEventListener("click", () => {
+  if (route) {
+    // Back to the drive as it was.
+    routeLayer.show(route);
+    showScreen("drive");
+    setFollow(true);
   } else {
-    void search(q);
+    goal = null;
+    offers = [];
+    chosen = null;
+    routeLayer.show(null);
+    showScreen("search");
+    setFollow(true);
   }
 });
 
+// -- 3. on the way --
+
+function startDrive(r: Route) {
+  const fresh = route == null;
+  route = r;
+  chosen = r;
+  routeLayer.show(route);
+  tracker.setRoute(route);
+  sim?.follow(route);
+  watch = new RouteWatch(route);
+  watchedAt = null;
+  turnsSaid.clear();
+  arrived = false;
+  showScreen("drive");
+  setFollow(true);
+  if (goal) remember(goal);
+  if (fresh) voice.say("안내를 시작합니다");
+  if (recheck == null) recheck = window.setInterval(() => void recheckRoute(), RECHECK_MS);
+}
+
+function endDrive() {
+  route = null;
+  goal = null;
+  offers = [];
+  chosen = null;
+  routeLayer.show(null);
+  tracker.setRoute(null);
+  watch = null;
+  if (recheck != null) clearInterval(recheck);
+  recheck = null;
+  el("turn-icon").replaceChildren();
+  drawRecents();
+  showScreen("search");
+  setFollow(true);
+}
+
+el("end").addEventListener("click", endDrive);
+el("routes").addEventListener("click", async () => {
+  showScreen("preview");
+  el("pv-msg").textContent = "경로 다시 찾는 중…";
+  await fetchOffers();
+});
+
+/** Every few minutes on the way: a much quicker route from any provider wins. */
+async function recheckRoute() {
+  if (!goal || !route || !gps.last || rerouting) return;
+  if (!el("s-preview").hidden) return; // the cards are open; the driver is choosing
+  const current = tracker.frame()?.remainingS ?? route.durationS;
+  try {
+    const answer = await api.routes(here(), goal.at);
+    const best = answer.routes.sort((a, b) => a.durationS - b.durationS)[0];
+    if (best && best.durationS < current - BETTER_BY_S) {
+      offers = answer.routes;
+      log(`더 빠른 길: ${best.provider} ${minutes(best.durationS)} (지금 ${minutes(current)})`);
+      voice.say("더 빠른 길로 안내합니다");
+      startDrive(best);
+    }
+  } catch (e) {
+    log(`재확인 실패 ${(e as Error).message}`);
+  }
+}
+
+// Off the road for three seconds: the route is asked again from here.
+tracker.onOffRoute = async () => {
+  if (!goal || !route || rerouting) return;
+  rerouting = true;
+  log("경로 이탈 — 재탐색");
+  voice.say("경로를 벗어나 다시 찾습니다");
+  el("eta-left").textContent = "경로 이탈 · 재탐색 중…";
+  try {
+    const answer = await api.routes(here(), goal.at);
+    const again = answer.routes.sort((a, b) => a.durationS - b.durationS);
+    const same = again.find((r) => r.provider === route!.provider) ?? again[0];
+    if (same) {
+      offers = again;
+      startDrive(same);
+    }
+  } catch (e) {
+    log(`재탐색 실패 ${(e as Error).message}`);
+  } finally {
+    rerouting = false;
+  }
+};
+
+/** Distances at which a turn is spoken; each once per guide. */
+const TURN_RUNGS_M = [500, 150];
+const turnsSaid = new Map<string, Set<number>>();
+let arrived = false;
+
+function showTurn(shown: Shown) {
+  if (!route) return;
+  if (shown.remainingM != null && shown.remainingS != null) {
+    el("eta-time").textContent = arrivalAt(shown.remainingS);
+    el("eta-left").textContent = `${minutes(shown.remainingS)} · ${km(shown.remainingM)} · ${NAMES[route.provider]}`;
+  }
+  if (!shown.nextGuide) {
+    if (shown.remainingM != null && shown.remainingM < 30 && !arrived) {
+      arrived = true;
+      voice.say("목적지에 도착했습니다");
+      el("turn-icon").innerHTML = arrowSvg("arrive");
+      el("turn-in").textContent = "도착";
+      el("turn-text").textContent = goal?.name ?? "";
+      el("then").hidden = true;
+    }
+    return;
+  }
+  const g = shown.nextGuide.guide;
+  el("turn-icon").innerHTML = arrowSvg(maneuverOf(route.provider, g));
+  el("turn-in").textContent = km(shown.nextGuide.inM);
+  el("turn-text").textContent = g.text;
+  if (shown.thenGuide && shown.thenGuide.inM - shown.nextGuide.inM < 800) {
+    el("then").hidden = false;
+    el("then-icon").innerHTML = arrowSvg(maneuverOf(route.provider, shown.thenGuide.guide), 20);
+    el("then-text").textContent = `${km(shown.thenGuide.inM - shown.nextGuide.inM)} 후 ${shown.thenGuide.guide.text}`;
+  } else {
+    el("then").hidden = true;
+  }
+  const key = `${g.at[0]},${g.at[1]}`;
+  const said = turnsSaid.get(key) ?? new Set<number>();
+  for (const rung of TURN_RUNGS_M) {
+    if (said.has(rung) || shown.nextGuide.inM > rung) continue;
+    said.add(rung);
+    turnsSaid.set(key, said);
+    voice.say(`${rung}미터 앞 ${g.text}`);
+    break;
+  }
+}
+
 const km = (m: number) => (m < 1000 ? `${Math.round(m / 10) * 10} m` : `${(m / 1000).toFixed(1)} km`);
 const minutes = (s: number) => (s < 3600 ? `${Math.round(s / 60)}분` : `${Math.floor(s / 3600)}시간 ${Math.round((s % 3600) / 60)}분`);
+const hhmm = (d: Date) => `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+const arrivalAt = (inS: number) => hhmm(new Date(Date.now() + inS * 1000));
+
+// The clock in the corner, as every car shows one.
+setInterval(() => { el("clock").textContent = hhmm(new Date()); }, 1000);
+el("clock").textContent = hhmm(new Date());
+drawRecents();
+
+// Back onto the car, when the map was dragged away.
+el("recenter").addEventListener("click", () => setFollow(true));
 
 // ---- the road ahead --------------------------------------------------------
 
@@ -571,17 +681,18 @@ el<HTMLInputElement>("replay").addEventListener("change", async (e) => {
 // ?demo fills the panel as it looks mid-trip — route, turn, offers, a song —
 // with no server, no car and no account, so the layout can be judged.
 
+// The demo's road is asked for at once, not after the map (which may be
+// eight seconds coming): Gangnam station → Seolleung from OSRM, else a curve.
+const demoRoad: Promise<Route | null> | null = demo
+  ? api.route("osrm", HOME, [127.0489, 37.5045]).then((r) => { log(`데모 경로: OSM 도로 ${r.path.length}점`); return r; })
+    .catch((e) => { log(`데모 경로: OSRM 못 닿음 (${(e as Error).message}) — 그린 곡선`); return null; })
+  : null;
+
 if (demo) map.once("load", async () => {
-  // A real road when OSRM can be reached (Gangnam station → Seolleung), else a drawn curve.
-  let path: LonLat[] = [];
-  let real: Route | null = null;
-  try {
-    real = await api.route("osrm", HOME, [127.0489, 37.5045]);
-    path = real.path;
-    log(`데모 경로: OSM 도로 ${path.length}점`);
-  } catch (e) {
+  const real = await demoRoad;
+  let path: LonLat[] = real?.path ?? [];
+  if (path.length === 0) {
     for (let i = 0; i <= 60; i++) path.push([HOME[0] + i * 0.0006, HOME[1] + Math.sin(i / 8) * 0.0015 + i * 0.0003]);
-    log(`데모 경로: OSRM 못 닿음 (${(e as Error).message}) — 그린 곡선`);
   }
   const n = path.length;
   const q = (k: number) => Math.round((n - 1) * k);
@@ -600,11 +711,18 @@ if (demo) map.once("load", async () => {
   health = { ok: true, providers: { tmap: true, kakao: true, naver: true, osrm: true }, safetyFeatures: 48210, search: true, tts: true };
   goal = { name: "스타벅스 선릉역점", address: "서울 강남구 테헤란로 340", at: path[n - 1] };
   offers = [fake("kakao", 14 * 60), fake("tmap", 16 * 60), fake("naver", 19 * 60)];
-  el("trip").hidden = false;
-  el("trip-name").textContent = goal.name;
-  drive(offers[0], false);
-  drawProviders();
-  startSim();
+  chosen = offers[0];
+  el("pv-name").textContent = goal.name;
+  el("pv-addr").textContent = goal.address;
+  drawOffers();
+  if (new URLSearchParams(location.search).get("screen") === "preview") {
+    showScreen("preview");
+    routeLayer.show(chosen, offers);
+    routeLayer.fit(...offers);
+  } else {
+    startDrive(offers[0]);
+    startSim();
+  }
   const row = el("music-sources");
   for (const [name, on] of [["Spotify", true], ["TIDAL", false]] as const) {
     const b = document.createElement("button");

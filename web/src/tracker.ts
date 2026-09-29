@@ -36,6 +36,8 @@ export interface Shown {
   remainingM?: number;
   remainingS?: number;
   nextGuide?: { guide: Guide; inM: number };
+  /** The one after it, for the "then" line. */
+  thenGuide?: { guide: Guide; inM: number };
   offRoute: boolean;
 }
 
@@ -173,8 +175,12 @@ export class Tracker {
       shown.offM = this.lastProj?.offM;
       shown.remainingM = Math.max(0, this.line.lengthM - along);
       shown.remainingS = this.route.durationS * (shown.remainingM / Math.max(1, this.line.lengthM));
-      const next = this.guides.find((g) => g.alongM > along + 5);
-      if (next) shown.nextGuide = { guide: next.guide, inM: next.alongM - along };
+      const i = this.guides.findIndex((g) => g.alongM > along + 5);
+      if (i >= 0) {
+        shown.nextGuide = { guide: this.guides[i].guide, inM: this.guides[i].alongM - along };
+        const then = this.guides[i + 1];
+        if (then) shown.thenGuide = { guide: then.guide, inM: then.alongM - along };
+      }
     }
     return shown;
   }

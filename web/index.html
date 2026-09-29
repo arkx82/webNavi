@@ -9,22 +9,57 @@
   <body>
     <div id="map"></div>
     <aside id="hud">
-      <div class="big"><span id="speed">--</span><small> km/h</small></div>
+      <div class="top">
+        <div class="big"><span id="speed">--</span><small> km/h</small></div>
+        <div id="clock" class="clock"></div>
+      </div>
 
-      <form id="search-form" class="row" autocomplete="off">
-        <input id="q" type="search" placeholder="목적지" enterkeyhint="search" />
-        <button type="submit" class="narrow">검색</button>
-      </form>
-      <ul id="results" hidden></ul>
-
-      <section id="trip" hidden>
-        <div id="trip-name"></div>
-        <div class="row" id="providers"></div>
-        <div id="trip-sum"></div>
-        <div id="turn" hidden><span id="turn-in"></span><span id="turn-text"></span></div>
-        <button id="clear">경로 지우기</button>
+      <!-- 1. Where to. -->
+      <section id="s-search">
+        <form id="search-form" class="row" autocomplete="off">
+          <input id="q" type="search" placeholder="어디로 갈까요?" enterkeyhint="search" />
+          <button type="submit" class="narrow">검색</button>
+        </form>
+        <ul id="results" class="places" hidden></ul>
+        <div id="recent-box" hidden>
+          <h4>최근 목적지</h4>
+          <ul id="recent" class="places"></ul>
+        </div>
       </section>
 
+      <!-- 2. The ways there, before setting off (and again from 경로 while driving). -->
+      <section id="s-preview" hidden>
+        <header class="place">
+          <div class="titles">
+            <div class="title" id="pv-name"></div>
+            <div class="artist" id="pv-addr"></div>
+          </div>
+          <button id="pv-close" class="icon" type="button">✕</button>
+        </header>
+        <ul id="offers"></ul>
+        <div class="hint" id="pv-msg"></div>
+        <button id="go" class="primary" type="button">안내 시작</button>
+      </section>
+
+      <!-- 3. On the way. -->
+      <section id="s-drive" hidden>
+        <div id="turn">
+          <div id="turn-icon"></div>
+          <div class="turn-words">
+            <div id="turn-in"></div>
+            <div id="turn-text"></div>
+          </div>
+        </div>
+        <div id="then" hidden><span class="then-label">다음</span><span id="then-icon"></span><span id="then-text"></span></div>
+        <div id="eta">
+          <div><b id="eta-time">--:--</b><small> 도착</small></div>
+          <div id="eta-left"></div>
+        </div>
+        <div class="row">
+          <button id="routes" type="button">경로</button>
+          <button id="end" type="button">종료</button>
+        </div>
+      </section>
 
       <details>
         <summary>진단</summary>
@@ -56,9 +91,8 @@
         </div>
         <pre id="log"></pre>
       </details>
-
-      <button id="follow" class="on">따라가기</button>
     </aside>
+    <button id="recenter" type="button" hidden title="내 위치">⌖</button>
     <!-- The player, the way music apps do it: a mini bar that opens into the
          full player. Closed while driving; opened to choose, closed on play. -->
     <aside id="music-dock" class="closed">

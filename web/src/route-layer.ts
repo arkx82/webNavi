@@ -21,8 +21,16 @@ export class RouteLayer {
   private install() {
     if (this.ready) return;
     const empty = { type: "FeatureCollection", features: [] } as GeoJSON.FeatureCollection;
+    this.map.addSource("alts", { type: "geojson", data: empty });
     this.map.addSource("route", { type: "geojson", data: empty });
     this.map.addSource("guides", { type: "geojson", data: empty });
+    // The other offers, grey and under the chosen one, the way a route
+    // preview shows what was not picked.
+    this.map.addLayer({
+      id: "alts-line", type: "line", source: "alts",
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: { "line-color": "#8a8f99", "line-width": 6, "line-opacity": 0.7 },
+    });
     this.map.addLayer({
       id: "route-casing", type: "line", source: "route",
       layout: { "line-cap": "round", "line-join": "round" },
@@ -43,14 +51,20 @@ export class RouteLayer {
     this.ready = true;
   }
 
-  show(route: Route | null) {
+  show(route: Route | null, alternates: Route[] = []) {
     // A route can arrive before the style has: sources cannot be added
     // until it is, so the drawing waits for it.
     if (!this.map.isStyleLoaded()) {
-      this.map.once("style.load", () => this.show(route));
+      this.map.once("style.load", () => this.show(route, alternates));
       return;
     }
     this.install();
+    (this.map.getSource("alts") as maplibregl.GeoJSONSource).setData({
+      type: "FeatureCollection",
+      features: alternates.filter((a) => a !== route && a.path.length > 1).map((a) => ({
+        type: "Feature", properties: { provider: a.provider }, geometry: { type: "LineString", coordinates: a.path },
+      })),
+    });
     const lines: GeoJSON.Feature[] = [];
     const dots: GeoJSON.Feature[] = [];
     if (route) {
@@ -71,10 +85,10 @@ export class RouteLayer {
     (this.map.getSource("guides") as maplibregl.GeoJSONSource).setData({ type: "FeatureCollection", features: dots });
   }
 
-  /** The whole route in view, with room for the panel on the left. */
-  fit(route: Route) {
+  /** Every route in view, with room for the panel on the left. */
+  fit(...routes: Route[]) {
     let [minX, minY, maxX, maxY] = [Infinity, Infinity, -Infinity, -Infinity];
-    for (const [x, y] of route.path) {
+    for (const [x, y] of routes.flatMap((r) => r.path)) {
       if (x < minX) minX = x; if (y < minY) minY = y;
       if (x > maxX) maxX = x; if (y > maxY) maxY = y;
     }
