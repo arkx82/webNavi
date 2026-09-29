@@ -10,7 +10,7 @@
 html, body { margin: 0; height: 100%; background: #111; color: var(--ink); font-family: var(--font); }
 #map { position: absolute; inset: 0; }
 #hud {
-  position: absolute; top: 16px; left: 16px; width: 320px; max-height: calc(100% - 32px - 72px);
+  position: absolute; top: 16px; left: 16px; width: 320px; max-height: calc(100% - 32px);
   padding: 16px; box-sizing: border-box; border-radius: 12px; background: var(--panel);
   backdrop-filter: blur(6px); display: flex; flex-direction: column; gap: 10px; overflow: auto;
 }
@@ -48,7 +48,7 @@ details > * + * { margin-top: 8px; }
 
 /* The player: a mini bar, or the full player above it. */
 #music-dock {
-  position: absolute; left: 16px; bottom: 16px; width: 320px; box-sizing: border-box;
+  position: absolute; right: 16px; bottom: 16px; width: 320px; box-sizing: border-box;
   border-radius: 14px; background: var(--panel); backdrop-filter: blur(8px); overflow: hidden;
   display: flex; flex-direction: column-reverse;
 }
@@ -57,10 +57,9 @@ details > * + * { margin-top: 8px; }
 #mini-chevron { color: var(--dim); font-size: 14px; transition: transform 0.2s; }
 #music-dock.closed #mini-chevron { transform: rotate(180deg); }
 #music-dock.closed #full { display: none; }
-/* Open, it is the whole column: the full player covers the trip panel, as
-   a music app's does, and the mini bar stays at its foot to close it. */
+/* Open, it is the whole right column — never over the trip panel on the
+   left — and the mini bar stays at its foot to close it. */
 #music-dock:not(.closed) { top: 16px; z-index: 2; }
-body.dock-open #hud { visibility: hidden; }
 #full { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; padding: 16px 16px 4px; border-bottom: 1px solid #2a2a2e; overflow: auto; }
 .art { background: linear-gradient(135deg, #3a3a44, #1e1e24); background-size: cover; background-position: center; border-radius: 8px; flex: 0 0 auto; }
 .art.small { width: 48px; height: 48px; }

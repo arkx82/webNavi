@@ -18,10 +18,13 @@ import type { Health, LonLat, Place, Provider, Route } from "./types";
 const HOME: LonLat = [127.0276, 37.4979];
 /** ?demo: a made-up trip fills the panel, for judging the layout at a desk. */
 const demo = new URLSearchParams(location.search).has("demo");
-// The demo draws on a plain ground with no tiles, so it needs no network.
-const style: string | maplibregl.StyleSpecification = demo
-  ? { version: 8, sources: {}, layers: [{ id: "ground", type: "background", paint: { "background-color": "#e6e2d8" } }] }
-  : import.meta.env.VITE_MAP_STYLE ?? "https://tiles.openfreemap.org/styles/liberty";
+const style: string = import.meta.env.VITE_MAP_STYLE ?? "https://tiles.openfreemap.org/styles/liberty";
+// Where the tiles cannot be reached, a plain ground so the page still works
+// (and the demo still runs) — offline at a desk, or a dead tile server.
+const STYLE_WAIT_S = 8;
+const GROUND: maplibregl.StyleSpecification = {
+  version: 8, sources: {}, layers: [{ id: "ground", type: "background", paint: { "background-color": "#e6e2d8" } }],
+};
 const NAMES: Record<Provider, string> = { tmap: "티맵", kakao: "카카오", naver: "네이버" };
 /** How often the road is asked again for a better way, and how much better it must be. */
 const RECHECK_MS = 6 * 60_000;
@@ -36,7 +39,20 @@ const map = openMap();
  */
 function openMap(): maplibregl.Map {
   try {
-    return new maplibregl.Map({ container: "map", style, center: HOME, zoom: 15, pitch: 45, attributionControl: false });
+    const m = new maplibregl.Map({ container: "map", style, center: HOME, zoom: 15, pitch: 45, attributionControl: false });
+    // A style that fails, or one that simply never comes (a dead link
+    // hangs rather than refuses), gives way to the plain ground so the
+    // rest of the page can go on; the log says so.
+    let grounded = false;
+    const ground = (why: string) => {
+      if (grounded || m.isStyleLoaded()) return;
+      grounded = true;
+      log(`지도 스타일을 못 받음 (${why}) — 빈 바닥으로`);
+      m.setStyle(GROUND);
+    };
+    m.on("error", (e) => ground((e as { error?: Error }).error?.message ?? "오류"));
+    window.setTimeout(() => ground(`${STYLE_WAIT_S}초 무응답`), STYLE_WAIT_S * 1000);
+    return m;
   } catch (e) {
     const box = document.getElementById("map")!;
     box.textContent = `지도를 그릴 수 없습니다 (WebGL): ${(e as Error).message}`;
@@ -375,9 +391,6 @@ function musicSay(text: string, bad = false) {
 
 function openDock(open: boolean) {
   el("music-dock").classList.toggle("closed", !open);
-  // The trip panel sits under the open player; hidden, it cannot show
-  // through the blur or take a stray touch.
-  document.body.classList.toggle("dock-open", open);
 }
 el("mini").addEventListener("click", () => openDock(el("music-dock").classList.contains("closed")));
 
@@ -599,7 +612,7 @@ document.addEventListener("pointerdown", () => void voice.unlock().then(() => { 
 
 map.on("load", async () => {
   log(`UA ${navigator.userAgent}`);
-  log(`secure=${window.isSecureContext} style=${typeof style === "string" ? style : "demo"}`);
+  log(`secure=${window.isSecureContext} style=${style}`);
   el("wake").textContent = await keepAwake();
   gps.start();
   try {
