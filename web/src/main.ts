@@ -3,12 +3,12 @@ import { api } from "./api";
 import { Gps, type Fix } from "./gps";
 import { chime, keepAwake } from "./probes";
 import { Replay } from "./replay";
+import { Simulator } from "./simulate";
 import { RouteLayer } from "./route-layer";
 import { Tracker, type Shown } from "./tracker";
 import { metres } from "./geo";
 import { SpotifySource } from "./music/spotify";
-import { StreamSource } from "./music/stream";
-import { lazy, type MusicSource } from "./music/source";
+import { lazy, type MusicSource, type NowPlaying } from "./music/source";
 import { Voice } from "./voice";
 import { RouteWatch, phraseFor, type Feature } from "./warnings";
 import type { Health, LonLat, Place, Provider, Route } from "./types";
@@ -69,7 +69,6 @@ voice.onError = (m) => {
   el("voice").textContent = "실패";
   log(`음성 실패 ${m}`);
 };
-const stream = new StreamSource(voice);
 gps.onError = (m) => log(`GPS 오류 ${m}`);
 gps.on(onFix);
 
@@ -192,6 +191,7 @@ async function go(place: Place, quietly = false) {
 
 function drive(chosen: Route, fitView: boolean) {
   route = chosen;
+  sim?.follow(chosen);
   routeLayer.show(route);
   tracker.setRoute(route);
   watch = new RouteWatch(route);
@@ -355,18 +355,31 @@ async function watchRoad(fix: Fix) {
 }
 
 // ---- music -----------------------------------------------------------------
+// The dock is a mini bar (art, title, ⏯ ⏭) that opens into the full
+// player — tabs for the connected services, big art, progress, transport,
+// playlists. Choosing something to play closes it again: the map is what
+// the driver should be looking at.
 
 const sources: MusicSource[] = [
-  stream,
   new SpotifySource(),
   lazy("tidal", "TIDAL", async () => new (await import("./music/tidal")).TidalSource()),
 ];
 let music: MusicSource | null = null;
+let now: NowPlaying = { playing: false };
+let nowAt = 0;
 
 function musicSay(text: string, bad = false) {
   el("music-msg").textContent = text;
   el("music-msg").style.color = bad ? "#ff4d4f" : "";
 }
+
+function openDock(open: boolean) {
+  el("music-dock").classList.toggle("closed", !open);
+  // The trip panel sits under the open player; hidden, it cannot show
+  // through the blur or take a stray touch.
+  document.body.classList.toggle("dock-open", open);
+}
+el("mini").addEventListener("click", () => openDock(el("music-dock").classList.contains("closed")));
 
 async function drawSources() {
   if (demo) return;
@@ -374,40 +387,38 @@ async function drawSources() {
   row.replaceChildren();
   let state: Record<string, { connected: boolean }> = {};
   try { state = await (await fetch("/api/music/state")).json(); } catch { /* server away */ }
-  for (const s of sources) {
-    if (s.id !== "stream" && !state[s.id]?.connected) continue;
+  const connected = sources.filter((s) => state[s.id]?.connected);
+  for (const s of connected) {
     const b = document.createElement("button");
     b.textContent = s.label;
     b.classList.toggle("on", s === music);
     b.addEventListener("click", () => void pickSource(s));
     row.append(b);
   }
+  if (connected.length === 0) {
+    el("mini-artist").textContent = "설정 페이지에서 계정을 연결하세요";
+    musicSay("연결된 음악 계정이 없습니다. /admin 에서 Spotify 나 TIDAL 을 연결하면 여기에 나타납니다.");
+  }
 }
 
 async function pickSource(s: MusicSource) {
-  if (music && music !== s) {
+  if (music === s) return;
+  if (music) {
     music.disconnect();
     voice.duckers.delete(duckBySource);
   }
   music = s;
-  el("music-form").hidden = s.id !== "stream";
-  el("music-controls").hidden = true;
+  showNow({ playing: false });
+  el("player").hidden = true;
   el("music-lists").hidden = true;
-  el("now").hidden = true;
-  musicSay(s.id === "stream" ? "" : `${s.label} 연결 중…`);
+  musicSay(`${s.label} 연결 중…`);
   await drawSources();
   try {
     await s.connect();
-    s.onState((now) => {
-      el("now").hidden = !now.title;
-      el("now-title").textContent = now.title ?? "";
-      el("now-artist").textContent = now.artist ?? "";
-      const art = el<HTMLImageElement>("now-art");
-      if (now.art) art.src = now.art; else art.removeAttribute("src");
-      el("music-toggle").textContent = now.playing ? "⏸" : "▶";
-    });
+    s.onState(showNow);
     voice.duckers.add(duckBySource);
-    el("music-controls").hidden = false;
+    el("player").hidden = false;
+    el("mini-artist").textContent = s.label;
     musicSay("");
     await showLists();
   } catch (e) {
@@ -420,6 +431,37 @@ function duckBySource(level: number) {
   music?.setVolume(level);
 }
 
+function showNow(state: NowPlaying) {
+  now = state;
+  nowAt = performance.now();
+  const has = !!state.title;
+  el("mini-title").textContent = state.title ?? "음악";
+  el("mini-artist").textContent = state.artist ?? music?.label ?? "Spotify · TIDAL";
+  el("now-title").textContent = state.title ?? "";
+  el("now-artist").textContent = state.artist ?? "";
+  for (const id of ["mini-art", "now-art"]) {
+    el(id).style.backgroundImage = state.art ? `url("${state.art}")` : "";
+  }
+  const glyph = state.playing ? "⏸" : "▶";
+  el("mini-toggle").textContent = glyph;
+  el("music-toggle").textContent = glyph;
+  el("mini-toggle").hidden = !has;
+  el("mini-next").hidden = !has;
+  drawProgress();
+}
+
+/** The bar moves between state events while the track plays. */
+function drawProgress() {
+  if (now.durationS == null || now.positionS == null) {
+    el("progress-bar").style.width = "0";
+    return;
+  }
+  const elapsed = now.playing ? (performance.now() - nowAt) / 1000 : 0;
+  const at = Math.min(now.durationS, now.positionS + elapsed);
+  el("progress-bar").style.width = `${(at / now.durationS) * 100}%`;
+}
+setInterval(drawProgress, 1000);
+
 async function showLists() {
   if (!music) return;
   const ul = el<HTMLUListElement>("music-lists");
@@ -429,8 +471,12 @@ async function showLists() {
     for (const p of lists) {
       const li = item(p.name, p.count != null ? `${p.count}곡` : "");
       li.addEventListener("click", async () => {
-        ul.hidden = true;
-        try { await music!.play(p.uri); } catch (e) { musicSay((e as Error).message, true); }
+        try {
+          await music!.play(p.uri);
+          openDock(false);
+        } catch (e) {
+          musicSay((e as Error).message, true);
+        }
       });
       ul.append(li);
     }
@@ -440,25 +486,43 @@ async function showLists() {
   }
 }
 
-el("music-lists-toggle").addEventListener("click", () => {
-  const ul = el("music-lists");
-  if (ul.hidden) void showLists(); else ul.hidden = true;
-});
-el("music-toggle").addEventListener("click", () => void music?.toggle().catch((e) => musicSay(e.message, true)));
-el("music-next").addEventListener("click", () => void music?.next().catch((e) => musicSay(e.message, true)));
-el("music-prev").addEventListener("click", () => void music?.previous().catch((e) => musicSay(e.message, true)));
-el<HTMLFormElement>("music-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const url = el<HTMLInputElement>("music-url").value.trim();
-  if (!url) return;
-  try {
-    await stream.play(url);
-    el("music-controls").hidden = false;
-  } catch (err) {
-    musicSay(`재생 실패: ${(err as Error).message}`, true);
-  }
-});
+const onMusicError = (e: Error) => musicSay(e.message, true);
+el("music-toggle").addEventListener("click", () => void music?.toggle().catch(onMusicError));
+el("music-next").addEventListener("click", () => void music?.next().catch(onMusicError));
+el("music-prev").addEventListener("click", () => void music?.previous().catch(onMusicError));
+el("mini-toggle").addEventListener("click", (e) => { e.stopPropagation(); void music?.toggle().catch(onMusicError); });
+el("mini-next").addEventListener("click", (e) => { e.stopPropagation(); void music?.next().catch(onMusicError); });
 void drawSources();
+
+// ---- a pretend drive -------------------------------------------------------
+
+let sim: Simulator | null = null;
+
+function simSpeed(): number {
+  return Number(el<HTMLInputElement>("sim-speed").value) / 3.6;
+}
+el<HTMLInputElement>("sim-speed").addEventListener("input", () => {
+  el("sim-speed-label").textContent = el<HTMLInputElement>("sim-speed").value;
+  if (sim) sim.speedMps = simSpeed();
+});
+function startSim() {
+  if (!route) { log("모의 주행: 먼저 경로가 있어야 합니다"); return; }
+  sim?.stop();
+  sim = new Simulator(gps, route);
+  sim.speedMps = simSpeed();
+  sim.onEnd = () => { el("sim-toggle").classList.remove("on"); log("모의 주행 끝"); };
+  sim.start();
+  el("sim-toggle").classList.add("on");
+  log(`모의 주행 시작 ${Math.round(sim.speedMps * 3.6)} km/h`);
+}
+function stopSim() {
+  sim?.stop();
+  el("sim-toggle").classList.remove("on");
+  gps.start();
+}
+el("sim-toggle").addEventListener("click", () => (sim?.running ? stopSim() : startSim()));
+el("sim-tunnel").addEventListener("click", () => { sim?.tunnel(10); log("터널: 10초간 GPS 없음"); });
+el("sim-stray").addEventListener("click", () => { sim?.stray(8); log("이탈: 60 m 옆으로 8초"); });
 
 // ---- probes and replay -----------------------------------------------------
 
@@ -513,20 +577,20 @@ if (demo) map.once("load", () => {
   el("trip-name").textContent = goal.name;
   drive(offers[0], false);
   drawProviders();
-  gps.feed({ t: Date.now(), lon: path[12][0], lat: path[12][1], accM: 6, speed: 17.2, heading: 62, course: 62 });
-  el("music-controls").hidden = false;
-  el("now").hidden = false;
-  el("now-title").textContent = "Blue in Green";
-  el("now-artist").textContent = "Miles Davis";
-  el("music-toggle").textContent = "⏸";
+  startSim();
   const row = el("music-sources");
-  for (const [name, on] of [["스트림 URL", false], ["Spotify", true], ["TIDAL", false]] as const) {
+  for (const [name, on] of [["Spotify", true], ["TIDAL", false]] as const) {
     const b = document.createElement("button");
     b.textContent = name;
     b.classList.toggle("on", on);
     row.append(b);
   }
-  el("music-form").hidden = true;
+  el("player").hidden = false;
+  showNow({ playing: true, title: "Blue in Green", artist: "Miles Davis", positionS: 97, durationS: 337 });
+  const lists = el("music-lists");
+  for (const [name, n] of [["Drive", 48], ["Jazz at Night", 120], ["Daily Mix 1", 50]] as const) lists.append(item(name, `${n}곡`));
+  lists.hidden = false;
+  if (new URLSearchParams(location.search).get("dock") === "open") openDock(true);
   setFollow(true);
 });
 

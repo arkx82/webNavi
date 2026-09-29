@@ -25,25 +25,6 @@
         <button id="clear">경로 지우기</button>
       </section>
 
-      <section id="music">
-        <div class="row" id="music-sources"></div>
-        <form id="music-form" class="row" autocomplete="off" hidden>
-          <input id="music-url" type="url" placeholder="스트림 URL (mp3/aac)" />
-          <button type="submit" class="narrow">재생</button>
-        </form>
-        <ul id="music-lists" hidden></ul>
-        <div id="now" hidden>
-          <img id="now-art" alt="" />
-          <div id="now-text"><div id="now-title"></div><div id="now-artist"></div></div>
-        </div>
-        <div class="row" id="music-controls" hidden>
-          <button id="music-prev">⏮</button>
-          <button id="music-toggle">⏯</button>
-          <button id="music-next">⏭</button>
-          <button id="music-lists-toggle" class="narrow">목록</button>
-        </div>
-        <div class="hint" id="music-msg"></div>
-      </section>
 
       <details>
         <summary>진단</summary>
@@ -63,10 +44,52 @@
           <button id="save">로그 저장</button>
           <label class="button">재생<input id="replay" type="file" accept=".csv" hidden /></label>
         </div>
+        <div class="sim">
+          <div class="row">
+            <button id="sim-toggle">모의 주행</button>
+            <button id="sim-tunnel">터널 10초</button>
+            <button id="sim-stray">이탈</button>
+          </div>
+          <label class="slider">속도 <span id="sim-speed-label">50</span> km/h
+            <input id="sim-speed" type="range" min="10" max="120" step="5" value="50" />
+          </label>
+        </div>
         <pre id="log"></pre>
       </details>
 
       <button id="follow" class="on">따라가기</button>
+    </aside>
+    <!-- The player, the way music apps do it: a mini bar that opens into the
+         full player. Closed while driving; opened to choose, closed on play. -->
+    <aside id="music-dock" class="closed">
+      <div id="mini" role="button" tabindex="0">
+        <div class="art small" id="mini-art"></div>
+        <div class="titles">
+          <div class="title" id="mini-title">음악</div>
+          <div class="artist" id="mini-artist">Spotify · TIDAL</div>
+        </div>
+        <button id="mini-toggle" class="icon" type="button" hidden>▶</button>
+        <button id="mini-next" class="icon" type="button" hidden>⏭</button>
+        <span id="mini-chevron">▴</span>
+      </div>
+      <div id="full">
+        <div class="tabs" id="music-sources"></div>
+        <div id="player" hidden>
+          <div class="art big" id="now-art"></div>
+          <div class="titles center">
+            <div class="title" id="now-title"></div>
+            <div class="artist" id="now-artist"></div>
+          </div>
+          <div class="progress"><div id="progress-bar"></div></div>
+          <div class="transport">
+            <button id="music-prev" class="icon" type="button">⏮</button>
+            <button id="music-toggle" class="icon main" type="button">▶</button>
+            <button id="music-next" class="icon" type="button">⏭</button>
+          </div>
+        </div>
+        <div class="hint" id="music-msg"></div>
+        <ul id="music-lists" hidden></ul>
+      </div>
     </aside>
     <script type="module" src="./src/main.ts"></script>
   </body>

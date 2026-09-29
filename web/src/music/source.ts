@@ -19,6 +19,9 @@ export interface NowPlaying {
   title?: string;
   artist?: string;
   art?: string;
+  /** Seconds into the track, and its length, when the source says. */
+  positionS?: number;
+  durationS?: number;
 }
 
 export interface MusicSource {

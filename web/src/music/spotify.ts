@@ -32,6 +32,8 @@ interface SpotifyPlayer {
 
 interface SpotifyState {
   paused: boolean;
+  position: number;
+  duration: number;
   track_window: { current_track: { name: string; artists: { name: string }[]; album: { images: { url: string }[] } } };
 }
 
@@ -64,7 +66,10 @@ export class SpotifySource implements MusicSource {
     player.addListener("player_state_changed", ((s: SpotifyState | null) => {
       if (!s) return;
       const t = s.track_window.current_track;
-      this.emit({ playing: !s.paused, title: t.name, artist: t.artists.map((a) => a.name).join(", "), art: t.album.images[0]?.url });
+      this.emit({
+        playing: !s.paused, title: t.name, artist: t.artists.map((a) => a.name).join(", "), art: t.album.images[0]?.url,
+        positionS: s.position / 1000, durationS: s.duration / 1000,
+      });
     }) as never);
     if (!(await player.connect())) throw new Error("Spotify SDK did not connect");
     this.player = player;

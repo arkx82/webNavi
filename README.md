@@ -134,11 +134,13 @@ React(화면 하나에 프레임워크는 무거움).
 | **TIDAL** | 만듦, 계정으로 미확인 | 공식 Player SDK(`@tidal-music/player`)가 제3자에게 허용된 유일한 재생 경로. 구독 필요, Widevine 동일 |
 | **유튜브 뮤직** | 안 함 | 재생 API 가 없고 유일한 경로가 영상 iframe 인데, **테슬라는 주행 중 브라우저 영상 재생을 막는다**. 정차 중에만 되는 음악은 내비에 의미가 없다. 브랜드 계정 여부와 무관 |
 | **멜론** | 안 함 | 제3자 재생 API 자체가 없음 (검색·차트 메타데이터만). 스크래핑은 약관 위반 |
-| 스트림 URL | 됨 | 인터넷 라디오·자체 호스팅 mp3/aac. `/api/stream` 으로 CORS 를 붙여 Web Audio 그래프로 |
+| 스트림 URL | 화면에서 뺌 | 인터넷 라디오는 되지만 볼품이 없어 페이지에서 내렸다. 서버의 `/api/stream` CORS 중계는 남아 있다 |
 
 구조 (`web/src/music/`): `MusicSource` 하나의 얼굴(연결·목록·재생·⏮⏯⏭·`setVolume`).
-스트림은 그래프의 GainNode 로, Spotify/TIDAL 은 DRM 이라 그래프 밖이므로 SDK 의
-볼륨으로 덕킹한다(`Voice.duckers`). 계정 연결은 `/admin` 에서 한 번:
+Spotify/TIDAL 은 DRM 이라 Web Audio 그래프 밖이므로 SDK 의 볼륨으로 덕킹한다
+(`Voice.duckers`). 화면은 음악 앱들처럼 **아래 미니바**(아트·곡명·⏯⏭)와, 탭하면
+왼쪽 열 전체를 덮는 **풀 플레이어**(서비스 탭, 큰 아트, 진행 바, ⏮⏯⏭, 재생목록).
+목록에서 고르면 도로 미니바로 접힌다. 계정 연결은 `/admin` 에서 한 번:
 
 1. developer.spotify.com / developer.tidal.com 에서 앱을 만든다. Redirect URI 는
    `https://<도메인>/api/music/spotify/callback` (TIDAL 도 같은 꼴). Spotify 는
@@ -169,3 +171,5 @@ React(화면 하나에 프레임워크는 무거움).
 - [ ] 차 페이지 접근 키 (위 "열린 문제")
 - [ ] Spotify / TIDAL 을 실제 계정으로, 그리고 차에서 (Widevine)
 - [x] CSV 로그 재생 모드(진단 → 재생, `?speedup=4`)
+- [x] 모의 주행(진단 → 모의 주행): 경로를 따라 1 Hz 가짜 GPS, 속도 슬라이더, 터널 10초
+      (추측 항법 확인), 이탈(60 m 옆 → 재탐색 확인). `?demo` 는 가짜 경로로 자동 시작
