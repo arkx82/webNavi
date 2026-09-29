@@ -22,14 +22,23 @@ const NAMES: Record<Provider, string> = { tmap: "티맵", kakao: "카카오", na
 const RECHECK_MS = 6 * 60_000;
 const BETTER_BY_S = 3 * 60;
 
-const map = new maplibregl.Map({
-  container: "map",
-  style,
-  center: HOME,
-  zoom: 15,
-  pitch: 45,
-  attributionControl: false,
-});
+const map = openMap();
+
+/**
+ * The map, or a plain word about why not: without WebGL MapLibre throws
+ * while being built, and a page that dies on its first line tells the
+ * driver nothing.
+ */
+function openMap(): maplibregl.Map {
+  try {
+    return new maplibregl.Map({ container: "map", style, center: HOME, zoom: 15, pitch: 45, attributionControl: false });
+  } catch (e) {
+    const box = document.getElementById("map")!;
+    box.textContent = `지도를 그릴 수 없습니다 (WebGL): ${(e as Error).message}`;
+    box.style.cssText = "display:flex;align-items:center;justify-content:center;padding:24px 24px 24px 360px;color:#9a9a9a;font-size:18px;text-align:center";
+    throw e;
+  }
+}
 
 const el = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const lines: string[] = [];

@@ -57,3 +57,6 @@ details > * + * { margin-top: 8px; }
 #now-artist { font-size: 13px; color: var(--dim); }
 #now-text { min-width: 0; }
 .hint { font-size: 13px; color: var(--dim); }
+
+/* An author display rule must not undo the hidden attribute. */
+[hidden] { display: none !important; }
