@@ -16,6 +16,8 @@ export class Voice {
   private speaking = false;
   /** How far the music drops while the voice speaks. */
   duckTo = 0.3;
+  /** Players outside the graph (DRM SDKs) that take the same level. */
+  readonly duckers = new Set<(level: number) => void>();
   onError: (message: string) => void = () => {};
 
   constructor() {
@@ -84,5 +86,6 @@ export class Voice {
     const now = this.context.currentTime;
     this.music.gain.cancelScheduledValues(now);
     this.music.gain.setTargetAtTime(down ? this.duckTo : 1, now, down ? 0.08 : 0.4);
+    for (const d of this.duckers) d(down ? this.duckTo : 1);
   }
 }

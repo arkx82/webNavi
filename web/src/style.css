@@ -45,3 +45,15 @@ input[type="search"], input[type="url"] {
 details summary { color: var(--dim); cursor: pointer; }
 details > * + * { margin-top: 8px; }
 #log { margin: 0; max-height: 30vh; font-size: 11px; line-height: 1.35; color: var(--dim); overflow: auto; white-space: pre-wrap; }
+
+#music { display: flex; flex-direction: column; gap: 8px; }
+#music-sources button { font-size: 14px; }
+#music-lists { list-style: none; margin: 0; padding: 0; max-height: 30vh; overflow: auto; }
+#music-lists li { padding: 10px 8px; border-bottom: 1px solid #2a2a2e; font-size: 15px; }
+#now { display: flex; gap: 10px; align-items: center; }
+#now-art { width: 48px; height: 48px; border-radius: 6px; object-fit: cover; background: #2a2a2e; }
+#now-art:not([src]) { display: none; }
+#now-title { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#now-artist { font-size: 13px; color: var(--dim); }
+#now-text { min-width: 0; }
+.hint { font-size: 13px; color: var(--dim); }

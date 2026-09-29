@@ -13,6 +13,7 @@ import { Speaker, prerender } from "./tts.js";
 import { Readable } from "node:stream";
 import { Settings } from "./settings.js";
 import { registerAdmin } from "./admin.js";
+import { registerMusic } from "./music.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "..");
@@ -146,7 +147,7 @@ app.get<{ Querystring: { url: string } }>("/api/stream", async (request, reply) 
   return reply.code(upstream.status).send(Readable.fromWeb(upstream.body as import("node:stream/web").ReadableStream));
 });
 // The settings page, and one real call per service to prove a key.
-registerAdmin(app, settings, {
+const admin = registerAdmin(app, settings, {
   status: () => ({
     tmap: providers.tmap.ready, kakao: providers.kakao.ready, naver: providers.naver.ready,
     검색: search.ready, 음성: speaker.ready, 목소리: speaker.voice,
@@ -169,6 +170,7 @@ registerAdmin(app, settings, {
   },
   prerender: () => prerender(speaker),
 }, join(root, "admin", "index.html"));
+registerMusic(app, settings, admin.guard);
 
 const webDir = env.WEB_DIR ?? resolve(root, "..", "web", "dist");
 if (existsSync(webDir)) {

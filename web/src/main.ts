@@ -6,7 +6,9 @@ import { Replay } from "./replay";
 import { RouteLayer } from "./route-layer";
 import { Tracker, type Shown } from "./tracker";
 import { metres } from "./geo";
-import { Player } from "./player";
+import { SpotifySource } from "./music/spotify";
+import { StreamSource } from "./music/stream";
+import { lazy, type MusicSource } from "./music/source";
 import { Voice } from "./voice";
 import { RouteWatch, phraseFor, type Feature } from "./warnings";
 import type { Health, LonLat, Place, Provider, Route } from "./types";
@@ -53,7 +55,7 @@ voice.onError = (m) => {
   el("voice").textContent = "실패";
   log(`음성 실패 ${m}`);
 };
-const player = new Player(voice);
+const stream = new StreamSource(voice);
 gps.onError = (m) => log(`GPS 오류 ${m}`);
 gps.on(onFix);
 
@@ -340,28 +342,108 @@ async function watchRoad(fix: Fix) {
 
 // ---- music -----------------------------------------------------------------
 
+const sources: MusicSource[] = [
+  stream,
+  new SpotifySource(),
+  lazy("tidal", "TIDAL", async () => new (await import("./music/tidal")).TidalSource()),
+];
+let music: MusicSource | null = null;
+
+function musicSay(text: string, bad = false) {
+  el("music-msg").textContent = text;
+  el("music-msg").style.color = bad ? "#ff4d4f" : "";
+}
+
+async function drawSources() {
+  const row = el("music-sources");
+  row.replaceChildren();
+  let state: Record<string, { connected: boolean }> = {};
+  try { state = await (await fetch("/api/music/state")).json(); } catch { /* server away */ }
+  for (const s of sources) {
+    if (s.id !== "stream" && !state[s.id]?.connected) continue;
+    const b = document.createElement("button");
+    b.textContent = s.label;
+    b.classList.toggle("on", s === music);
+    b.addEventListener("click", () => void pickSource(s));
+    row.append(b);
+  }
+}
+
+async function pickSource(s: MusicSource) {
+  if (music && music !== s) {
+    music.disconnect();
+    voice.duckers.delete(duckBySource);
+  }
+  music = s;
+  el("music-form").hidden = s.id !== "stream";
+  el("music-controls").hidden = true;
+  el("music-lists").hidden = true;
+  el("now").hidden = true;
+  musicSay(s.id === "stream" ? "" : `${s.label} 연결 중…`);
+  await drawSources();
+  try {
+    await s.connect();
+    s.onState((now) => {
+      el("now").hidden = !now.title;
+      el("now-title").textContent = now.title ?? "";
+      el("now-artist").textContent = now.artist ?? "";
+      const art = el<HTMLImageElement>("now-art");
+      if (now.art) art.src = now.art; else art.removeAttribute("src");
+      el("music-toggle").textContent = now.playing ? "⏸" : "▶";
+    });
+    voice.duckers.add(duckBySource);
+    el("music-controls").hidden = false;
+    musicSay("");
+    await showLists();
+  } catch (e) {
+    musicSay(`${s.label}: ${(e as Error).message}`, true);
+    log(`음악 ${s.label} 실패 ${(e as Error).message}`);
+  }
+}
+
+function duckBySource(level: number) {
+  music?.setVolume(level);
+}
+
+async function showLists() {
+  if (!music) return;
+  const ul = el<HTMLUListElement>("music-lists");
+  ul.replaceChildren();
+  try {
+    const lists = await music.playlists();
+    for (const p of lists) {
+      const li = item(p.name, p.count != null ? `${p.count}곡` : "");
+      li.addEventListener("click", async () => {
+        ul.hidden = true;
+        try { await music!.play(p.uri); } catch (e) { musicSay((e as Error).message, true); }
+      });
+      ul.append(li);
+    }
+    ul.hidden = lists.length === 0;
+  } catch (e) {
+    musicSay((e as Error).message, true);
+  }
+}
+
+el("music-lists-toggle").addEventListener("click", () => {
+  const ul = el("music-lists");
+  if (ul.hidden) void showLists(); else ul.hidden = true;
+});
+el("music-toggle").addEventListener("click", () => void music?.toggle().catch((e) => musicSay(e.message, true)));
+el("music-next").addEventListener("click", () => void music?.next().catch((e) => musicSay(e.message, true)));
+el("music-prev").addEventListener("click", () => void music?.previous().catch((e) => musicSay(e.message, true)));
 el<HTMLFormElement>("music-form").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const input = el<HTMLInputElement>("music-url");
-  if (player.playing) {
-    player.stop();
-    el("music-play").textContent = "재생";
-    return;
-  }
-  const url = input.value.trim();
+  const url = el<HTMLInputElement>("music-url").value.trim();
   if (!url) return;
   try {
-    await player.play(url);
-    el("music-play").textContent = "정지";
-    try { localStorage.setItem("nav-music", url); } catch { /* private window */ }
+    await stream.play(url);
+    el("music-controls").hidden = false;
   } catch (err) {
-    log(`음악 실패 ${(err as Error).message}`);
+    musicSay(`재생 실패: ${(err as Error).message}`, true);
   }
 });
-try {
-  const kept = localStorage.getItem("nav-music");
-  if (kept) el<HTMLInputElement>("music-url").value = kept;
-} catch { /* no storage */ }
+void drawSources();
 
 // ---- probes and replay -----------------------------------------------------
 

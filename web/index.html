@@ -25,10 +25,25 @@
         <button id="clear">경로 지우기</button>
       </section>
 
-      <form id="music-form" class="row" autocomplete="off">
-        <input id="music-url" type="url" placeholder="음악 스트림 URL" />
-        <button type="submit" class="narrow" id="music-play">재생</button>
-      </form>
+      <section id="music">
+        <div class="row" id="music-sources"></div>
+        <form id="music-form" class="row" autocomplete="off" hidden>
+          <input id="music-url" type="url" placeholder="스트림 URL (mp3/aac)" />
+          <button type="submit" class="narrow">재생</button>
+        </form>
+        <ul id="music-lists" hidden></ul>
+        <div id="now" hidden>
+          <img id="now-art" alt="" />
+          <div id="now-text"><div id="now-title"></div><div id="now-artist"></div></div>
+        </div>
+        <div class="row" id="music-controls" hidden>
+          <button id="music-prev">⏮</button>
+          <button id="music-toggle">⏯</button>
+          <button id="music-next">⏭</button>
+          <button id="music-lists-toggle" class="narrow">목록</button>
+        </div>
+        <div class="hint" id="music-msg"></div>
+      </section>
 
       <details>
         <summary>진단</summary>

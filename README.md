@@ -123,6 +123,36 @@ React(화면 하나에 프레임워크는 무거움).
 탭이 있어야 시작되므로 페이지의 첫 터치가 `AudioContext` 를 깨운다. **테슬라에서
 순정 오디오 재생 중 이 페이지 소리가 나는지**는 진단 → 소리 테스트로 실차 확인.
 
+## 음악
+
+차 안의 순정 오디오(스포티파이 앱 등)는 브라우저가 건드릴 수 없으므로, 음성이
+음악을 줄이려면 **음악도 이 페이지에서** 나와야 한다. 네 서비스를 놓고 확인한 것:
+
+| 서비스 | 되나 | 이유 |
+|---|---|---|
+| **Spotify** | 만듦, 실차 미확인 | Web Playback SDK 로 페이지가 Connect 기기가 됨. Premium 필요, Widevine 필요 — 테슬라 브라우저에 Widevine 이 있는지가 관건 |
+| **TIDAL** | 만듦, 계정으로 미확인 | 공식 Player SDK(`@tidal-music/player`)가 제3자에게 허용된 유일한 재생 경로. 구독 필요, Widevine 동일 |
+| **유튜브 뮤직** | 안 함 | 재생 API 가 없고 유일한 경로가 영상 iframe 인데, **테슬라는 주행 중 브라우저 영상 재생을 막는다**. 정차 중에만 되는 음악은 내비에 의미가 없다. 브랜드 계정 여부와 무관 |
+| **멜론** | 안 함 | 제3자 재생 API 자체가 없음 (검색·차트 메타데이터만). 스크래핑은 약관 위반 |
+| 스트림 URL | 됨 | 인터넷 라디오·자체 호스팅 mp3/aac. `/api/stream` 으로 CORS 를 붙여 Web Audio 그래프로 |
+
+구조 (`web/src/music/`): `MusicSource` 하나의 얼굴(연결·목록·재생·⏮⏯⏭·`setVolume`).
+스트림은 그래프의 GainNode 로, Spotify/TIDAL 은 DRM 이라 그래프 밖이므로 SDK 의
+볼륨으로 덕킹한다(`Voice.duckers`). 계정 연결은 `/admin` 에서 한 번:
+
+1. developer.spotify.com / developer.tidal.com 에서 앱을 만든다. Redirect URI 는
+   `https://<도메인>/api/music/spotify/callback` (TIDAL 도 같은 꼴). Spotify 는
+   2025-11 부터 http 리다이렉트를 받지 않는다(루프백 `127.0.0.1` 만 예외).
+2. `/admin` 에 Client ID/Secret 저장 → **연결** → 그 서비스에 로그인.
+3. 서버가 refresh token 을 `settings.enc` 에 넣고, 차의 페이지는
+   `/api/music/<서비스>/token` 으로 짧은 access token 만 받는다.
+
+**열린 문제 — 차 페이지의 인증.** `/api/music/*/token` 은 차 브라우저가
+로그인 없이 부르므로, 도메인을 아는 누구나 소유자의 Spotify 를 조종할 수 있다
+(경로·TTS 호출도 마찬가지로 소유자 비용). 다음 단계: `/admin` 에서 만든 긴 키를
+차 브라우저에 한 번 넣게 하고(`?key=` → localStorage → 헤더) 모든 `/api/*` 가
+그것을 요구하게 한다.
+
 ## 남은 것 (계획서 2~6주차)
 
 - [ ] 실차: GPS 필드(heading/speed/정확도/주기), Wake Lock, 소리 통과 여부 확인
@@ -135,5 +165,7 @@ React(화면 하나에 프레임워크는 무거움).
 - [x] 회전 안내 음성(500 m·150 m), 도착·이탈·더 빠른 길 멘트
 - [x] 웹 오디오 플레이어와 덕킹(`voice.ts` 그래프의 music GainNode를 말할 때 0.3으로;
       `player.ts` 는 `/api/stream` 을 통해 CORS 붙은 스트림만 그래프에 넣을 수 있음)
-- [ ] BYOK: 설정 화면에서 키를 넣으면 요청 헤더로 실어 서버가 그 키로 대신 호출
+- [x] BYOK → `/admin` 설정 페이지로 대신함 (키는 서버에 암호화 저장)
+- [ ] 차 페이지 접근 키 (위 "열린 문제")
+- [ ] Spotify / TIDAL 을 실제 계정으로, 그리고 차에서 (Widevine)
 - [x] CSV 로그 재생 모드(진단 → 재생, `?speedup=4`)

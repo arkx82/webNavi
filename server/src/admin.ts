@@ -21,7 +21,7 @@ export interface AdminChecks {
   status(): Record<string, unknown>;
 }
 
-export function registerAdmin(app: FastifyInstance, settings: Settings, checks: AdminChecks, pageFile: string) {
+export function registerAdmin(app: FastifyInstance, settings: Settings, checks: AdminChecks, pageFile: string): { guard: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown> } {
   const failures = new Map<string, { count: number; until: number }>();
 
   const isSecure = (request: FastifyRequest) =>
@@ -112,4 +112,11 @@ export function registerAdmin(app: FastifyInstance, settings: Settings, checks: 
 
   app.post("/admin/api/test", { preHandler: guard }, async () => checks.test());
   app.post("/admin/api/prerender", { preHandler: guard }, async () => checks.prerender());
+
+  // A plain link from the page (no custom header) must still pass: the
+  // OAuth hops are GETs that leave the site, so only the cookie is asked.
+  const loggedOnly = async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!loggedIn(request)) return reply.code(401).send({ error: "login" });
+  };
+  return { guard: loggedOnly };
 }

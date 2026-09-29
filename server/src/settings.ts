@@ -21,6 +21,13 @@ export interface Secrets {
   dashscopeApiKey?: string;
   ttsVoice?: string;
   adminHash?: string;
+  /** Streaming accounts: the app's client, and the owner's refresh token once connected. */
+  spotifyClientId?: string;
+  spotifyClientSecret?: string;
+  spotifyRefresh?: string;
+  tidalClientId?: string;
+  tidalClientSecret?: string;
+  tidalRefresh?: string;
 }
 
 export type SecretName = keyof Secrets;
@@ -33,10 +40,19 @@ const ENV: Record<SecretName, string | undefined> = {
   dashscopeApiKey: "DASHSCOPE_API_KEY",
   ttsVoice: "TTS_VOICE",
   adminHash: undefined,
+  spotifyClientId: "SPOTIFY_CLIENT_ID",
+  spotifyClientSecret: "SPOTIFY_CLIENT_SECRET",
+  spotifyRefresh: undefined,
+  tidalClientId: "TIDAL_CLIENT_ID",
+  tidalClientSecret: "TIDAL_CLIENT_SECRET",
+  tidalRefresh: undefined,
 };
 
 /** The fields the page edits, in the order it shows them. */
-export const EDITABLE: SecretName[] = ["tmapAppKey", "kakaoRestKey", "naverClientId", "naverClientSecret", "dashscopeApiKey", "ttsVoice"];
+export const EDITABLE: SecretName[] = [
+  "tmapAppKey", "kakaoRestKey", "naverClientId", "naverClientSecret", "dashscopeApiKey", "ttsVoice",
+  "spotifyClientId", "spotifyClientSecret", "tidalClientId", "tidalClientSecret",
+];
 
 export class Settings {
   private readonly master: Buffer;

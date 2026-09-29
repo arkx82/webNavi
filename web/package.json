@@ -9,12 +9,14 @@
     "test": "node --test --import tsx \"src/**/*.test.ts\""
   },
   "dependencies": {
+    "@tidal-music/auth": "^1.6.2",
+    "@tidal-music/player": "^0.20.1",
     "maplibre-gl": "^5.0.0"
   },
   "devDependencies": {
-    "typescript": "^5.7.0",
-    "vite": "^6.0.0",
+    "@types/node": "^24.0.0",
     "tsx": "^4.19.0",
-    "@types/node": "^24.0.0"
+    "typescript": "^5.7.0",
+    "vite": "^6.0.0"
   }
 }
