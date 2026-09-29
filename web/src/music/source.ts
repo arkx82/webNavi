@@ -14,6 +14,8 @@ export interface Playlist {
   count?: number;
   /** A cover, where the service has one. */
   art?: string;
+  /** Which shelf it sits on: 내 재생목록, 저장한 재생목록, 추천 믹스. */
+  group?: string;
 }
 
 export interface NowPlaying {

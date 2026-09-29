@@ -15,7 +15,12 @@ import { isoSeconds } from "./tidal-time";
  * account at the time of writing; see the README.
  */
 const CLIENT_UNIQUE_KEY = "tesla-nav";
-const SCOPES = ["user.read", "collection.read", "playlists.read", "playback"];
+const SCOPES = ["user.read", "collection.read", "playlists.read", "playback", "recommendations.read"];
+/** A playlist's tracks are fetched twenty a page; a queue this long is plenty for a drive. */
+const QUEUE_PAGES = 10;
+
+type Resource = { id: string; type: string; attributes: Record<string, unknown>; relationships?: Record<string, { data?: { id: string }[] }> };
+type Page = { data: { id: string; type: string }[] | { id: string; type: string }; included?: Resource[]; links?: { next?: string } };
 const API = "https://openapi.tidal.com/v2";
 
 interface Track {
@@ -36,6 +41,8 @@ export class TidalSource implements MusicSource {
   private refresh: number | null = null;
   private clientId = "";
   private userId = "";
+  /** The account's own country: the catalogue answers for it, not for where the car is. */
+  private country = "KR";
   private playing = false;
 
   async connect(): Promise<void> {
@@ -49,8 +56,9 @@ export class TidalSource implements MusicSource {
       this.playing = e.detail.state === "PLAYING";
       this.emitNow();
     }) as EventListener);
-    const me = (await this.api("/users/me")) as { data: { id: string } };
+    const me = (await this.api("/users/me")) as { data: { id: string; attributes?: { country?: string } } };
     this.userId = me.data.id;
+    if (me.data.attributes?.country) this.country = me.data.attributes.country;
   }
 
   private async fetchToken() {
@@ -81,30 +89,60 @@ export class TidalSource implements MusicSource {
     }, Math.max(30, expiresIn - 60) * 1000);
   }
 
+  /**
+   * The account's own playlists, the ones it has saved (TIDAL's mixes and
+   * editors' lists among them), and its recommended mixes where the login
+   * allowed recommendations.read — each on its shelf. TIDAL's v2 API gives
+   * these at /playlists?filter[owners.id]=me and /userCollectionPlaylists/me
+   * (the older /userCollections/… answers 404 now).
+   */
   async playlists(): Promise<Playlist[]> {
-    const j = (await this.api(`/userCollections/${this.userId}/relationships/playlists?include=playlists`)) as {
-      included?: { id: string; type: string; attributes: { name: string; numberOfItems?: number } }[];
-    };
-    return (j.included ?? [])
-      .filter((p) => p.type === "playlists")
-      .map((p) => ({ id: p.id, name: p.attributes.name, uri: p.id, count: p.attributes.numberOfItems }));
+    const shelves: [string, string][] = [
+      ["내 재생목록", "/playlists?filter[owners.id]=me&include=coverArt"],
+      ["저장한 재생목록", "/userCollectionPlaylists/me/relationships/items?include=items,items.coverArt"],
+      ["추천 믹스", `/userRecommendations/${this.userId}/relationships/myMixes?include=myMixes,myMixes.coverArt`],
+    ];
+    const out: Playlist[] = [];
+    const seen = new Set<string>();
+    for (const [group, path] of shelves) {
+      let pages: Page[];
+      try { pages = await this.pages(path, 3); } catch { continue; } // a shelf this login cannot see is left out
+      const inc = new Map(pages.flatMap((p) => p.included ?? []).map((i) => [`${i.type}:${i.id}`, i]));
+      for (const page of pages) {
+        for (const d of Array.isArray(page.data) ? page.data : [page.data]) {
+          const p = d.type === "playlists" ? (inc.get(`playlists:${d.id}`) ?? (d as Resource)) : null;
+          if (!p || seen.has(d.id)) continue;
+          seen.add(d.id);
+          const a = p.attributes ?? {};
+          out.push({ id: d.id, name: String(a.name ?? a.title ?? d.id), uri: d.id, count: typeof a.numberOfItems === "number" ? a.numberOfItems : undefined, art: artOf(inc, p, "coverArt", 160), group });
+        }
+      }
+    }
+    return out;
+  }
+
+  /** [path] and the pages after it, following TIDAL's cursor links, at most [max] pages. */
+  private async pages(path: string, max: number): Promise<Page[]> {
+    const out: Page[] = [];
+    let next: string | undefined = path;
+    while (next && out.length < max) {
+      const page = (await this.api(next)) as Page;
+      out.push(page);
+      next = page.links?.next;
+    }
+    return out;
   }
 
   async play(playlistId: string): Promise<void> {
-    const j = (await this.api(`/playlists/${playlistId}/relationships/items?include=items,items.artists,items.albums,items.albums.coverArt`)) as {
-      data: { id: string; type: string }[];
-      included?: { id: string; type: string; attributes: Record<string, unknown>; relationships?: Record<string, { data: { id: string }[] }> }[];
-    };
-    const inc = new Map((j.included ?? []).map((i) => [`${i.type}:${i.id}`, i]));
-    // A track's cover: its album's coverArt artwork, the smallest file of 300 px or more.
+    const pages = await this.pages(`/playlists/${playlistId}/relationships/items?include=items,items.artists,items.albums,items.albums.coverArt`, QUEUE_PAGES);
+    const inc = new Map(pages.flatMap((p) => p.included ?? []).map((i) => [`${i.type}:${i.id}`, i]));
     const coverOf = (albumId?: string): string | undefined => {
-      const artId = albumId ? inc.get(`albums:${albumId}`)?.relationships?.coverArt?.data?.[0]?.id : undefined;
-      const files = (artId ? inc.get(`artworks:${artId}`)?.attributes.files : undefined) as { href: string; meta?: { width?: number } }[] | undefined;
-      if (!files?.length) return undefined;
-      const sorted = [...files].sort((a, b) => (a.meta?.width ?? 0) - (b.meta?.width ?? 0));
-      return (sorted.find((f) => (f.meta?.width ?? 0) >= 300) ?? sorted[sorted.length - 1]).href;
+      const album = albumId ? inc.get(`albums:${albumId}`) : undefined;
+      return album ? artOf(inc, album, "coverArt", 300) : undefined;
     };
-    this.queue = j.data.filter((d) => d.type === "tracks").map((d) => {
+    const items = pages.flatMap((p) => (Array.isArray(p.data) ? p.data : [p.data]));
+    if (items.length === 0) throw new Error("이 재생목록에서 재생할 곡을 찾지 못했습니다");
+    this.queue = items.filter((d) => d.type === "tracks").map((d) => {
       const t = inc.get(`tracks:${d.id}`);
       const artistIds = t?.relationships?.artists?.data?.map((a) => a.id) ?? [];
       return {
@@ -164,10 +202,19 @@ export class TidalSource implements MusicSource {
 
   private async api(path: string): Promise<unknown> {
     const { token } = await auth.credentialsProvider.getCredentials();
-    const url = new URL(`${API}${path}`);
-    url.searchParams.set("countryCode", "KR");
+    const url = new URL(path.startsWith("/v2/") ? `https://openapi.tidal.com${path}` : `${API}${path}`);
+    url.searchParams.set("countryCode", this.country);
     const a = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.api+json" } });
     if (!a.ok) throw new Error(`TIDAL ${a.status} ${path.split("?")[0]}`);
     return a.json();
   }
+}
+
+/** A resource's artwork (its [rel] relationship) as the smallest file at least [px] wide. */
+function artOf(inc: Map<string, Resource>, r: Resource, rel: string, px: number): string | undefined {
+  const artId = r.relationships?.[rel]?.data?.[0]?.id;
+  const files = (artId ? inc.get(`artworks:${artId}`)?.attributes.files : undefined) as { href: string; meta?: { width?: number } }[] | undefined;
+  if (!files?.length) return undefined;
+  const sorted = [...files].sort((a, b) => (a.meta?.width ?? 0) - (b.meta?.width ?? 0));
+  return (sorted.find((f) => (f.meta?.width ?? 0) >= px) ?? sorted[sorted.length - 1]).href;
 }

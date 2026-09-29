@@ -46,7 +46,8 @@ const SERVICES: Service[] = [
     name: "tidal",
     authorizeUrl: "https://login.tidal.com/authorize",
     tokenUrl: "https://auth.tidal.com/v1/oauth2/token",
-    scope: "user.read collection.read playlists.read playback",
+    // recommendations.read for the 추천 믹스 shelf; a login made before it was asked for needs connecting again.
+    scope: "user.read collection.read playlists.read playback recommendations.read",
     idField: "tidalClientId", secretField: "tidalClientSecret", refreshField: "tidalRefresh",
     pkce: true,
   },

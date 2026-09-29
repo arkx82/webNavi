@@ -1304,7 +1304,16 @@ async function showLists() {
   ul.replaceChildren();
   try {
     const lists = await music.playlists();
+    let shelf: string | undefined;
     for (const p of lists) {
+      if (p.group && p.group !== shelf) {
+        shelf = p.group;
+        const h = document.createElement("li");
+        h.className = "shelf";
+        h.textContent = p.group;
+        h.dataset.name = "";
+        ul.append(h);
+      }
       const li = listRow(p.name, p.count, p.art);
       li.addEventListener("click", async () => {
         try {
@@ -1318,6 +1327,7 @@ async function showLists() {
     }
     ul.hidden = lists.length === 0;
     el("list-filter").hidden = lists.length < 6;
+    if (lists.length === 0) musicSay(`${music.label}: 재생목록이 없습니다`);
   } catch (e) {
     musicSay((e as Error).message, true);
   }
