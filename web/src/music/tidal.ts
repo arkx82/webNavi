@@ -16,7 +16,7 @@ import { isoSeconds } from "./tidal-time";
  * account at the time of writing; see the README.
  */
 const CLIENT_UNIQUE_KEY = "webnavi";
-const SCOPES = ["user.read", "collection.read", "playlists.read", "playback", "recommendations.read", "search.read", "r_usr"];
+const SCOPES = ["user.read", "collection.read", "playlists.read", "playback", "recommendations.read"];
 /** A playlist's tracks come twenty a page; ten pages is plenty for a drive. */
 const QUEUE_PAGES = 10;
 /** What a list of tracks asks to have included, under its relationship [rel]. */

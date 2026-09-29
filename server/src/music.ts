@@ -46,9 +46,11 @@ const SERVICES: Service[] = [
     name: "tidal",
     authorizeUrl: "https://login.tidal.com/authorize",
     tokenUrl: "https://auth.tidal.com/v1/oauth2/token",
-    // recommendations.read for the 추천 shelf, search.read for finding songs, r_usr as TIDAL's own
-    // player asks; a login made before these were asked for needs connecting again.
-    scope: "user.read collection.read playlists.read playback recommendations.read search.read r_usr",
+    // recommendations.read for the 추천 shelf; a login made before it was asked for needs connecting
+    // again. Finding songs needs no scope (search.read is only for personalised results). Only scopes
+    // the app has ticked on developer.tidal.com, and never an INTERNAL one (r_usr, w_usr): either
+    // makes TIDAL's login page answer "Something went wrong".
+    scope: "user.read collection.read playlists.read playback recommendations.read",
     idField: "tidalClientId", secretField: "tidalClientSecret", refreshField: "tidalRefresh",
     pkce: true,
   },
