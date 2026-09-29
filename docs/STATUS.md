@@ -1,0 +1,87 @@
+# 진행 상황 (2026-09-29 기준)
+
+계획서 v1.1(테슬라 브라우저용 웹 내비, NUC 서버)과 비교한 현재 상태.
+설계 설명과 사용법은 [README](../README.md)에 있고, 이 문서는 **어디까지 됐고 무엇이 남았는지**만 적는다.
+
+## 계획서 항목별
+
+| 계획서 | 상태 | 비고 |
+|---|---|---|
+| 3.1 맵매칭 (수선의 발, 60 fps 보간) | 완료 | Turf 대신 자체 `web/src/geo.ts`. 창 탐색이라 되돌아오는 경로에서도 먼 쪽에 붙지 않음. 테스트 7개 |
+| 3.1 경로 이탈 35 m · 3 s → 재탐색 | 완료 | 재탐색하면 같은 제공자를 먼저 고름 |
+| 3.1 추측 항법 (유실 2 s 또는 정확도 50 m, 경로 따라 전진, 1.5 s 복귀) | 완료 | 모의 주행의 "터널 10초"로 확인 |
+| 3.2 TMAP · 카카오 · 네이버 연동, 혼잡도 색 | 코드 완료 | **실제 키로 호출한 적 없음.** 요청 형식은 각 사 문서를 따름. 키 없이 쓰는 OSRM(OSM 도로, 교통 정보 없음) 추가 |
+| 3.2 주기적 재탐색 (5–8분, 3분 이상 빠르면 전환) | 완료 | 6분마다 확인, 음성으로 알린 뒤 자동 전환 |
+| 3.3 공공데이터 수집 · R-Tree | 완료 | `server/data/`에 CSV를 넣으면 색인. **실제 CSV는 아직 안 넣음** |
+| 3.3 카메라 방향각 45° 필터 | 방식 변경 | 공공데이터에 카메라 bearing이 없고 "상행/하행" 문자열뿐 → 경로에 투영해서 경로 위·앞쪽에 있는 것만 경고 |
+| 3.3 급커브 자동 판별 | 완료 | 40 m 안에서 35° 이상 꺾이는 곳, 회전 안내 지점은 뺌 |
+| 3.4 Qwen-TTS 고정 · 동적 멘트 | 완료 | 문장별 WAV 캐시, 고정 멘트 약 90개 미리 렌더링. **키가 없어 실제로 들어 보지 못함** |
+| 3.4 오디오 덕킹 | 완료 | Spotify·TIDAL은 DRM이라 Web Audio 그래프 밖에 있으므로 각 SDK의 볼륨으로 줄임 |
+| 3.4 웹 음악 플레이어 | 부분 | Spotify·TIDAL 구현, 실제 계정으로는 미검증. 유튜브 뮤직·멜론은 불가(아래 참고) |
+| 5. 1주차 실차 GPS 검증 | **미실시** | 진단 패널과 CSV 로그 저장 기능은 준비됨 |
+| 5. 6주차 실차 테스트 · 메모리 최적화 | **미착수** | |
+| 6. OOM 대응 (maxTileCacheSize) | 미착수 | 실차에서 메모리를 본 뒤 결정 |
+| 6. Wake Lock | 완료 | 결과가 진단 패널에 표시됨 |
+| 6. BYOK | 방식 변경 | 브라우저에서 키를 받는 대신 `/admin`에 입력, 서버에 암호화 저장 |
+
+## 계획서에 없던 것 (추가로 한 것)
+
+- **도커**: 이미지 328 MB, Caddy로 TLS. 컨테이너에서 동작과 볼륨 유지 확인. Caddy는 실제 도메인이 있어야 해서 아직 안 띄워 봄
+- **`/admin` 설정 페이지**: 키를 AES-256-GCM으로 암호화해 저장, 비밀번호는 scrypt, 세션 쿠키는 HMAC 서명, 5회 틀리면 잠김. 저장하면 재시작 없이 바로 적용. "연결 확인" 버튼으로 각 서비스를 실제로 한 번 호출해 봄
+- **경로 화면 3단계** (한국 내비·구글 내비 구조 참고): 검색(최근 목적지 포함) → 경로 카드(시간, 도착 시각, 거리, 가장 빠름/최단 거리 태그, 혼잡도 막대. 지도에 경로 전부 표시) → 안내 중(회전 화살표 배너, "다음" 안내, 도착 시각, 주행 중 경로 다시 비교, 종료)
+- **음악 독**: 오른쪽 아래 미니바. 펼치면 오른쪽 열 전체를 쓰는 플레이어가 되고, 재생목록에서 고르면 다시 접힘
+- **모의 주행**: 경로를 따라 1 Hz 가짜 GPS. 속도 슬라이더, 터널, 이탈 버튼
+- **`?demo`**: 강남역 → 선릉 OSM 실제 도로로 자동 모의 주행. `&screen=preview`를 붙이면 경로 카드 화면
+- CSV 로그 재생, WebGL이 없을 때 안내 문구, 지도 스타일을 못 받으면 빈 바닥으로 대체
+
+## 음악 서비스 판단
+
+| 서비스 | 결과 | 이유 |
+|---|---|---|
+| Spotify | 구현 | Web Playback SDK. Premium과 Widevine 필요 |
+| TIDAL | 구현 | 공식 Player SDK가 제3자에게 허용된 유일한 재생 경로. Widevine 필요 |
+| 유튜브 뮤직 | 불가 | 제3자 재생 API가 없음. 테슬라 순정 앱(2024.26 업데이트)은 구글과의 제휴라 웹페이지에서는 쓸 수 없음. IFrame(영상)은 주행 중 차단됨 |
+| 멜론 | 불가 | 제3자 재생 API가 없음(메타데이터만 제공) |
+| 스트림 URL | 화면에서 뺌 | 보기 좋지 않아서. 서버의 `/api/stream` CORS 중계는 남겨 둠 |
+
+실차에서 **순정 오디오 재생 중에 브라우저 소리가 나는지** 먼저 확인해야 한다(진단 → 소리 테스트).
+- 소리가 나면: 음악은 순정 앱으로 듣고 이 페이지는 안내 음성만 내면 됨. 덕킹은 안 됨
+- 막히면: 음악도 이 페이지에서 틀어야 함(Spotify·TIDAL)
+
+## 남은 일 (권하는 순서)
+
+1. **차 페이지 접근 키**: 지금은 도메인을 아는 사람이면 누구나 `/api/*`를 부를 수 있음. 경로·TTS 비용이 나가고, Spotify 토큰도 받아 갈 수 있음. `/admin`에서 긴 키를 만들어 차 브라우저에 한 번 넣는 방식으로
+2. **실제 키로 검증**: TMAP·카카오·네이버·DashScope 키를 `/admin`에 넣고 "연결 확인" → 실제 경로 카드와 음성 확인
+3. **공공데이터 CSV 넣기**: 경찰청 무인교통단속카메라, 행안부 과속방지턱
+4. **Spotify·TIDAL 앱 등록** 후 계정 연결 확인
+5. **실차**: GPS 필드(heading/speed 제공 여부, 수신 주기), Widevine, 순정 오디오와의 공존, Wake Lock, 메모리
+6. NUC 배포: 도메인 + 포트포워딩 또는 Cloudflare Tunnel
+
+화면 쪽으로 더 볼 만한 것: 낮 모드(일몰 기준 자동 전환), 확대·축소 버튼, 차선 안내(TMAP·카카오가 주는 정보)
+
+## 로컬에서 보기
+
+```bash
+cd tesla-nav && npm install && npm run build
+PORT=8080 node server/dist/index.js
+# http://localhost:8080/?demo    http://localhost:8080/?demo&screen=preview    http://localhost:8080/admin
+npm test    # 서버 9개 + 웹 11개
+```
+
+## 커밋 (13개, main, 푸시 안 함)
+
+```
+46fdfd5 The trip as three screens: where to, the ways there, the way
+a95817f OpenStreetMap roads with no key, and the demo drives on them
+9dc135d Player on the right, clear of the trip panel; a ground when the map never comes
+6f8d4ce A player dock like a music app's, and a pretend drive for the desk
+9238394 A ?demo drive for judging the panel at a desk, and a route that waits for the style
+6482e72 Keep hidden things hidden, and say when WebGL is missing
+ff9c22c Play the owner's Spotify or TIDAL on the page, ducked by the voice
+3524708 Say how the NUC gets it, now that the image runs
+26389ff Take the keys on a settings page, kept encrypted, in force at once
+73b0d99 Warn of what is ahead, in a voice that turns the music down
+6633e2f Track the car on the road: matching, gliding, reckoning, rerouting
+18e80b1 Search a destination and draw the route, coloured by traffic
+29a0bcd Start tesla-nav: server, car-side probe page, Docker
+```
