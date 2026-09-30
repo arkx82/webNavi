@@ -95,12 +95,18 @@ open https://nav.example.com/admin   # 비밀번호 정하고 키 입력, 사용
 
 3사 옆에 네 번째 후보 **자체**: 국가교통정보센터 전국표준노드링크(its.go.kr, 전국 링크
 약 156만 개·회전제한 4.4만 건)를 OSM 형식으로 바꿔 이 서버의 OSRM(MLD)이 길을 찾는다.
-아직 교통 정보 없이 제한속도 기준이고, ITS 소통정보(링크 ID가 같다)를 붙이는 게 다음 단계.
+교통 정보는 ITS 소통정보(링크 ID가 표준노드링크와 같다)로 붙는다 — **쓰는 동안만**: 경로를
+묻거나 주행 중 돌발상황을 묻는 차가 있으면 그 경로와 차가 든 1°×1° 상자만 5분마다 받고, 10분간
+아무도 안 물으면 멈춘다(하루 2시간 주행에 100건 안팎). 받은 속도는 `speeds.csv`(링크의 노드
+쌍마다 km/h)로 쓰고, osrm 서비스의 `serve.sh`가 그 파일이 바뀔 때마다 `osrm-customize
+--segment-speed-file` 뒤 `osrm-datastore`로 공유 메모리의 그래프를 바꿔 끼운다(재시작 없음,
+20초 안팎). 15분 넘게 소식 없는 링크는 파일에서 빠져 제한속도로 돌아간다. "자체" 카드의 혼잡
+색은 OSRM 의 구간별 속도 주석을 링크 제한속도와 견줘 칠한다(30 % 미만 정체, 60 % 미만 서행).
 
 ```bash
 # its.go.kr → 자료실 → 전국표준노드링크에서 최신 NODELINKDATA.zip 하나를 /mnt/data/nodelink/ 에, 풀어서
 python3 tools/nodelink/build.py /mnt/data/nodelink/2026-09-14 /mnt/data/webnavi/nodelink
-docker compose up -d osrm nav    # osrm 서비스가 /data/korea.osrm 을 서빙, nav 는 KOREA_OSRM_URL 로 묻는다
+docker compose up -d osrm nav    # osrm 서비스가 /data/korea.osrm 을 공유 메모리로 서빙(serve.sh), nav 는 KOREA_OSRM_URL 로 묻는다
 ```
 
 변환 규칙은 `tools/nodelink/build.py` 머리에 있다: 도로등급 → highway(고속국도 motorway … 시군도

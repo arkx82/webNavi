@@ -32,6 +32,7 @@ import { Db } from "./db.js";
 import { registerUsers } from "./users.js";
 import { RefusedUrl, fetchPublic, registerGuard } from "./guard.js";
 import { registerHdmap } from "./hdmap.js";
+import { Traffic } from "./road/traffic.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "..");
@@ -45,6 +46,9 @@ const app = Fastify({ logger: { level: env.LOG_LEVEL ?? "info" } });
 const settings = new Settings(env.CONFIG_DIR ?? join(root, "config"));
 // Users, what each keeps, and the voice's index: one SQLite file beside the settings.
 const db = new Db(env.CONFIG_DIR ?? join(root, "config"));
+const workDir = env.WORK_DIR ?? join(root, "work");
+// ITS 소통정보 into our own router's speeds, while it is in use (road/traffic.ts).
+const traffic = new Traffic(settings.reader("itsKey"), join(workDir, "nodelink"), (m) => app.log.info(m));
 const providers: Record<Provider, RouteProvider> = {
   tmap: new Tmap(settings.reader("tmapAppKey")),
   kakao: new Kakao(settings.reader("kakaoRestKey")),
@@ -53,7 +57,7 @@ const providers: Record<Provider, RouteProvider> = {
   // and the road under the demo. Left out of "all" when a real one answers.
   osrm: new Osrm(),
   // The same engine over 표준노드링크 on this host (tools/nodelink/build.py; compose's osrm service).
-  korea: new Osrm(env.KOREA_OSRM_URL ?? "http://osrm:5000", "korea", !!env.KOREA_OSRM_URL),
+  korea: new Osrm(env.KOREA_OSRM_URL ?? "http://osrm:5000", "korea", !!env.KOREA_OSRM_URL, traffic.links),
 };
 
 const search = new KakaoSearch(settings.reader("kakaoRestKey"));
@@ -141,7 +145,7 @@ app.get("/api/health", async () => ({
   tts: speaker.ready,
   nearby: nearby.sources(),
   map: { tmap: providers.tmap.ready, naver: !!settings.get("naverClientId") },
-  road: { incidents: incidents.ready, restAreas: restAreas.ready, alerts: alerts.ready },
+  road: { incidents: incidents.ready, restAreas: restAreas.ready, alerts: alerts.ready, traffic: traffic.ready },
   hdmap: hdTiles.ready,
 }));
 
@@ -248,6 +252,8 @@ app.get<{ Querystring: { at: string; r?: string } }>("/api/road/incidents", asyn
   if (!at) return reply.code(400).send({ error: "at is lon,lat" });
   if (!incidents.ready) return reply.code(503).send({ error: "incidents have no ITS key on this server" });
   const r = Math.min(50_000, Math.max(500, Number(request.query.r ?? 15_000) || 15_000));
+  // A car on the move asks this every few minutes: the router's speeds round it are kept fresh meanwhile.
+  traffic.touch([at]);
   try {
     return await incidents.near(at, r);
   } catch (refused) {
@@ -350,6 +356,7 @@ app.get<{ Querystring: RouteQuery }>("/api/route", async (request, reply) => {
     const settled = await Promise.allSettled(ready.map((p) => p.route({ start: s, goal: g, ...headingOf(request.query) })));
     const routes = settled.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
     const errors = settled.flatMap((r, i) => (r.status === "rejected" ? [`${ready[i].name}: ${(r.reason as Error).message}`] : []));
+    traffic.touch([s, g, ...routes.flatMap((r) => r.path.filter((_, i) => i % 20 === 0))]);
     return { routes, errors };
   }
   const provider = providers[name];
@@ -359,7 +366,9 @@ app.get<{ Querystring: RouteQuery }>("/api/route", async (request, reply) => {
   const g = lonLat(goal);
   if (!s || !g) return reply.code(400).send({ error: "start and goal are lon,lat" });
   try {
-    return await provider.route({ start: s, goal: g, ...headingOf(request.query) });
+    const route = await provider.route({ start: s, goal: g, ...headingOf(request.query) });
+    traffic.touch([s, g, ...route.path.filter((_, i) => i % 20 === 0)]);
+    return route;
   } catch (refused) {
     if (refused instanceof ProviderError) {
       request.log.warn({ provider: refused.provider, status: refused.status }, refused.message);
@@ -486,6 +495,7 @@ const admin = registerAdmin(app, settings, {
       return [d.label, k ? `${k.features.length}곳 (${new Date(k.at).toLocaleDateString("ko-KR")})` : setErrors.get(d.name) ?? (refreshingSets ? "받는 중…" : "아직 없음")];
     })),
     돌발상황: incidents.ready, 휴게소: restAreas.ready,
+    소통정보: (() => { const t = traffic.status(); return !traffic.ready ? (traffic.links.ready ? "ITS 키 없음" : "links.db 없음") : `${t.active ? "갱신 중" : "쉬는 중"} · 상자 ${t.cells} · 링크 ${t.links} · 오늘 ${t.callsToday}건${t.lastError ? ` · 오류 ${t.lastError}` : ""}`; })(),
     "멘트 캐시": existsSync(ttsDir) ? readdirSync(ttsDir).filter((f) => f.endsWith(".wav")).length : 0,
     "멘트 기록": (() => { const t = db.ttsStats(); return `${t.sentences}문장 · 재사용 ${Math.max(0, t.uses - t.sentences)}회 · ${(t.bytes / 1e6).toFixed(1)} MB`; })(),
     사용자: db.users().length,
@@ -514,10 +524,10 @@ const admin = registerAdmin(app, settings, {
   prerender: () => prerender(speaker),
 }, join(root, "admin", "index.html"));
 registerMusic(app, settings, admin.guard);
-registerUsers(app, db, settings, admin.adminGuard, env.WORK_DIR ?? join(root, "work"));
+registerUsers(app, db, settings, admin.adminGuard, workDir);
 registerGuard(app);
 // 정밀도로지도 tiles, built into WORK_DIR by tools/hdmap/build.py.
-const hdTiles = registerHdmap(app, env.WORK_DIR ?? join(root, "work"));
+const hdTiles = registerHdmap(app, workDir);
 
 const webDir = env.WEB_DIR ?? resolve(root, "..", "web", "dist");
 if (existsSync(webDir)) {

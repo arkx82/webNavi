@@ -6,7 +6,10 @@
                  lanes and name; every 회전제한 a restriction relation (from, via node, to)
   korea.osrm.*   OSRM's MLD graph: osrm-extract (the car profile), osrm-partition,
                  osrm-customize, run in the osrm/osrm-backend image. docker compose's
-                 osrm service serves it; the nav server asks it as the "korea" provider.
+                 osrm service serves it (serve.sh); the nav server asks it as the "korea" provider.
+  links.db       SQLite: each link's OSM node sequence and limit, for the live speeds the nav
+                 server writes (speeds.csv, from ITS 소통정보 — the same link ids) and for
+                 reading a route's links back from OSRM's node annotation.
 
 The zip's shapefiles are read with GDAL in its container (the coordinates come as
 ITRF2000 TM, EPSG:5186, and go out as lon/lat). Links carry their direction (F_NODE →
@@ -27,7 +30,7 @@ Every output is written as <name>.new and moved into place whole.
 
   python3 tools/nodelink/build.py /mnt/data/nodelink/2026-09-14 /mnt/data/webnavi/nodelink [--osm-only] [--graph-only]
 """
-import argparse, csv, json, math, os, subprocess, sys, time
+import argparse, csv, json, math, os, sqlite3, subprocess, sys, time
 from xml.sax.saxutils import quoteattr
 
 ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -158,6 +161,7 @@ def write_osm(st):
     in_links = {}      # node → [LINK_ID], the links arriving at it
     inner = set()      # the short links a junction is drawn with (a turn's via path runs over these)
     heading = {}       # LINK_ID → (bearing leaving F_NODE, bearing arriving at T_NODE)
+    limits = {}        # LINK_ID → MAX_SPD, for links.db
     unused = flipped = missing = 0
     vertex = VERTEX_BASE
     with open(tmp, "w", encoding="utf-8", buffering=1 << 20) as out:
@@ -204,6 +208,7 @@ def write_osm(st):
             spd = p.get("MAX_SPD")
             if spd and int(spd) > 0:
                 tags.append(tag("maxspeed", int(spd)))
+                limits[p["LINK_ID"]] = int(spd)
             lanes = p.get("LANES")
             if lanes and int(lanes) > 0:
                 tags.append(tag("lanes", int(lanes)))
@@ -301,7 +306,23 @@ def write_osm(st):
         say(f"{backs} U-turns through a ring forbidden ({len(allowed_back)} allowed by 표준노드링크 left open)")
         out.write("</osm>\n")
     os.replace(tmp, os.path.join(OUT, "korea.osm"))
+    write_links_db(ways, ends, limits)
     say(f"korea.osm: {os.path.getsize(os.path.join(OUT, 'korea.osm')) / 1e9:.2f} GB, {kept} restrictions ({skipped} not on their links, {timed} part-time ones kept as full-time)")
+
+def write_links_db(ways, ends, limits):
+    """links.db: id → f, t, limit, the OSM node ids along it (comma-joined), indexed by (f, t) too."""
+    tmp = os.path.join(OUT, "links.db.new")
+    if os.path.exists(tmp):
+        os.remove(tmp)
+    db = sqlite3.connect(tmp)
+    db.execute("CREATE TABLE links (id TEXT PRIMARY KEY, f TEXT, t TEXT, maxspd INTEGER, nodes TEXT)")
+    db.executemany("INSERT INTO links VALUES (?, ?, ?, ?, ?)",
+                   ((lid, ends[lid][0], ends[lid][1], limits.get(lid), ",".join(map(str, ids))) for lid, (ids, _) in ways.items()))
+    db.execute("CREATE INDEX links_ft ON links (f, t)")
+    db.commit()
+    db.close()
+    os.replace(tmp, os.path.join(OUT, "links.db"))
+    say(f"links.db: {os.path.getsize(os.path.join(OUT, 'links.db')) / 1e6:.0f} MB")
 
 def graph():
     """OSRM's three steps over korea.osm, in its image; the files land beside it."""

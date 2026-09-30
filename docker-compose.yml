@@ -27,9 +27,13 @@ services:
   osrm:
     image: ghcr.io/project-osrm/osrm-backend:v6.0.0
     restart: unless-stopped
-    command: osrm-routed --algorithm mld --max-table-size 1000 /data/korea.osrm
+    # serve.sh: the graph in shared memory, and the live speeds nav writes (speeds.csv) folded in
+    # as they change. The graph is about 1.5 GB in shared memory, twice while it is swapped.
+    command: sh /serve.sh
+    shm_size: 6g
     volumes:
-      - /mnt/data/webnavi/nodelink:/data:ro
+      - /mnt/data/webnavi/nodelink:/data
+      - ./tools/nodelink/serve.sh:/serve.sh:ro
     expose: ["5000"]
 
   # Not used while a Cloudflare Tunnel ends HTTPS; uncomment to go back to Caddy.
