@@ -149,6 +149,18 @@ export class RouteWatch {
     return this.onRoute.filter((f) => f.feature.kind === "school-zone" || f.feature.kind === "senior-zone");
   }
 
+  /** The 구간 단속 stretches on the route: from each start camera to the end camera after it (to the route's end without one). */
+  sections(): { feature: Feature; alongM: number; endM: number }[] {
+    const out: { feature: Feature; alongM: number; endM: number }[] = [];
+    let open: { feature: Feature; alongM: number; endM: number } | null = null;
+    for (const f of this.onRoute) {
+      if (f.feature.kind === "section-start" && !open) open = { feature: f.feature, alongM: f.alongM, endM: this.line.lengthM };
+      else if (f.feature.kind === "section-end" && open) { open.endM = f.alongM; out.push(open); open = null; }
+    }
+    if (open) out.push(open);
+    return out;
+  }
+
   /** Forgets the features of [kinds] (an incident list asked again: the cleared ones go). */
   drop(kinds: Kind[]) {
     this.onRoute = this.onRoute.filter((f) => !kinds.includes(f.feature.kind));

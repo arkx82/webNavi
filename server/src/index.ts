@@ -57,7 +57,8 @@ const providers: Record<Provider, RouteProvider> = {
   // and the road under the demo. Left out of "all" when a real one answers.
   osrm: new Osrm(),
   // The same engine over 표준노드링크 on this host (tools/nodelink/build.py; compose's osrm service).
-  korea: new Osrm(env.KOREA_OSRM_URL ?? "http://osrm:5000", "korea", !!env.KOREA_OSRM_URL, traffic.links),
+  // Offered only once ITS answers this key with live speeds (the owner's call: a route without traffic is not worth a card).
+  korea: new Osrm(env.KOREA_OSRM_URL ?? "http://osrm:5000", "korea", () => !!env.KOREA_OSRM_URL && traffic.live, traffic.links),
 };
 
 const search = new KakaoSearch(settings.reader("kakaoRestKey"));
@@ -484,7 +485,7 @@ app.get<{ Querystring: { url: string } }>("/api/stream", async (request, reply) 
 // The settings page, and one real call per service to prove a key.
 const admin = registerAdmin(app, settings, {
   status: () => ({
-    tmap: providers.tmap.ready, kakao: providers.kakao.ready, naver: providers.naver.ready, osrm: "키 없음(무료)", 자체경로: providers.korea.ready ? `OSRM ${env.KOREA_OSRM_URL}` : "KOREA_OSRM_URL 없음",
+    tmap: providers.tmap.ready, kakao: providers.kakao.ready, naver: providers.naver.ready, osrm: "키 없음(무료)", 자체경로: !env.KOREA_OSRM_URL ? "KOREA_OSRM_URL 없음" : providers.korea.ready ? `켜짐 (OSRM ${env.KOREA_OSRM_URL}, ITS 소통정보 수신 중)` : traffic.status().approved === false ? "꺼짐 — ITS 키 승인 대기 (승인되면 자동으로 켜짐)" : "꺼짐 — ITS 소통정보가 아직 한 번도 오지 않음",
     검색: search.ready, 음성: speaker.ready, 목소리: speaker.voice,
     "음성 모델": speaker.ready ? (speaker.spent.current() ?? "무료 한도 모두 소진") + (speaker.spent.spentModels().length ? ` (소진: ${speaker.spent.spentModels().length}개)` : "") : false,
     "주유 가격": nearby.opinet.ready, 충전소: nearby.ev.ready ? true : nearby.kakao.ready ? "카카오 (빈 충전기 수 없음)" : false,

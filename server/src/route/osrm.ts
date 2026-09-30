@@ -1,4 +1,4 @@
-import { askJson, type Congestion, type LonLat, type Route, type RouteProvider, type RouteRequest, type Segment } from "./types.js";
+import { askJson, isMotorwayName, markMotorway, type Congestion, type LonLat, type Route, type RouteProvider, type RouteRequest, type Segment } from "./types.js";
 import type { LinkBook } from "../road/traffic.js";
 import { koreanNumbers } from "../phrases.js";
 
@@ -19,7 +19,12 @@ interface OsrmAnswer {
       steps: {
         maneuver: { location: LonLat; type: string; modifier?: string; exit?: number };
         name: string;
+        ref?: string;
         distance: number;
+        /** The step's own line (overview=full: the route's line is these joined, each first point the last of the one before). */
+        geometry?: { coordinates: LonLat[] };
+        /** Each intersection's road classes from the profile: "motorway" on a 고속국도 and its ramps. */
+        intersections?: { classes?: string[] }[];
       }[];
       /** Per segment of the leg's geometry (annotations=nodes,speed,datasources): the node ids, m/s, and 0 for the profile's speed or 1+ for a speed file's. */
       annotation?: { nodes: number[]; speed: number[]; datasources: number[] };
@@ -69,9 +74,10 @@ export class Osrm implements RouteProvider {
    * last resort. "korea": the same engine on this host over 표준노드링크
    * (KOREA_OSRM_URL, docker compose's osrm service), offered when that is set.
    */
-  constructor(private base = "https://router.project-osrm.org", readonly name: "osrm" | "korea" = "osrm", private readonly on = true, private readonly links: LinkBook | null = null) {}
+  constructor(private base = "https://router.project-osrm.org", readonly name: "osrm" | "korea" = "osrm", private readonly on: boolean | (() => boolean) = true, private readonly links: LinkBook | null = null) {}
+  /** [on] may be asked each time: the korea route is offered only while live speeds are coming (traffic.ts). */
   get ready() {
-    return this.on;
+    return typeof this.on === "function" ? this.on() : this.on;
   }
 
   async route({ start, goal }: RouteRequest): Promise<Route> {
@@ -90,7 +96,7 @@ export class Osrm implements RouteProvider {
           turnType: `${s.maneuver.type}/${s.maneuver.modifier ?? ""}`,
         })),
     );
-    return {
+    const route: Route = {
       provider: this.name,
       distanceM: first.distance,
       durationS: first.duration,
@@ -98,6 +104,8 @@ export class Osrm implements RouteProvider {
       guides,
       segments: this.segmentsOf(first),
     };
+    for (const [from, to] of motorwayRanges(first.legs.flatMap((l) => l.steps), route.path.length)) markMotorway(route, from, to);
+    return route;
   }
 
   /** Live congestion where the graph carries it (korea, with links.db); else one unknown segment. */
@@ -109,6 +117,29 @@ export class Osrm implements RouteProvider {
     }
     return [{ from: 0, to: n, congestion: 0 }];
   }
+}
+
+/**
+ * The stretches of the path on a motorway or a car-only road, as index
+ * ranges: a step whose intersections the profile classes "motorway" (a
+ * 고속국도 and its ramps), or whose name says so (도시고속도로, 강변북로 …).
+ * The steps' lines join end to start, so a step's range is counted along.
+ */
+export function motorwayRanges(steps: OsrmAnswer["routes"][number]["legs"][number]["steps"], pathLength: number): [number, number][] {
+  const out: [number, number][] = [];
+  let index = 0;
+  for (const s of steps) {
+    const n = s.geometry?.coordinates.length ?? 0;
+    const from = index, to = Math.min(pathLength, index + Math.max(1, n));
+    index += Math.max(0, n - 1);
+    const classed = s.intersections?.some((i) => i.classes?.includes("motorway")) ?? false;
+    if (to > from && (classed || isMotorwayName(s.name) || isMotorwayName(s.ref))) {
+      const last = out[out.length - 1];
+      if (last && from <= last[1]) last[1] = Math.max(last[1], to);
+      else out.push([from, to]);
+    }
+  }
+  return out;
 }
 
 /** The manoeuvre as a Korean phrase, the way the car apps say it. */

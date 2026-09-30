@@ -36,7 +36,11 @@ test("a turn first known well inside a far rung waits for 잠시 후 rather than
 
 test("straight on and the arrival are said once, close in", () => {
   assert.equal(turnSpeech("straight", 290, 50, new Set(), ""), null);
-  assert.equal(turnSpeech("straight", 140, 50, new Set(), ""), "잠시 후 직진입니다");
+  // 직진 at a plain crossroads is not said; where the words name a choice it is.
+  assert.equal(turnSpeech("straight", 140, 50, new Set(), ""), null);
+  assert.equal(turnSpeech("straight", 140, 50, new Set(), "직진"), null);
+  assert.equal(turnSpeech("straight", 140, 50, new Set(), "직진 방향 (성수대교 방면)"), "잠시 후 직진입니다");
+  assert.equal(turnSpeech("straight", 140, 50, new Set(), "지하차도 진입"), "잠시 후 직진입니다");
   assert.equal(turnSpeech("arrive", 140, 50, new Set(), ""), EVENTS.nearGoal);
 });
 

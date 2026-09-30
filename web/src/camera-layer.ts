@@ -150,6 +150,8 @@ export class CameraLayer {
         "icon-allow-overlap": true,
         "text-allow-overlap": true,
         "text-field": ["get", "text"],
+        // On the sign's face, which sits a little below the icon's centre under the camera body.
+        "text-offset": [0, 0.35],
         "text-font": ["Noto Sans Bold"],
         "text-size": ["interpolate", ["exponential", 1.6], ["zoom"], 12, 5, 14, 7.5, 16, 11, 18, 13],
         "symbol-sort-key": ["get", "z"],
@@ -209,11 +211,19 @@ export function look(f: Pick<Feature, "kind" | "limit" | "flash">, now = Date.no
   }
 }
 
-/** A 60 px limit sign (30 css px): the ring's colour, the face's. */
+/**
+ * A 60 px camera sign (30 css px): a small camera body over a limit sign,
+ * the ring's colour, the face's. The number is drawn on the sign's face,
+ * a little below the icon's centre (the layer's text-offset).
+ */
 function sign(ring: string, face: string): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="60" height="60" viewBox="0 0 60 60">` +
-    `<circle cx="30" cy="30" r="26" fill="${face}" stroke="${ring}" stroke-width="7"/>` +
-    `<circle cx="30" cy="30" r="29" fill="none" stroke="rgba(0,0,0,.35)" stroke-width="1.5"/></svg>`;
+    `<circle cx="30" cy="36" r="21" fill="${face}" stroke="${ring}" stroke-width="6"/>` +
+    `<circle cx="30" cy="36" r="23.5" fill="none" stroke="rgba(0,0,0,.35)" stroke-width="1.2"/>` +
+    `<rect x="24" y="1" width="12" height="5" rx="1.5" fill="#1c1c20"/>` +
+    `<rect x="16" y="4" width="28" height="16" rx="4" fill="#1c1c20" stroke="#ffffff" stroke-width="1.5"/>` +
+    `<circle cx="30" cy="12" r="5" fill="#ffffff"/><circle cx="30" cy="12" r="2.4" fill="#1c1c20"/>` +
+    `<circle cx="39" cy="9" r="1.6" fill="#ff4d4f"/></svg>`;
 }
 
 /** A small traffic-light head, 40 px (20 css px): dark, or amber while it flashes. */

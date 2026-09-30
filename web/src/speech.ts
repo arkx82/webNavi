@@ -48,9 +48,22 @@ export function turnSpeech(maneuver: Maneuver, inM: number, speedKmh: number, sa
   return turnSay(maneuver, inM, speedKmh, said, guideText)?.text ?? null;
 }
 
+/**
+ * Whether a straight-on guide is worth saying: the providers put one at
+ * many a plain crossroads, where "잠시 후 직진" only distracts. It is
+ * kept where its words name a choice — a direction to hold ("…방면",
+ * "…방향"), a flyover or underpass to take or leave, a road to enter.
+ */
+const STRAIGHT_MATTERS = /방면|방향|고가|지하차도|진입|램프|분기|갈림|본선|합류/;
+export function straightMatters(guideText: string): boolean {
+  return STRAIGHT_MATTERS.test(guideText.replace(/\s*후\s.*$/, ""));
+}
+
 /** The same, with the rung it was said at (a far one gets the junction's name and the side to move to). */
 export function turnSay(maneuver: Maneuver, inM: number, speedKmh: number, said: Set<number>, guideText: string): { text: string; rung: number } | null {
   if (maneuver === "depart") return null;
+  // "잠시 후 직진" at every crossroads is noise: said only where the road gives a choice.
+  if (maneuver === "straight" && !straightMatters(guideText)) return null;
   let rungs = rungsFor(speedKmh, said);
   // Straight on and the arrival are said once, close in.
   if (maneuver === "straight" || maneuver === "arrive") rungs = [TURN_NEAR_M];

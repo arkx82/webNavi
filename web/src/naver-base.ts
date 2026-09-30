@@ -43,7 +43,13 @@ export function naverAvailable(): boolean {
 
 export class NaverBase {
   private naver: NaverMap;
-  private readonly sync = () => this.copy();
+  /** One copy a frame: the frame loop moves the map more than once, and each move redrew this map too. */
+  private pending = false;
+  private readonly sync = () => {
+    if (this.pending) return;
+    this.pending = true;
+    queueMicrotask(() => { this.pending = false; this.copy(); });
+  };
   private readonly fit = () => this.inner()?.resize();
 
   constructor(private box: HTMLElement, private map: maplibregl.Map) {

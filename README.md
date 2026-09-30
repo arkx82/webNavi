@@ -93,7 +93,7 @@ open https://nav.example.com/admin   # 비밀번호 정하고 키 입력, 사용
 
 ## 자체 경로 (표준노드링크 + OSRM)
 
-3사 옆에 네 번째 후보 **자체**: 국가교통정보센터 전국표준노드링크(its.go.kr, 전국 링크
+3사 옆에 네 번째 후보 **자체**(ITS 소통정보가 수신되는 동안만 카드에 나온다): 국가교통정보센터 전국표준노드링크(its.go.kr, 전국 링크
 약 156만 개·회전제한 4.4만 건)를 OSM 형식으로 바꿔 이 서버의 OSRM(MLD)이 길을 찾는다.
 교통 정보는 ITS 소통정보(링크 ID가 표준노드링크와 같다)로 붙는다 — **쓰는 동안만**: 경로를
 묻거나 주행 중 돌발상황을 묻는 차가 있으면 그 경로와 차가 든 1°×1° 상자만 5분마다 받고, 10분간
@@ -108,6 +108,9 @@ open https://nav.example.com/admin   # 비밀번호 정하고 키 입력, 사용
 python3 tools/nodelink/build.py /mnt/data/nodelink/2026-09-14 /mnt/data/webnavi/nodelink
 docker compose up -d osrm nav    # osrm 서비스가 /data/korea.osrm 을 공유 메모리로 서빙(serve.sh), nav 는 KOREA_OSRM_URL 로 묻는다
 ```
+
+경로의 **코너**는 제공자가 준 꺾인 선 대신 정밀도로지도의 회전 차선 링크를 따라 다시 잇는다(`POST /api/hdmap/thread` → `web/src/thread.ts`가
+경로 폴리라인에 끼워 넣고 혼잡 구간·고속도로 구간의 색인을 함께 옮긴다). 정밀지도가 있는 교차로에서만.
 
 변환 규칙은 `tools/nodelink/build.py` 머리에 있다: 도로등급 → highway(고속국도 motorway … 시군도
 unclassified), 연결로 → *_link, 링크마다 oneway·maxspeed·lanes·name·ref, 교량·터널, 회전제한

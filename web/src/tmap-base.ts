@@ -49,7 +49,13 @@ export function tmapAvailable(): boolean {
 export class TmapBase {
   private tmap: TmapMap;
   private camera: TmapCamera;
-  private readonly sync = () => this.copy();
+  /** One copy a frame: the frame loop moves the map more than once, and each move redrew this map too. */
+  private pending = false;
+  private readonly sync = () => {
+    if (this.pending) return;
+    this.pending = true;
+    queueMicrotask(() => { this.pending = false; this.copy(); });
+  };
   private readonly fit = () => this.tmap.vsmMap().resize();
 
   constructor(private box: HTMLElement, private map: maplibregl.Map) {

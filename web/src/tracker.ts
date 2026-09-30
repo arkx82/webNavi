@@ -115,6 +115,16 @@ export class Tracker {
     }
   }
 
+  /** Forgets where the car was drawn (a pretend drive over): the next fix places it afresh, no glide from the pretend place. */
+  forget() {
+    this.lastFix = null;
+    this.lastProj = null;
+    this.shownAt = null;
+    this.glideFrom = null;
+    this.glideTo = null;
+    this.reckonSince = 0;
+  }
+
   /** A fix from the car (or a replay). */
   feed(fix: Fix, now = performance.now()) {
     if (this.lastFix) this.periodS = Math.min(3, Math.max(0.2, (fix.t - this.lastFix.t) / 1000));

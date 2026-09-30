@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { ACTIVE_MS, CYCLE_MS, FRESH_MS, LinkBook, Traffic, boxOf, cellOf, cellsAlong } from "./traffic.js";
+import { ACTIVE_MS, CYCLE_MS, FRESH_MS, LinkBook, REFUSED_RETRY_MS, Traffic, boxOf, cellOf, cellsAlong } from "./traffic.js";
 import { congestionOf } from "../route/osrm.js";
 
 function linksDb(dir: string) {
@@ -45,6 +45,7 @@ test("in use, the cells round the route are fetched every five minutes and speed
   // Three segments of the first link at 24 km/h; a speed of 0 is not a speed; an unknown link has no segments.
   assert.equal(csv, "1000000001,100000000001,24\n100000000001,100000000002,24\n100000000002,1000000002,24\n");
   assert.equal(traffic.status().callsToday, 1);
+  assert.equal(traffic.live, true);
   // A quarter of an hour on with no one asking: the router is idle, and the stale speed goes.
   clock += FRESH_MS + 1;
   assert.ok(!traffic.active);
@@ -67,4 +68,25 @@ test("a link is found by the nodes it joins, and a route's congestion comes from
   const nodes = [1000000001, 100000000001, 100000000002, 1000000002, 1000000003];
   const segs = congestionOf(nodes, [4, 4, 9, 20], [1, 1, 1, 0], limit);
   assert.deepEqual(segs, [{ from: 0, to: 2, congestion: 3 }, { from: 2, to: 3, congestion: 2 }, { from: 3, to: 4, congestion: 0 }]);
+});
+
+test("a key ITS refuses (waiting for approval) keeps the 자체 route off, and is tried again only every half hour", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "traffic-"));
+  linksDb(dir);
+  let clock = 5_000_000, calls = 0;
+  const traffic = new Traffic(() => "key", dir, () => {}, async () => { calls++; throw new Error("ITS 401"); }, () => clock);
+  assert.equal(traffic.live, false);
+  traffic.touch([[127.05, 37.5]]);
+  await traffic.cycle();
+  assert.equal(calls, 1);
+  assert.equal(traffic.status().approved, false);
+  assert.equal(traffic.live, false);
+  clock += CYCLE_MS + 1;
+  traffic.touch([[127.05, 37.5]]);
+  await traffic.cycle();
+  assert.equal(calls, 1, "not asked again within the half hour");
+  clock += REFUSED_RETRY_MS;
+  traffic.touch([[127.05, 37.5]]);
+  await traffic.cycle();
+  assert.equal(calls, 2);
 });

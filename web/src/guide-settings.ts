@@ -1,3 +1,4 @@
+import { DOWN, PLAY, UP } from "./icons";
 import type { Kind } from "./warnings";
 import { push } from "./userdata";
 
@@ -245,7 +246,7 @@ export function drawGuide(box: HTMLElement, s: GuideSettings, changed: (s: Guide
       const b = document.createElement("button");
       b.type = "button";
       b.className = "voice-pick";
-      b.textContent = "▶ 듣기";
+      b.innerHTML = `${PLAY} 듣기`;
       b.disabled = !s.voice || !listen;
       b.addEventListener("click", () => listen?.());
       line.append(b);
@@ -257,7 +258,8 @@ export function drawGuide(box: HTMLElement, s: GuideSettings, changed: (s: Guide
       const b = document.createElement("button");
       b.type = "button";
       b.className = "voice-pick";
-      b.textContent = `${voiceLabel(s)} ${voicesOpen ? "▴" : "▾"}`;
+      b.textContent = voiceLabel(s);
+      b.insertAdjacentHTML("beforeend", voicesOpen ? UP : DOWN);
       b.addEventListener("click", () => {
         voicesOpen = !voicesOpen;
         if (voicesOpen && !voices && loadVoices) {

@@ -84,3 +84,27 @@ test("lanesAlong reads the route only as far ahead as the guide does (40 points)
   assert.ok(asked.every((n) => n <= AFTER_POINTS), `every ask at most ${AFTER_POINTS} points, saw ${Math.max(...asked)}`);
   assert.equal(Math.max(...asked), AFTER_POINTS);
 });
+
+test("a corner is threaded through the lane that turns the route's way: from the stop line, round the painted arc, on along the route", async () => {
+  const index = await indexOf([
+    // Two lanes north to the stop line at y = 0: the right one turns right, the left goes on.
+    link({ id: "A219A000021", lane: 1, a: "P0", b: "P1", l: null, r: "A219A000022" }, [[-1.75, -100], [-1.75, -50], [-1.75, 0]]),
+    link({ id: "A219A000022", lane: 2, a: "P0", b: "P2", l: "A219A000021", r: null }, [[1.75, -100], [1.75, -50], [1.75, 0]]),
+    link({ id: "A219A000031", lane: 1, a: "P1", b: null, l: null, r: null }, [[-1.75, 0], [-1.75, 60], [-1.75, 160]]),
+    // The right lane's arc: east through the junction, then along y = 20 (the cross street's lane).
+    link({ id: "A219A000032", lane: 1, a: "P2", b: "P3", l: null, r: null }, [[1.75, 0], [6, 10], [14, 17], [24, 20]]),
+    link({ id: "A219A000033", lane: 1, a: "P3", b: null, l: null, r: null }, [[24, 20], [80, 20], [200, 20]]),
+  ]);
+  // The provider's line: north up x = 0, one vertex at the corner (0, 20), then east — cutting the arc.
+  const after: LonLat[] = [];
+  for (let m = 0; m <= 150; m += 15) after.push(m <= 20 ? at(0, m) : at(m - 20, 20));
+  const trail = index.thread(at(0, 20), 0, after);
+  assert.ok(trail, "threaded");
+  assert.equal(trail!.length, 4 + 3 - 1 + 1, "the stop line, the arc, then the cross street's lane");
+  // It starts at the right lane's end and passes the arc's middle.
+  const near = (p: LonLat, q: LonLat) => Math.abs(p[0] - q[0]) < 1e-6 && Math.abs(p[1] - q[1]) < 1e-6;
+  assert.ok(near(trail![0], at(1.75, 0)), JSON.stringify(trail![0]));
+  assert.ok(near(trail![2], at(6, 10)), JSON.stringify(trail![2]));
+  // A way in that no lane here takes (from the east) threads nothing.
+  assert.equal(index.thread(at(0, 20), 270, after), null);
+});

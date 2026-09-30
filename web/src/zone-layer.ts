@@ -5,12 +5,13 @@ import type { LonLat } from "./types";
 /**
  * 보호구역 on the road itself: the stretch of the route a school (or a home
  * for the old) makes a zone, as a translucent band the road's width — red
- * for a child's, orange for an old person's — with its name, so the car is
- * seen to be in it, not only told.
+ * for a child's, orange for an old person's, yellow for a 구간 단속 between
+ * its cameras — with its name, so the car is seen to be in it, not only told.
  */
-export interface Zone { id: string; kind: "school-zone" | "senior-zone"; alongM: number; endM: number }
+export interface Zone { id: string; kind: "school-zone" | "senior-zone" | "section"; alongM: number; endM: number }
 const HALF_WIDTH_M = 11;
-const WORDS = { "school-zone": "어린이 보호구역", "senior-zone": "노인 · 장애인 보호구역" };
+/** 구간 단속 too: the stretch between its cameras, in yellow (warnings.ts sections()). */
+const WORDS = { "school-zone": "어린이 보호구역", "senior-zone": "노인 · 장애인 보호구역", section: "구간 단속" };
 
 export class ZoneLayer {
   private ready = false;
@@ -56,7 +57,7 @@ export class ZoneLayer {
     if (!this.map.getSource("zones")) this.map.addSource("zones", { type: "geojson", data: this.data });
     // Under the route line, over the ground and the lanes.
     const before = this.map.getLayer("alts-line") ? "alts-line" : undefined;
-    const colour = ["match", ["get", "kind"], "senior-zone", "#ff8a3d", "#e5484d"] as maplibregl.ExpressionSpecification;
+    const colour = ["match", ["get", "kind"], "senior-zone", "#ff8a3d", "section", "#f5c518", "#e5484d"] as maplibregl.ExpressionSpecification;
     if (!this.map.getLayer("zones-fill")) this.map.addLayer({ id: "zones-fill", type: "fill", source: "zones", filter: ["==", ["geometry-type"], "Polygon"], paint: { "fill-color": colour, "fill-opacity": 0.24 } }, before);
     if (!this.map.getLayer("zones-edge")) this.map.addLayer({ id: "zones-edge", type: "line", source: "zones", filter: ["==", ["geometry-type"], "Polygon"], paint: { "line-color": colour, "line-width": 2, "line-opacity": 0.7 } }, before);
     if (!this.map.getLayer("zones-words")) this.map.addLayer({

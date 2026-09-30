@@ -45,7 +45,7 @@
 
       <!-- 1. Where to. -->
       <section id="s-search">
-        <header class="search-head"><b>목적지</b><button id="dest-close" class="icon" type="button" title="접기">✕</button></header>
+        <header class="search-head"><b>목적지</b><button id="dest-close" class="icon" type="button" title="접기"><svg class="gl" viewBox="0 0 20 20" aria-hidden="true"><path d="M4.3 4.3a1 1 0 0 1 1.4 0L10 8.6l4.3-4.3a1 1 0 1 1 1.4 1.4L11.4 10l4.3 4.3a1 1 0 0 1-1.4 1.4L10 11.4l-4.3 4.3a1 1 0 0 1-1.4-1.4L8.6 10 4.3 5.7a1 1 0 0 1 0-1.4z"/></svg></button></header>
         <form id="search-form" class="row" autocomplete="off">
           <input id="q" type="search" placeholder="어디로 갈까요?" enterkeyhint="search" />
           <button type="submit" class="narrow">검색</button>
@@ -82,7 +82,7 @@
             <div class="artist" id="pv-addr"></div>
           </div>
           <button id="pv-save" class="icon" type="button" title="저장">☆</button>
-          <button id="pv-close" class="icon" type="button">✕</button>
+          <button id="pv-close" class="icon" type="button"><svg class="gl" viewBox="0 0 20 20" aria-hidden="true"><path d="M4.3 4.3a1 1 0 0 1 1.4 0L10 8.6l4.3-4.3a1 1 0 1 1 1.4 1.4L11.4 10l4.3 4.3a1 1 0 0 1-1.4 1.4L10 11.4l-4.3 4.3a1 1 0 0 1-1.4-1.4L8.6 10 4.3 5.7a1 1 0 0 1 0-1.4z"/></svg></button>
         </header>
         <!-- Where this place is kept: as 집, as 회사, among the favourites. -->
         <div id="save-menu" hidden>
@@ -116,6 +116,8 @@
           <div><b id="eta-time">--:--</b><small> 도착</small></div>
           <div id="eta-left"></div>
         </div>
+        <!-- The camera or section ahead, with its limit: in the panel under the arrival, red when over it. -->
+        <div id="cam" hidden><span class="limit-sign" id="cam-limit"></span><span id="cam-what"></span></div>
         <!-- A pretend drive along this route: its speed, and a way out. -->
         <div id="sim-bar" hidden>
           <span class="sim-name">모의 주행</span>
@@ -182,10 +184,9 @@
         <small id="base-label">티맵</small>
       </button>
     </div>
-    <!-- The camera or section ahead, with its limit: a small card at the top middle, red when over it. -->
-    <div id="cam" hidden><span class="limit-sign" id="cam-limit"></span><span id="cam-what"></span></div>
-    <!-- Where to, and the ways there: rising from the 목적지 button like a start menu (the search, the
-         place, the routes and the diagnostics are moved in here at start; main.ts). -->
+    <!-- Where to, and the ways there: down from the 목적지 button at the top middle of the map (the search,
+         the place, the routes and the diagnostics are moved in here at start; main.ts). Up top so the search
+         box stays clear of the keyboard the car's browser raises from the foot of the screen. -->
     <aside id="dest-panel" hidden></aside>
     <!-- Where to: the search, folded into this button until wanted (the panel keeps to the speed and the drive). -->
     <button id="dest-open" type="button" title="목적지">
@@ -208,17 +209,17 @@
     </button>
     <!-- A finger on the map: the shop there, or (held) the spot's address, to drive to. -->
     <div id="here-card" hidden>
-      <header><b id="here-title"></b><button id="here-close" class="icon" type="button">✕</button></header>
+      <header><b id="here-title"></b><button id="here-close" class="icon" type="button"><svg class="gl" viewBox="0 0 20 20" aria-hidden="true"><path d="M4.3 4.3a1 1 0 0 1 1.4 0L10 8.6l4.3-4.3a1 1 0 1 1 1.4 1.4L11.4 10l4.3 4.3a1 1 0 0 1-1.4 1.4L10 11.4l-4.3 4.3a1 1 0 0 1-1.4-1.4L8.6 10 4.3 5.7a1 1 0 0 1 0-1.4z"/></svg></button></header>
       <ul id="here-list"></ul>
     </div>
     <!-- 날씨: now, the next day by the hour, ten days. -->
     <aside id="weather" class="sheet" hidden>
-      <header class="nb-head"><b>날씨</b><button id="wx-close" class="icon" type="button">✕</button></header>
+      <header class="nb-head"><b>날씨</b><button id="wx-close" class="icon" type="button"><svg class="gl" viewBox="0 0 20 20" aria-hidden="true"><path d="M4.3 4.3a1 1 0 0 1 1.4 0L10 8.6l4.3-4.3a1 1 0 1 1 1.4 1.4L11.4 10l4.3 4.3a1 1 0 0 1-1.4 1.4L10 11.4l-4.3 4.3a1 1 0 0 1-1.4-1.4L8.6 10 4.3 5.7a1 1 0 0 1 0-1.4z"/></svg></button></header>
       <div id="wx-body"></div>
     </aside>
     <!-- 안내 설정: what the voice says, and from how far; and, at its foot, where everything comes from. -->
     <aside id="guide" class="sheet" hidden>
-      <header class="nb-head"><b>안내 설정</b><button id="guide-close" class="icon" type="button">✕</button></header>
+      <header class="nb-head"><b>안내 설정</b><button id="guide-close" class="icon" type="button"><svg class="gl" viewBox="0 0 20 20" aria-hidden="true"><path d="M4.3 4.3a1 1 0 0 1 1.4 0L10 8.6l4.3-4.3a1 1 0 1 1 1.4 1.4L11.4 10l4.3 4.3a1 1 0 0 1-1.4 1.4L10 11.4l-4.3 4.3a1 1 0 0 1-1.4-1.4L8.6 10 4.3 5.7a1 1 0 0 1 0-1.4z"/></svg></button></header>
       <div id="guide-rows"></div>
       <div class="row account"><span id="account-name"></span><button id="logout" type="button" class="narrow">로그아웃</button></div>
       <details id="licences">
@@ -247,7 +248,7 @@
     </aside>
     <!-- 주변: kinds of place to put on the map, and the list of them. -->
     <aside id="nearby" hidden>
-      <header class="nb-head"><b>주변</b><button id="nb-close" class="icon" type="button">✕</button></header>
+      <header class="nb-head"><b>주변</b><button id="nb-close" class="icon" type="button"><svg class="gl" viewBox="0 0 20 20" aria-hidden="true"><path d="M4.3 4.3a1 1 0 0 1 1.4 0L10 8.6l4.3-4.3a1 1 0 1 1 1.4 1.4L11.4 10l4.3 4.3a1 1 0 0 1-1.4 1.4L10 11.4l-4.3 4.3a1 1 0 0 1-1.4-1.4L8.6 10 4.3 5.7a1 1 0 0 1 0-1.4z"/></svg></button></header>
       <div id="nb-listview">
         <div id="nb-cats" class="chips"></div>
         <div class="nb-opts">
@@ -284,7 +285,7 @@
         <div class="eq" id="mini-eq" aria-hidden="true"><i></i><i></i><i></i></div>
         <button id="mini-toggle" class="icon round" type="button" hidden></button>
         <button id="mini-next" class="icon round" type="button" hidden></button>
-        <span id="mini-chevron">▴</span>
+        <span id="mini-chevron"><svg class="gl" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 6l6 7H4z"/></svg></span>
       </div>
       <div id="full">
         <div class="tabs pills" id="music-sources"></div>

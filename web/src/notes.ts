@@ -1,3 +1,4 @@
+import { X } from "./icons";
 import type { Ahead, RestInfo } from "./warnings";
 
 /**
@@ -108,7 +109,7 @@ export class Notes {
       if (!el) {
         el = document.createElement("div");
         el.className = `note ${n.tone}`;
-        el.innerHTML = `<div class="note-head"><span class="note-badge"></span><span class="note-where"></span><span class="note-x" aria-hidden="true">✕</span></div><div class="note-title"></div><div class="note-lines"></div><div class="note-chips"></div>`;
+        el.innerHTML = `<div class="note-head"><span class="note-badge"></span><span class="note-where"></span><span class="note-x" aria-hidden="true">${X}</span></div><div class="note-title"></div><div class="note-lines"></div><div class="note-chips"></div>`;
         const id = n.id, card = el;
         card.addEventListener("click", () => {
           card.remove();

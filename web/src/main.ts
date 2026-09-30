@@ -36,6 +36,7 @@ import { WeatherPanel } from "./weather";
 import { isFavourite, loadPlaces, samePlace, savePlaces, toggleFavourite } from "./places";
 import { OVERLAY_STYLE, TmapBase, tmapAvailable } from "./tmap-base";
 import { NightCity } from "./night-city";
+import { CHECK, X } from "./icons";
 import { NaverBase, naverAvailable } from "./naver-base";
 import type { Guide, Health, LonLat, Place, Provider, Route } from "./types";
 
@@ -82,7 +83,8 @@ const map = openMap();
 function openMap(): maplibregl.Map {
   try {
     // Where the car last was, before the first fix comes (resume.ts), else the default.
-    const m = new maplibregl.Map({ container: "map", style, center: loadLast() ?? HOME, zoom: 15, pitch: 45, attributionControl: false });
+    // fadeDuration 0: no label cross-fade on every move (a cost each frame while following); no world copies to draw.
+    const m = new maplibregl.Map({ container: "map", style, center: loadLast() ?? HOME, zoom: 15, pitch: 45, attributionControl: false, fadeDuration: 0, renderWorldCopies: false, pitchWithRotate: false });
     // A style that fails, or one that simply never comes (a dead link
     // hangs rather than refuses), gives way to the plain ground so the
     // rest of the page can go on; the log says so.
@@ -317,6 +319,9 @@ function followCar(at: LonLat) {
     if (metres(eased[0], eased[1], center[0], center[1]) < 1) returning = false;
     center = eased;
   }
+  // Standing still with the camera settled: nothing to move, so no move (each one redraws two maps).
+  if (metres(before.lng, before.lat, center[0], center[1]) < 0.05 && Math.abs(map.getZoom() - camera.zoom) < 0.0005
+    && Math.abs(lerpAngle(map.getBearing(), camera.bearing, 1) - map.getBearing()) < 0.02 && Math.abs(map.getPitch() - camera.pitch) < 0.02) return;
   map.jumpTo({ center, ...camera });
 }
 
@@ -327,13 +332,17 @@ function followCar(at: LonLat) {
  * by the offset, then once more for the tilt's perspective.
  */
 function centreFor(at: LonLat, to: { x: number; y: number }, camera: { bearing: number; pitch: number; zoom: number }): LonLat {
-  const canvas = map.getCanvas();
-  const cx = canvas.clientWidth / 2, cy = canvas.clientHeight / 2;
-  map.jumpTo({ center: at, ...camera });
-  let q = map.unproject([2 * cx - to.x, 2 * cy - to.y]);
-  map.jumpTo({ center: q });
-  const p = map.project(at);
-  q = map.unproject([cx + p.x - to.x, cy + p.y - to.y]);
+  // On a copy of the map's transform: three jumpTo a frame moved the map (and the TMAP ground under it) three times a frame.
+  const t = map.transform.clone();
+  t.setZoom(camera.zoom);
+  t.setBearing(camera.bearing);
+  t.setPitch(camera.pitch);
+  t.setCenter(new maplibregl.LngLat(at[0], at[1]));
+  const cx = t.width / 2, cy = t.height / 2;
+  let q = t.screenPointToLocation(new maplibregl.Point(2 * cx - to.x, 2 * cy - to.y));
+  t.setCenter(q);
+  const p = t.locationToScreenPoint(new maplibregl.LngLat(at[0], at[1]));
+  q = t.screenPointToLocation(new maplibregl.Point(cx + p.x - to.x, cy + p.y - to.y));
   return [q.lng, q.lat];
 }
 
@@ -511,7 +520,7 @@ function drawBaseMenu() {
     button.classList.toggle("on", b === base);
     button.disabled = !baseReady(b);
     button.innerHTML = `<b></b><small></small>`;
-    button.querySelector("b")!.textContent = BASE_NAMES[b] + (b === base ? " ✓" : "");
+    button.querySelector("b")!.innerHTML = BASE_NAMES[b] + (b === base ? ` ${CHECK}` : "");
     button.querySelector("small")!.textContent = baseNote(b);
     button.addEventListener("click", () => {
       el("base-menu").hidden = true;
@@ -685,7 +694,7 @@ function drawSaved() {
     const del = document.createElement("button");
     del.type = "button";
     del.className = "del";
-    del.textContent = "✕";
+    del.innerHTML = X;
     del.title = "즐겨찾기에서 빼기";
     del.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -733,8 +742,8 @@ function drawSaveMenu() {
   const isHome = samePlace(saved.home, goal), isWork = samePlace(saved.work, goal), fav = isFavourite(saved, goal);
   el("pv-save").textContent = isHome || isWork || fav ? "★" : "☆";
   el("pv-save").classList.toggle("on", isHome || isWork || fav);
-  el("save-home").textContent = isHome ? "집 ✓" : "집으로 설정";
-  el("save-work").textContent = isWork ? "회사 ✓" : "회사로 설정";
+  el("save-home").innerHTML = isHome ? `집 ${CHECK}` : "집으로 설정";
+  el("save-work").innerHTML = isWork ? `회사 ${CHECK}` : "회사로 설정";
   el("save-fav").textContent = fav ? "즐겨찾기에서 빼기" : "즐겨찾기에 추가";
   el("save-home").classList.toggle("on", isHome);
   el("save-work").classList.toggle("on", isWork);
@@ -922,6 +931,7 @@ function startDrive(r: Route) {
   watchedAt = null;
   incidentsAt = null;
   prepareHighway(route);
+  if (!fresh && !elsewhere) reanchorPopups();
   void placeRestAreas(watch);
   arrived = false;
   showScreen("drive");
@@ -1557,7 +1567,11 @@ async function watchRoad(fix: Fix) {
   showLimit(w.limitAt(along), fix.speed);
   showNextLight(w, along, fix.speed);
   // The protected zones on the route, as bands on the road (those the driver keeps shown).
-  zoneLayer.set(w.zones().filter((z) => shows(guide, z.feature.kind)).map((z) => ({ id: z.feature.id, kind: z.feature.kind as "school-zone" | "senior-zone", alongM: z.alongM, endM: z.endM })), routeLine);
+  zoneLayer.set([
+    ...w.zones().filter((z) => shows(guide, z.feature.kind)).map((z) => ({ id: z.feature.id, kind: z.feature.kind as "school-zone" | "senior-zone", alongM: z.alongM, endM: z.endM })),
+    // 구간 단속: the stretch between its cameras, painted whether or not its cameras are said.
+    ...w.sections().map((s) => ({ id: `section:${s.feature.id}`, kind: "section" as const, alongM: s.alongM, endM: s.endM })),
+  ], routeLine);
   drawNotes(roadNotes(w, along));
 }
 
@@ -1592,6 +1606,23 @@ const notes = new Notes(el("notes"));
 const zoneLayer = new ZoneLayer(map);
 /** The things only shown that have come due this drive, until passed; and the cards the driver closed. */
 const popups = new Map<string, Ahead>();
+/**
+ * A new line to the same place (a re-route, a faster way): the cards up
+ * are measured again along it. Their metres were the old line's, and a
+ * curve already passed read "32.1 km" on the new one, never to go.
+ * One the new line does not pass is dropped.
+ */
+function reanchorPopups() {
+  if (!routeLine) return;
+  const line = routeLine;
+  for (const [id, p] of popups) {
+    const on = line.project([p.feature.lon, p.feature.lat], 0, line.path.length);
+    if (on.offM > 60) { popups.delete(id); continue; }
+    // An area (a zone, a hotspot's circle) is placed round its middle; a point at itself.
+    const shift = on.alongM - (p.alongM + (p.endM ?? p.alongM)) / 2;
+    popups.set(id, { ...p, alongM: p.alongM + shift, endM: p.endM != null ? p.endM + shift : undefined });
+  }
+}
 const dismissed = new Set<string>();
 notes.onDismiss = (id) => dismissed.add(id);
 /** More cards than this and the map is covered: the nearest are kept. */
@@ -1892,9 +1923,13 @@ applyGuide();
 function openGuide(open: boolean) {
   el("guide").hidden = !open;
   if (open) {
+    // Only the trip panel at the top left stays: every other window goes, so the sheet has the screen.
     nearby.show(false);
     openDock(false);
     el("weather").hidden = true;
+    el("base-menu").hidden = true;
+    closeHere();
+    if (currentScreen === "search") openSearch(false);
     drawGuide(el("guide-rows"), guide, applyGuide, loadVoices, voicePicked, listenSample);
   }
   sideChanged();
@@ -2219,6 +2254,8 @@ void drawSources();
 // ---- a pretend drive -------------------------------------------------------
 
 let sim: Simulator | null = null;
+/** The car's last real fix before a pretend drive: where the map goes back to when it ends. */
+let realFix: LonLat | null = null;
 
 function simSpeed(): number {
   return Number(el<HTMLInputElement>("sim-speed").value) / 3.6;
@@ -2232,6 +2269,7 @@ el<HTMLInputElement>("sim-speed").addEventListener("input", () => {
 function startSim() {
   if (!route) { log("모의 주행: 먼저 경로가 있어야 합니다"); return; }
   sim?.stop();
+  realFix = gps.last ? [gps.last.lon, gps.last.lat] : null;
   sim = new Simulator(gps, route);
   sim.speedMps = simSpeed();
   sim.onEnd = () => { simEnded(); log("모의 주행 끝"); };
@@ -2250,6 +2288,13 @@ function simEnded() {
   el("sim-toggle").classList.remove("on");
   el("sim-bar").hidden = true;
   gps.start();
+  // Back to where the car really is, at once: the drawn car forgets the pretend place, and the map goes to the last real fix.
+  tracker.forget();
+  if (realFix) {
+    marker.setLngLat(realFix);
+    map.jumpTo({ center: realFix });
+    setFollow(true);
+  }
 }
 // 모의 주행 from the route cards, as the car apps have it: the chosen way,
 // driven by a pretend GPS, with the voice and the warnings as for real.

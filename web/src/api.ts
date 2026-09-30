@@ -1,4 +1,5 @@
 import type { Category, Fuel, Health, LonLat, Place, Poi, Provider, Route, StationDetail } from "./types";
+import { threadRoute } from "./thread";
 
 async function get<T>(path: string, params: Record<string, string | undefined>): Promise<T> {
   const url = new URL(path, location.origin);
@@ -22,10 +23,14 @@ const moving = () => {
 export const api = {
   health: () => get<Health>("/api/health", {}),
   search: (q: string, near?: LonLat) => get<Place[]>("/api/search", { q, near: near && pair(near) }),
+  // Every route's corners threaded through the painted lanes where 정밀도로지도 has them (thread.ts).
   route: (provider: Provider, start: LonLat, goal: LonLat) =>
-    get<Route>("/api/route", { provider, start: pair(start), goal: pair(goal), ...moving() }),
-  routes: (start: LonLat, goal: LonLat) =>
-    get<{ routes: Route[]; errors: string[] }>("/api/route", { provider: "all", start: pair(start), goal: pair(goal), ...moving() }),
+    get<Route>("/api/route", { provider, start: pair(start), goal: pair(goal), ...moving() }).then(threadRoute),
+  routes: async (start: LonLat, goal: LonLat) => {
+    const a = await get<{ routes: Route[]; errors: string[] }>("/api/route", { provider: "all", start: pair(start), goal: pair(goal), ...moving() });
+    await Promise.all(a.routes.map(threadRoute));
+    return a;
+  },
   nearby: (category: Category, at: LonLat, radiusM: number, fuel?: Fuel) =>
     get<Poi[]>("/api/nearby", { cat: category, at: pair(at), r: String(Math.round(radiusM)), fuel }),
   here: (at: LonLat, radiusM: number, withAddress: boolean) =>

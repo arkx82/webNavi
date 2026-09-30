@@ -69,6 +69,16 @@ export function registerHdmap(app: FastifyInstance, workDir: string) {
   setInterval(refresh, 3_600_000).unref();
   // The lanes at the junction ahead: at=lon,lat of the guide, in=heading into it, way=the provider's turn,
   // after=the route's next 150 m or so as lon,lat;lon,lat…
+  // The corners of a route as the lanes are painted (lanes.thread): one call, every turn of the route.
+  app.post<{ Body: { turns?: { at: LonLat; in: number; after: LonLat[] }[] } }>("/api/hdmap/thread", async (request, reply) => {
+    const turns = Array.isArray(request.body?.turns) ? request.body.turns.slice(0, 200) : null;
+    if (!turns) return reply.code(400).send({ error: "turns" });
+    if (!lanes.ready) return { trails: turns.map(() => null) };
+    const ok = (p: unknown): p is LonLat => Array.isArray(p) && p.length === 2 && p.every(Number.isFinite);
+    const trails = turns.map((t) => (ok(t.at) && Number.isFinite(t.in) && Array.isArray(t.after) && t.after.every(ok) ? lanes.thread(t.at, t.in, t.after.slice(0, AFTER_POINTS)) : null));
+    request.log.debug({ asked: turns.length, threaded: trails.filter(Boolean).length }, "corners threaded");
+    return { trails };
+  });
   app.get<{ Querystring: { at: string; in: string; way?: string; after?: string } }>("/api/hdmap/lanes", async (request, reply) => {
     const at = request.query.at?.split(",").map(Number);
     const inDeg = Number(request.query.in);

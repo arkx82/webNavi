@@ -24,6 +24,8 @@ export const ACTIVE_MS = 10 * 60_000;
 /** A speed older than this is dropped from the file: the link goes back to its limit. */
 export const FRESH_MS = 15 * 60_000;
 export const CELL_DEG = 1;
+/** A key refused (waiting for its approval at its.go.kr) is tried again this often. */
+export const REFUSED_RETRY_MS = 30 * 60_000;
 /** Korea, with room: nothing outside is ever asked for. */
 const LON: [number, number] = [124, 132];
 const LAT: [number, number] = [33, 39];
@@ -96,6 +98,8 @@ export class LinkBook {
 }
 
 export interface TrafficStatus {
+  /** null: ITS not asked yet; false: the key is refused (waiting for approval); true: answering. */
+  approved: boolean | null;
   active: boolean;
   cells: number;
   links: number;
@@ -118,6 +122,9 @@ export class Traffic {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
   private calls = { day: "", n: 0 };
+  /** Whether ITS answers this key: null until asked, false while the key waits for approval (a 401), true once it has answered. */
+  private approved: boolean | null = null;
+  private refusedAt = 0;
 
   constructor(
     private key: () => string | undefined,
@@ -135,6 +142,11 @@ export class Traffic {
 
   get active() {
     return this.now() - this.touched < ACTIVE_MS;
+  }
+
+  /** Live speeds are coming: ITS has answered this key (the 자체 route is offered only then). */
+  get live() {
+    return this.approved === true;
   }
 
   /** Someone is using the router round these points (a route's ends and path, or the car): keep their cells fresh. */
@@ -166,6 +178,8 @@ export class Traffic {
     try {
       const cells = this.liveCells();
       if (!this.active || cells.length === 0) return;
+      // A key still waiting for approval is tried again only every half hour, not every five minutes.
+      if (this.approved === false && this.now() - this.refusedAt < REFUSED_RETRY_MS) return;
       this.lastCycle = this.now();
       let heard = 0;
       for (const cell of cells) {
@@ -173,6 +187,7 @@ export class Traffic {
           heard += await this.fetchCell(cell);
         } catch (e) {
           this.lastError = (e as Error).message;
+          if (/\b401\b/.test(this.lastError)) { this.approved = false; this.refusedAt = this.now(); }
           this.log(`traffic ${cell}: ${this.lastError}`);
         }
       }
@@ -208,6 +223,7 @@ export class Traffic {
     }
     this.lastAt = at;
     this.lastError = null;
+    this.approved = true;
     return n;
   }
 
@@ -237,7 +253,7 @@ export class Traffic {
   }
 
   status(): TrafficStatus {
-    return { active: this.active, cells: this.liveCells().length, links: this.speeds.size, lastAt: this.lastAt, callsToday: this.calls.n, lastError: this.lastError };
+    return { approved: this.approved, active: this.active, cells: this.liveCells().length, links: this.speeds.size, lastAt: this.lastAt, callsToday: this.calls.n, lastError: this.lastError };
   }
 }
 

@@ -85,6 +85,10 @@ function along(path: LonLat[], m: number): LonLat {
 export const AFTER_POINTS = 40;
 
 interface Statements { byId: StatementSync; near: StatementSync; next: StatementSync }
+type End = Link & { path: LonLat[]; end: LonLat; before: number; side: number };
+/** How far past the stop line a corner is threaded, and how close to the route its links must keep. */
+const THREAD_M = 150;
+const THREAD_OFF_M = 6;
 
 export class LaneIndex {
   private db: DatabaseSync | null = null;
@@ -166,16 +170,15 @@ export class LaneIndex {
    * [way] is the provider's word for the turn (좌회전 → left …); "fork" for a keep-left or
    * keep-right, where every lane goes on ahead and the one to be in is told by the route's shape.
    */
-  lanes(at: LonLat, inDeg: number, after: LonLat[], way: Turn | "fork" | null = null): LaneInfo | null {
-    const db = this.open();
-    // A keep-left or keep-right is not shown yet: the lanes there did not read true enough to trust.
-    if (!db || way === "fork") return null;
+  /**
+   * Lanes that end at a stop line near [at] (the guide can be placed a little before or after it),
+   * heading in at [inDeg]; of one survey where several overlap (2019's and 2023's of the same streets:
+   * the newest, by the year in the IDs).
+   */
+  private endsNear(db: Statements, at: LonLat, inDeg: number): End[] {
     const d = 80 / M, k = d / Math.cos((at[1] * Math.PI) / 180);
     const near = db.near.all(at[0] + k, at[0] - k, at[1] + d, at[1] - d) as unknown as Link[];
-    // Lanes that end at a stop line near the junction (the guide can be placed a little before or
-    // after it), heading into it.
     const dir: LonLat = [Math.sin((inDeg * Math.PI) / 180), Math.cos((inDeg * Math.PI) / 180)];
-    type End = Link & { path: LonLat[]; end: LonLat; before: number; side: number };
     let ends: End[] = [];
     for (const l of near) {
       const path = JSON.parse(l.coords) as LonLat[];
@@ -189,10 +192,53 @@ export class LaneIndex {
       if (before < -70 || before > 70 || Math.abs(side) > 25) continue;
       ends.push({ ...l, path, end, before, side });
     }
-    if (ends.length === 0) return null;
-    // One survey where several overlap (2019's and 2023's of the same streets): the newest, by the year in the IDs.
+    if (ends.length === 0) return ends;
     const newest = Math.max(...ends.map((e) => surveyYear(e.id)));
-    ends = ends.filter((e) => surveyYear(e.id) === newest);
+    return ends.filter((e) => surveyYear(e.id) === newest);
+  }
+
+  /**
+   * The lane links through the junction at [at] along the route's way: from
+   * a lane's end at the stop line, the links on that keep nearest [after]
+   * (the route's next 150 m), as one line — the corner as the road is
+   * painted, for the route's own line to take instead of the provider's
+   * straight cut across it. Null where no lane's way on follows the route
+   * closely (within THREAD_OFF_M on average).
+   */
+  thread(at: LonLat, inDeg: number, after: LonLat[]): LonLat[] | null {
+    const db = this.open();
+    if (!db || after.length < 2) return null;
+    const ends = this.endsNear(db, at, inDeg);
+    let best: { trail: LonLat[]; off: number } | null = null;
+    for (const seed of ends) {
+      for (const s of (seed.b ? (db.next.all(seed.b) as unknown as Link[]) : [])) {
+        // Through the junction and on, each hop the link that stays nearest the route.
+        let trail = JSON.parse(s.coords) as LonLat[];
+        let last: Link = s;
+        for (let hop = 0; hop < 6 && lengthOf(trail) < THREAD_M && last.b; hop++) {
+          const on = db.next.all(last.b) as unknown as Link[];
+          if (on.length === 0) break;
+          const pick = on.reduce((a, b) => (offLine(along(JSON.parse(a.coords) as LonLat[], 25), after) <= offLine(along(JSON.parse(b.coords) as LonLat[], 25), after) ? a : b));
+          trail = trail.concat((JSON.parse(pick.coords) as LonLat[]).slice(1));
+          last = pick;
+        }
+        const total = lengthOf(trail);
+        if (total < 20) continue;
+        const probes: number[] = [];
+        for (let m = 10; m <= Math.min(total, THREAD_M); m += 10) probes.push(offLine(along(trail, m), after));
+        const off = probes.reduce((a, d) => a + d, 0) / probes.length;
+        if (off < (best?.off ?? THREAD_OFF_M)) best = { trail: [seed.end, ...trail], off };
+      }
+    }
+    return best?.trail ?? null;
+  }
+
+  lanes(at: LonLat, inDeg: number, after: LonLat[], way: Turn | "fork" | null = null): LaneInfo | null {
+    const db = this.open();
+    // A keep-left or keep-right is not shown yet: the lanes there did not read true enough to trust.
+    if (!db || way === "fork") return null;
+    const ends = this.endsNear(db, at, inDeg);
+    if (ends.length === 0) return null;
     const next = db.next;
     const readRow = (seed: End) => {
       const row: Link[] = [seed];
