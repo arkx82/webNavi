@@ -209,3 +209,12 @@ test("a 신호·과속 camera given as two rows is one warning", () => {
   assert.equal(phraseFor(due[0]), "육백미터 앞에 신호 과속 단속 카메라가 있습니다, 제한 속도 오십입니다");
   assert.equal(watch.ahead(250).length, 2);
 });
+
+test("a school zone by the road onto a motorway stops where the motorway begins", () => {
+  // The motorway from vertex 10: 500 m on.
+  const watch = new RouteWatch({ ...route, motorways: [[10, 40]] });
+  watch.add([{ id: "kids", kind: "school-zone", ...lonLat(offset(offset(start, 0, 450), 90, 30)), limit: 30 }]);
+  const [zone] = watch.zones();
+  assert.ok(Math.abs(zone.alongM - 300) < 2);
+  assert.ok(Math.abs(zone.endM - 500) < 2);
+});

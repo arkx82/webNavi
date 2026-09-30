@@ -120,7 +120,14 @@ export class RouteWatch {
     if (NOT_ON_MOTORWAYS.includes(f.kind) && this.onMotorway(p.segment)) return;
     if (f.kind === "school-zone" || f.kind === "senior-zone") {
       if (p.offM > SCHOOL_SIDE_M) return;
-      this.onRoute.push({ feature: f, alongM: Math.max(0, p.alongM - SCHOOL_HALF_M), endM: p.alongM + SCHOOL_HALF_M });
+      // Cut where a motorway begins or ends: a 어린이집 by the road onto one had its zone run 150 m up the motorway.
+      let from = Math.max(0, p.alongM - SCHOOL_HALF_M), to = p.alongM + SCHOOL_HALF_M;
+      for (const [a, b] of this.route.motorways ?? []) {
+        const starts = this.line.along[a], ends = this.line.along[Math.min(b, this.line.along.length - 1)];
+        if (starts >= p.alongM && starts < to) to = starts;
+        if (ends <= p.alongM && ends > from) from = ends;
+      }
+      this.onRoute.push({ feature: f, alongM: from, endM: to });
       this.onRoute.sort((a, b) => a.alongM - b.alongM);
       return;
     }
