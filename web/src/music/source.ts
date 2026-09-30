@@ -104,6 +104,7 @@ export function lazy(id: MusicSource["id"], label: string, load: () => Promise<M
     previous: () => real!.previous(),
     seek: (s) => real?.seek?.(s) ?? Promise.resolve(),
     shuffle: (on) => real?.shuffle?.(on) ?? Promise.resolve(),
+    like: (on) => real?.like?.(on) ?? Promise.resolve(),
     setVolume: (level) => real?.setVolume(level),
     onState(listener) { if (real) real.onState(listener); else pending.push(listener); },
     disconnect() { real?.disconnect(); },

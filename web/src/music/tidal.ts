@@ -142,7 +142,48 @@ export class TidalSource implements MusicSource {
         /* skip */
       }
 
-      // 2. TIDAL's mixes for this listener: My Daily Discovery, My Mix 1, 2, 3 … (the page the app's 홈 shows)
+      // 2. 내가 만든 재생목록
+      try {
+        const myPlaylists = (await this.v1Api(`/users/${this.userId}/playlists?limit=50`)) as {
+          items?: RawPlaylistItem[];
+        };
+        for (const p of myPlaylists?.items ?? []) {
+          out.push({
+            id: p.uuid,
+            name: String(p.title ?? p.uuid),
+            uri: p.uuid,
+            count: typeof p.numberOfTracks === "number" ? p.numberOfTracks : undefined,
+            art: imgUrl(p.image, 320),
+            group: "내가 만든 재생목록",
+          });
+        }
+      } catch {
+        /* skip */
+      }
+
+      // 3. 저장한 재생목록: others' (TIDAL's, other listeners') put in the collection
+      try {
+        const favPlaylists = (await this.v1Api(`/users/${this.userId}/favorites/playlists?limit=50`)) as {
+          items?: { item: RawPlaylistItem }[];
+        };
+        for (const i of favPlaylists?.items ?? []) {
+          const p = i.item;
+          if (!p) continue;
+          out.push({
+            id: p.uuid,
+            name: String(p.title ?? p.uuid),
+            uri: p.uuid,
+            count: typeof p.numberOfTracks === "number" ? p.numberOfTracks : undefined,
+            art: imgUrl(p.image, 320),
+            group: "저장한 재생목록 (다른 사람 · TIDAL 것)",
+          });
+        }
+      } catch {
+        /* skip */
+      }
+    }
+
+      // 4. TIDAL's mixes for this listener: My Daily Discovery, My Mix 1, 2, 3 … (the page the app's 홈 shows)
       try {
         const page = (await this.v1Api(`/pages/my_collection_my_mixes?deviceType=BROWSER`)) as {
           rows?: { modules?: { type?: string; pagedList?: { items?: RawMix[] }; items?: RawMix[] }[] }[];
@@ -166,46 +207,6 @@ export class TidalSource implements MusicSource {
         /* no mixes page: the rest still comes */
       }
 
-      // 3. 내 재생목록
-      try {
-        const myPlaylists = (await this.v1Api(`/users/${this.userId}/playlists?limit=50`)) as {
-          items?: RawPlaylistItem[];
-        };
-        for (const p of myPlaylists?.items ?? []) {
-          out.push({
-            id: p.uuid,
-            name: String(p.title ?? p.uuid),
-            uri: p.uuid,
-            count: typeof p.numberOfTracks === "number" ? p.numberOfTracks : undefined,
-            art: imgUrl(p.image, 320),
-            group: "내 재생목록",
-          });
-        }
-      } catch {
-        /* skip */
-      }
-
-      // 4. 저장한 재생목록
-      try {
-        const favPlaylists = (await this.v1Api(`/users/${this.userId}/favorites/playlists?limit=50`)) as {
-          items?: { item: RawPlaylistItem }[];
-        };
-        for (const i of favPlaylists?.items ?? []) {
-          const p = i.item;
-          if (!p) continue;
-          out.push({
-            id: p.uuid,
-            name: String(p.title ?? p.uuid),
-            uri: p.uuid,
-            count: typeof p.numberOfTracks === "number" ? p.numberOfTracks : undefined,
-            art: imgUrl(p.image, 320),
-            group: "저장한 재생목록",
-          });
-        }
-      } catch {
-        /* skip */
-      }
-    }
 
     return out;
   }
