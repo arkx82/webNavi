@@ -559,6 +559,8 @@ body.day #resume { background: #dff1fb; color: #0b4a6f; }
   display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 16px;
   background: var(--panel-solid); box-shadow: 0 4px 16px rgba(0,0,0,.45); max-width: calc(100% - 460px);
 }
+/* A song on: the dock is 320 px wide at the foot on the right, so the card is centred in what is left of it and no wider. */
+body.music-on #lanes { left: calc(var(--hud-right) + (100% - var(--hud-right) - 352px) / 2); max-width: calc(100% - var(--hud-right) - 380px); }
 #lanes .lc-head { display: flex; align-items: center; gap: 10px; white-space: nowrap; }
 #lanes .lc-arrow { display: flex; width: 40px; height: 40px; border-radius: 10px; background: #1a73e8; align-items: center; justify-content: center; }
 #lanes .lc-in { font-size: 22px; font-variant-numeric: tabular-nums; }
@@ -568,7 +570,11 @@ body.day #resume { background: #dff1fb; color: #0b4a6f; }
 #lanes .lane { width: 50px; height: 54px; display: flex; align-items: center; justify-content: center; color: var(--dim); border-right: 2px dashed var(--line); }
 #lanes .lane:last-child { border-right: 0; }
 #lanes .lane.best { color: #001018; background: var(--accent); border-radius: 8px; }
-@media (max-width: 800px) { #lanes { max-width: calc(100% - 120px); left: 50%; } }
+@media (max-width: 800px) {
+  #lanes { max-width: calc(100% - 120px); left: 50%; }
+  /* Too narrow to sit beside the dock: above it instead. */
+  body.music-on #lanes { left: 50%; max-width: calc(100% - 32px); bottom: calc(96px + env(safe-area-inset-bottom, 0px)); }
+}
 #lanes .lc-fork { display: flex; justify-content: center; }
 #lanes .lc-follow { font-size: 20px; font-weight: 800; text-shadow: 0 1px 2px rgba(0,0,0,.4); }
 #lanes .lc-fork[hidden], #lanes .lc-follow[hidden] { display: none; }

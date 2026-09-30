@@ -2081,7 +2081,10 @@ function duckBySource(level: number, overMs: number) {
 
 /** A playing (or paused mid-song) player keeps its bar; with nothing on, the dock shrinks to a button. */
 function drawDockSize() {
-  el("music-dock").classList.toggle("compact", !now.playing && !now.title);
+  const compact = !now.playing && !now.title;
+  el("music-dock").classList.toggle("compact", compact);
+  // With a song on, the dock is a wide bar at the foot on the right: the cards at the foot keep clear of it (style.css).
+  document.body.classList.toggle("music-on", !compact);
 }
 
 /** Round, soft icons for the transport (an emoji font may be missing in the car). */
