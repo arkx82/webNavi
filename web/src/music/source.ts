@@ -31,6 +31,9 @@ export interface NowPlaying {
   /** A word from the service to show under the player (a preview, a failure), and whether it is a failure. */
   note?: string;
   noteBad?: boolean;
+  /** The service's id for the track, and whether it is among the listener's likes (where the service says). */
+  trackId?: string;
+  liked?: boolean;
 }
 
 export interface MusicSource {
@@ -47,6 +50,8 @@ export interface MusicSource {
   previous(): Promise<void>;
   /** Songs in a random order from here on (a playlist's rest), or back in the list's own order. */
   shuffle?(on: boolean): Promise<void>;
+  /** The track playing put among the listener's likes, or taken out. */
+  like?(on: boolean): Promise<void>;
   /** To [seconds] into the track, where the service allows it. */
   seek?(seconds: number): Promise<void>;
   /** 0..1; called by the voice around every phrase. */

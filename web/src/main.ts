@@ -2097,6 +2097,8 @@ function drawDockSize() {
 
 /** Round, soft icons for the transport (an emoji font may be missing in the car). */
 const ICONS = {
+  heart: `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 20.5s-7.5-4.6-7.5-10A4.5 4.5 0 0 1 12 7.7a4.5 4.5 0 0 1 7.5 2.8c0 5.4-7.5 10-7.5 10z"/></svg>`,
+  heartOn: `<svg viewBox="0 0 24 24" width="20" height="20"><path d="M12 20.5s-7.5-4.6-7.5-10A4.5 4.5 0 0 1 12 7.7a4.5 4.5 0 0 1 7.5 2.8c0 5.4-7.5 10-7.5 10z" fill="currentColor"/></svg>`,
   play: `<svg viewBox="0 0 24 24" width="26" height="26"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.2-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z" fill="currentColor"/></svg>`,
   pause: `<svg viewBox="0 0 24 24" width="26" height="26"><rect x="6" y="5" width="4.2" height="14" rx="2" fill="currentColor"/><rect x="13.8" y="5" width="4.2" height="14" rx="2" fill="currentColor"/></svg>`,
   next: `<svg viewBox="0 0 24 24" width="22" height="22"><path d="M5 6.2v11.6a.9.9 0 0 0 1.4.75L14.5 13a1.2 1.2 0 0 0 0-2L6.4 5.45A.9.9 0 0 0 5 6.2z" fill="currentColor"/><rect x="16" y="5" width="3" height="14" rx="1.5" fill="currentColor"/></svg>`,
@@ -2128,7 +2130,7 @@ function showNow(state: NowPlaying) {
   nowAt = performance.now();
   // The player reports its time several times a second; the track, the art, the buttons and the media session
   // are drawn again only when one of them changed (each redraw re-made two SVGs and a MediaMetadata).
-  const key = `${state.title ?? ""}\u0001${state.artist ?? ""}\u0001${state.art ?? ""}\u0001${state.playing ? 1 : 0}\u0001${state.note ?? ""}\u0001${state.durationS ?? ""}`;
+  const key = `${state.title ?? ""}\u0001${state.artist ?? ""}\u0001${state.art ?? ""}\u0001${state.playing ? 1 : 0}\u0001${state.note ?? ""}\u0001${state.durationS ?? ""}\u0001${state.liked === undefined ? "" : state.liked ? 1 : 0}`;
   if (key === drawnNow) { drawProgress(); return; }
   drawnNow = key;
   drawDockSize();
@@ -2148,6 +2150,13 @@ function showNow(state: NowPlaying) {
   el("music-toggle").title = state.playing ? "일시정지" : "재생";
   el("mini-toggle").hidden = !has;
   el("mini-next").hidden = !has;
+  // The heart: only where the service says whether the track is liked (TIDAL), filled when it is.
+  const heart = el("music-like");
+  heart.hidden = state.liked === undefined || !music?.like;
+  el("transport-pad").hidden = !heart.hidden;
+  heart.classList.toggle("on", !!state.liked);
+  heart.setAttribute("aria-pressed", String(!!state.liked));
+  heart.innerHTML = state.liked ? ICONS.heartOn : ICONS.heart;
   tellMediaSession(state);
   drawProgress();
   if (state.note !== undefined || lastNote !== undefined) {
@@ -2329,6 +2338,7 @@ el("music-shuffle").addEventListener("click", () => {
   drawShuffle();
   void music?.shuffle?.(shuffleOn).catch(onMusicError);
 });
+el("music-like").addEventListener("click", () => void music?.like?.(!now.liked).catch(onMusicError));
 el("music-toggle").addEventListener("click", () => void music?.toggle().catch(onMusicError));
 el("music-next").addEventListener("click", () => void music?.next().catch(onMusicError));
 el("music-prev").addEventListener("click", () => void music?.previous().catch(onMusicError));

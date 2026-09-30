@@ -320,6 +320,26 @@ export function registerMusic(
     return upstream.text();
   });
 
+  // Liking: TIDAL's favorites take a form-encoded POST (trackIds), and a DELETE by track id. Only favorites/tracks.
+  app.post<{ Params: { uid: string } }>("/api/music/tidal/v1/users/:uid/favorites/tracks", async (req, reply) => {
+    let token: string, countryCode: string;
+    try { const info = await getValidToken(); token = info.token; countryCode = info.countryCode || "KR"; } catch (e) { return reply.code(401).send({ error: (e as Error).message }); }
+    const a = await fetch(`https://api.tidal.com/v1/users/${encodeURIComponent(req.params.uid)}/favorites/tracks?countryCode=${countryCode}`, {
+      method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/x-www-form-urlencoded" }, body: String(req.body ?? ""), signal: AbortSignal.timeout(10_000),
+    });
+    reply.code(a.status);
+    return a.text();
+  });
+  app.delete<{ Params: { uid: string; trackId: string } }>("/api/music/tidal/v1/users/:uid/favorites/tracks/:trackId", async (req, reply) => {
+    let token: string;
+    try { token = (await getValidToken()).token; } catch (e) { return reply.code(401).send({ error: (e as Error).message }); }
+    const a = await fetch(`https://api.tidal.com/v1/users/${encodeURIComponent(req.params.uid)}/favorites/tracks/${encodeURIComponent(req.params.trackId)}`, {
+      method: "DELETE", headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10_000),
+    });
+    reply.code(a.status);
+    return a.text();
+  });
+
   // Events proxy fallback
   app.addContentTypeParser(
     "application/x-www-form-urlencoded",

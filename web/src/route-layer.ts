@@ -42,18 +42,20 @@ export class RouteLayer {
     add({
       id: "alts-line", type: "line", source: "alts",
       layout: { "line-cap": "round", "line-join": "round" },
-      paint: { "line-color": "#8a8f99", "line-width": 6, "line-opacity": 0.7 },
+      paint: { "line-color": "#8a8f99", "line-width": 6, "line-opacity": 0.7, "line-blur": 0.6 },
     });
     add({
       id: "route-casing", type: "line", source: "route",
       layout: { "line-cap": "round", "line-join": "round" },
-      paint: { "line-color": "#0b1a33", "line-width": 12, "line-opacity": 0.9 },
+      paint: { "line-color": "#0b1a33", "line-width": 12, "line-opacity": 0.9, "line-blur": 0.8 },
     });
     add({
       id: "route-line", type: "line", source: "route",
       layout: { "line-cap": "round", "line-join": "round" },
       paint: {
         "line-width": 7,
+        // The edge feathered a little: without it the line reads as stair-stepped on a 1× screen (a shader constant, no cost).
+        "line-blur": 0.6,
         "line-color": ["match", ["get", "congestion"], 1, COLOURS[1], 2, COLOURS[2], 3, COLOURS[3], COLOURS[0]],
       },
     });

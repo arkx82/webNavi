@@ -299,7 +299,9 @@
             <button id="music-prev" class="icon round" type="button" title="이전 곡"></button>
             <button id="music-toggle" class="icon round main" type="button" title="재생"></button>
             <button id="music-next" class="icon round" type="button" title="다음 곡"></button>
-            <span class="transport-pad" aria-hidden="true"></span>
+            <!-- The heart where the service knows likes (TIDAL); else a pad the width of the shuffle button keeps the row centred. -->
+            <button id="music-like" class="icon round small" type="button" title="좋아요" aria-pressed="false" hidden></button>
+            <span id="transport-pad" class="transport-pad" aria-hidden="true"></span>
           </div>
         </div>
         <div class="hint" id="music-msg"></div>

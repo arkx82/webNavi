@@ -22,6 +22,14 @@ interface RawTrack {
   album?: { cover?: string };
 }
 
+interface RawMix {
+  id?: string;
+  title?: string;
+  subTitle?: string;
+  mixType?: string;
+  images?: { SMALL?: { url?: string }; MEDIUM?: { url?: string }; LARGE?: { url?: string } };
+}
+
 interface RawPlaylistItem {
   uuid: string;
   title?: string;
@@ -43,6 +51,8 @@ export class TidalSource implements MusicSource {
   private found: Track[] = [];
   private ordered: Track[] = [];
   private shuffled = false;
+  /** The listener's liked track ids (favorites/ids), for the heart on the player. */
+  private liked = new Set<string>();
   private failure: string | undefined;
   private failedInRow = 0;
 
@@ -110,10 +120,11 @@ export class TidalSource implements MusicSource {
   async playlists(): Promise<Playlist[]> {
     const out: Playlist[] = [];
 
-    // 1. Favorites (좋아요한 곡)
+    // 1. Favorites (좋아요한 곡), the latest liked first
     if (this.userId) {
+      void this.loadLikedIds();
       try {
-        const likedRes = (await this.v1Api(`/users/${this.userId}/favorites/tracks?limit=50`)) as {
+        const likedRes = (await this.v1Api(`/users/${this.userId}/favorites/tracks?limit=50&order=DATE&orderDirection=DESC`)) as {
           items?: { item: RawTrack }[];
         };
         const likedTracks = (likedRes?.items ?? []).map((i) => trackOf(i.item));
@@ -131,7 +142,31 @@ export class TidalSource implements MusicSource {
         /* skip */
       }
 
-      // 2. 내 재생목록
+      // 2. TIDAL's mixes for this listener: My Daily Discovery, My Mix 1, 2, 3 … (the page the app's 홈 shows)
+      try {
+        const page = (await this.v1Api(`/pages/my_collection_my_mixes?deviceType=BROWSER`)) as {
+          rows?: { modules?: { type?: string; pagedList?: { items?: RawMix[] }; items?: RawMix[] }[] }[];
+        };
+        for (const row of page?.rows ?? []) {
+          for (const m of row.modules ?? []) {
+            for (const mix of m.pagedList?.items ?? m.items ?? []) {
+              if (!mix?.id) continue;
+              out.push({
+                id: `mix:${mix.id}`,
+                name: String(mix.title ?? "믹스"),
+                uri: `mix:${mix.id}`,
+                art: mix.images?.MEDIUM?.url ?? mix.images?.SMALL?.url,
+                group: "TIDAL 추천",
+                sub: mix.subTitle,
+              });
+            }
+          }
+        }
+      } catch {
+        /* no mixes page: the rest still comes */
+      }
+
+      // 3. 내 재생목록
       try {
         const myPlaylists = (await this.v1Api(`/users/${this.userId}/playlists?limit=50`)) as {
           items?: RawPlaylistItem[];
@@ -150,7 +185,7 @@ export class TidalSource implements MusicSource {
         /* skip */
       }
 
-      // 3. 저장한 재생목록
+      // 4. 저장한 재생목록
       try {
         const favPlaylists = (await this.v1Api(`/users/${this.userId}/favorites/playlists?limit=50`)) as {
           items?: { item: RawPlaylistItem }[];
@@ -221,7 +256,12 @@ export class TidalSource implements MusicSource {
     }
 
     if (uri === "likes") {
-      const res = (await this.v1Api(`/users/${this.userId}/favorites/tracks?limit=100`)) as {
+      const res = (await this.v1Api(`/users/${this.userId}/favorites/tracks?limit=100&order=DATE&orderDirection=DESC`)) as {
+        items?: { item: RawTrack }[];
+      };
+      this.ordered = (res?.items ?? []).map((i) => trackOf(i.item));
+    } else if (uri.startsWith("mix:")) {
+      const res = (await this.v1Api(`/mixes/${encodeURIComponent(uri.slice(4))}/items?limit=100`)) as {
         items?: { item: RawTrack }[];
       };
       this.ordered = (res?.items ?? []).map((i) => trackOf(i.item));
@@ -336,9 +376,36 @@ export class TidalSource implements MusicSource {
         positionS,
         durationS,
         note,
+        trackId: t?.id,
+        liked: t ? this.liked.has(t.id) : undefined,
         noteBad: !!this.failure,
       });
     }
+  }
+
+  /** The listener's liked track ids, once (and again after a like): the heart on the player. */
+  private async loadLikedIds(): Promise<void> {
+    try {
+      const ids = (await this.v1Api(`/users/${this.userId}/favorites/ids`)) as { TRACK?: (string | number)[] };
+      this.liked = new Set((ids?.TRACK ?? []).map(String));
+      this.emitNow();
+    } catch {
+      /* no heart, then */
+    }
+  }
+
+  /** The track playing liked, or unliked: TIDAL's favorites, and the heart at once. */
+  async like(on: boolean): Promise<void> {
+    const t = this.queue[this.at];
+    if (!t || !this.userId) return;
+    const res = await fetch(`/api/music/tidal/v1/users/${this.userId}/favorites/tracks${on ? "" : `/${encodeURIComponent(t.id)}`}`, {
+      method: on ? "POST" : "DELETE",
+      headers: on ? { "Content-Type": "application/x-www-form-urlencoded" } : {},
+      body: on ? `trackIds=${encodeURIComponent(t.id)}&onArtifactNotFound=FAIL` : undefined,
+    });
+    if (!res.ok) throw new Error(`좋아요 실패 (${res.status})`);
+    if (on) this.liked.add(t.id); else this.liked.delete(t.id);
+    this.emitNow();
   }
 
   private async v1Api(path: string): Promise<unknown> {
