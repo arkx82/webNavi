@@ -1,4 +1,4 @@
-import { EVENTS, TURN_NEAR_M, turnPhrase, type Turn } from "../../server/src/phrases";
+import { EVENTS, TURN_NEAR_M, distanceWords, turnPhrase, type Turn } from "../../server/src/phrases";
 import type { Maneuver } from "./maneuver";
 
 /**
@@ -67,7 +67,7 @@ export function turnSay(maneuver: Maneuver, inM: number, speedKmh: number, said:
   if (TURNS.has(maneuver)) return { text: turnPhrase(maneuver as Turn, rung), rung };
   const short = spokenGuide(guideText);
   if (!short) return null;
-  return { text: rung <= TURN_NEAR_M ? `잠시 후 ${short}` : `${rung >= 1000 ? `${rung / 1000}킬로미터` : `${rung}미터`} 앞 ${short}`, rung };
+  return { text: rung <= TURN_NEAR_M ? `잠시 후 ${short}` : `${distanceWords(rung)} 앞 ${short}`, rung };
 }
 
 /**

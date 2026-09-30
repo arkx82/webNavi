@@ -1,3 +1,4 @@
+import { koreanNumbers } from "../../server/src/phrases";
 /**
  * The voice and the music, on one Web Audio graph, so the voice can turn
  * the music down while it speaks. Phrases are queued: two warnings a
@@ -99,6 +100,9 @@ export class Voice {
    */
   say(text: string, fallback?: string, opts: { key?: string; turn?: boolean; withinS?: number } = {}) {
     if (!this.enabled) return;
+    // No digit reaches the voice: "왕산로40길" is 왕산로사십길, "300m" 삼백미터 (the fixed phrases come so already).
+    text = koreanNumbers(text);
+    if (fallback) fallback = koreanNumbers(fallback);
     // The same thing said twice is dropped; two junctions (or two cameras) that read alike are not the same thing.
     const key = opts.key ?? text;
     const now = Date.now();

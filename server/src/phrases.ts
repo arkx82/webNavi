@@ -33,8 +33,45 @@ export const TURNS = Object.keys(TURN_WORDS) as Turn[];
 export const TURN_FAR_M = [1000, 500, 300] as const;
 export const TURN_NEAR_M = 150;
 
+/**
+ * A number as Korean reads it (sino-Korean: 삼십, 백오십, 천이백): the voice
+ * given digits sometimes reads them in English ("피프티"), so no digit
+ * reaches it. 1 before 십·백·천 is silent (백, not 일백); alone it is 일.
+ */
+export function sino(n: number): string {
+  if (!Number.isFinite(n) || n < 0) return String(n);
+  if (n === 0) return "영";
+  const whole = Math.floor(n);
+  const frac = n - whole;
+  const digits = "영일이삼사오육칠팔구";
+  const under10000 = (v: number): string => {
+    let out = "";
+    for (const [unit, name] of [[1000, "천"], [100, "백"], [10, "십"]] as const) {
+      const d = Math.floor(v / unit) % 10;
+      if (d) out += (d === 1 ? "" : digits[d]) + name;
+    }
+    const one = v % 10;
+    if (one) out += digits[one];
+    return out;
+  };
+  let words = "";
+  const man = Math.floor(whole / 10000);
+  if (man) words += (man === 1 ? "" : under10000(man)) + "만";
+  words += under10000(whole % 10000);
+  if (frac > 0) words += "점" + String(Math.round(frac * 100) / 100).slice(2).split("").map((c) => digits[Number(c)]).join("");
+  return words;
+}
+
+/** Every number in [text] read out in Korean, digits and all; "2번째" becomes "두 번째". */
+export function koreanNumbers(text: string): string {
+  const ordinal = ["", "첫", "두", "세", "네", "다섯", "여섯", "일곱", "여덟", "아홉", "열"];
+  return text
+    .replace(/(\d+)\s*번째/g, (_, d) => (Number(d) <= 10 ? `${ordinal[Number(d)]} 번째` : `${sino(Number(d))} 번째`))
+    .replace(/\d+(?:\.\d+)?/g, (d) => sino(Number(d)));
+}
+
 function distance(m: number): string {
-  return m >= 1000 ? `${m / 1000}킬로미터` : `${m}미터`;
+  return m >= 1000 ? `${sino(m / 1000)}킬로미터` : `${sino(m)}미터`;
 }
 
 /** A turn's word ("좌회전", "오른쪽 방향" …), for sentences built round a junction's name. */
@@ -100,8 +137,8 @@ export function warningPhrase(kind: Warning, rungM: number, limit?: number): str
   const from = `${distance(rungM)} 앞에서`;
   const since = `${distance(rungM)} 앞부터`;
   // "…, 제한 속도 80입니다": a sentence that ends, as the car apps say it.
-  const lim = limit && LIMITS.includes(limit) ? `, 제한 속도 ${limit}입니다` : "";
-  const schoolLim = limit && SCHOOL_LIMITS.includes(limit) ? `, 제한 속도 ${limit}입니다` : "";
+  const lim = limit && LIMITS.includes(limit) ? `, 제한 속도 ${sino(limit)}입니다` : "";
+  const schoolLim = limit && SCHOOL_LIMITS.includes(limit) ? `, 제한 속도 ${sino(limit)}입니다` : "";
   switch (kind) {
     case "speed": return `${at} 과속 단속 카메라가 있습니다${lim}`;
     case "signal": return `${at} 신호 단속 카메라가 있습니다`;

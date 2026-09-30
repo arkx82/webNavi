@@ -8,7 +8,7 @@ import type { Maneuver } from "./maneuver";
 test("a left turn is said at 300 m in town, then 잠시 후, once each", () => {
   const said = new Set<number>();
   assert.equal(turnSpeech("left", 450, 50, said, ""), null);
-  assert.equal(turnSpeech("left", 290, 50, said, ""), "300미터 앞에서 좌회전입니다");
+  assert.equal(turnSpeech("left", 290, 50, said, ""), "삼백미터 앞에서 좌회전입니다");
   assert.equal(turnSpeech("left", 250, 50, said, ""), null);
   assert.equal(turnSpeech("left", 140, 50, said, ""), "잠시 후 좌회전입니다");
   assert.equal(turnSpeech("left", 60, 50, said, ""), null);
@@ -16,8 +16,8 @@ test("a left turn is said at 300 m in town, then 잠시 후, once each", () => {
 
 test("on a fast road the turn comes at 1 km and 500 m", () => {
   const said = new Set<number>();
-  assert.equal(turnSpeech("ramp-right", 980, 100, said, ""), "1킬로미터 앞에서 오른쪽 출구입니다");
-  assert.equal(turnSpeech("ramp-right", 480, 100, said, ""), "500미터 앞에서 오른쪽 출구입니다");
+  assert.equal(turnSpeech("ramp-right", 980, 100, said, ""), "일킬로미터 앞에서 오른쪽 출구입니다");
+  assert.equal(turnSpeech("ramp-right", 480, 100, said, ""), "오백미터 앞에서 오른쪽 출구입니다");
 });
 
 test("a turn first seen close in is only 잠시 후, not every rung in one breath", () => {
@@ -31,7 +31,7 @@ test("a turn first known well inside a far rung waits for 잠시 후 rather than
   assert.equal(turnSpeech("right", 171, 90, said, ""), null); // not "500미터 앞" at 171 m
   assert.equal(turnSpeech("right", 160, 90, said, ""), null);
   assert.equal(turnSpeech("right", 145, 90, said, ""), "잠시 후 우회전입니다");
-  assert.equal(turnSpeech("right", 380, 90, new Set(), ""), "500미터 앞에서 우회전입니다"); // 76 %: close enough
+  assert.equal(turnSpeech("right", 380, 90, new Set(), ""), "오백미터 앞에서 우회전입니다"); // 76 %: close enough
 });
 
 test("straight on and the arrival are said once, close in", () => {
@@ -89,8 +89,8 @@ test("a motorway junction's name and way come from any provider's text", async (
   assert.deepEqual(junctionOf({ text: "신갈분기점에서 '원주, 인천' 방면으로 오른쪽 방향" }), { name: "신갈분기점", toward: "원주" });
   assert.deepEqual(junctionOf({ text: "인천 원주 방면으로 오른쪽 고속도로 진입", name: "신갈JC" }), { name: "신갈JC", toward: "인천" });
   assert.equal(junctionOf({ text: "우회전" }), null);
-  assert.equal(namedTurnPhrase("slight-left", 1000, { name: "신갈JC", toward: "원주" }), "1킬로미터 앞 신갈JC에서 원주 방면, 왼쪽 방향입니다");
-  assert.equal(namedTurnPhrase("ramp-right", 500, { toward: "용인" }), "500미터 앞 용인 방면, 오른쪽 출구입니다");
+  assert.equal(namedTurnPhrase("slight-left", 1000, { name: "신갈JC", toward: "원주" }), "일킬로미터 앞 신갈JC에서 원주 방면, 왼쪽 방향입니다");
+  assert.equal(namedTurnPhrase("ramp-right", 500, { toward: "용인" }), "오백미터 앞 용인 방면, 오른쪽 출구입니다");
   assert.equal(laneHint("ramp-right"), "오른쪽 차로로 미리 이동하세요");
   assert.equal(laneHint("straight"), null);
   // An entrance at 1 km along a 3 km road: the merge is placed a ramp's length on, and said from 150 m before it.
@@ -105,13 +105,13 @@ test("a motorway junction's name and way come from any provider's text", async (
 
 test("a speed that dips across 70 km/h does not bring the other set's rungs: the set first said from is kept", () => {
   const said = new Set<number>();
-  assert.equal(turnSpeech("left", 980, 75, said, ""), "1킬로미터 앞에서 좌회전입니다");
-  assert.equal(turnSpeech("left", 480, 72, said, ""), "500미터 앞에서 좌회전입니다");
+  assert.equal(turnSpeech("left", 980, 75, said, ""), "일킬로미터 앞에서 좌회전입니다");
+  assert.equal(turnSpeech("left", 480, 72, said, ""), "오백미터 앞에서 좌회전입니다");
   assert.equal(turnSpeech("left", 290, 65, said, ""), null); // not "300미터 앞" on top of "500미터 앞"
   assert.equal(turnSpeech("left", 140, 65, said, ""), "잠시 후 좌회전입니다");
   // And from town: said at 300 m, a burst past 70 km/h adds no "500미터 앞".
   const town = new Set<number>();
-  assert.equal(turnSpeech("right", 290, 60, town, ""), "300미터 앞에서 우회전입니다");
+  assert.equal(turnSpeech("right", 290, 60, town, ""), "삼백미터 앞에서 우회전입니다");
   assert.equal(turnSpeech("right", 280, 75, town, ""), null);
   assert.equal(turnSpeech("right", 140, 75, town, ""), "잠시 후 우회전입니다");
   assert.equal(turnSpeech("right", 100, 60, town, ""), null);

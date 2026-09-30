@@ -16,10 +16,10 @@ test("wavOf writes a 44-byte PCM header round the samples", () => {
 
 test("the fixed phrases are the car apps' sentences, a closed set", () => {
   const phrases = fixedPhrases();
-  assert.ok(phrases.includes("600미터 앞에 과속 단속 카메라가 있습니다, 제한 속도 50입니다"));
-  assert.ok(phrases.includes("300미터 앞에서 좌회전입니다"));
+  assert.ok(phrases.includes("육백미터 앞에 과속 단속 카메라가 있습니다, 제한 속도 오십입니다"));
+  assert.ok(phrases.includes("삼백미터 앞에서 좌회전입니다"));
   assert.ok(phrases.includes("잠시 후 오른쪽 방향입니다"));
-  assert.ok(phrases.includes("1킬로미터 앞에서 오른쪽 출구입니다"));
+  assert.ok(phrases.includes("일킬로미터 앞에서 오른쪽 출구입니다"));
   assert.ok(phrases.length > 90 && phrases.length < 200, `${phrases.length}`);
 });
 
@@ -117,4 +117,26 @@ test("the start-up repair leaves a sentence alone that was already made again on
   assert.ok(left.includes("done.wav"), left.join());
   assert.ok(!left.includes("unknown.wav"));
   assert.ok(left.includes(`${speaker.fileFor("아직인 문장").split("/").pop()}`));
+});
+
+test("numbers are read as Korean says them, never left as digits for the voice to read in English", async () => {
+  const { koreanNumbers, sino } = await import("./phrases.js");
+  assert.equal(sino(30), "삼십");
+  assert.equal(sino(50), "오십");
+  assert.equal(sino(100), "백");
+  assert.equal(sino(110), "백십");
+  assert.equal(sino(150), "백오십");
+  assert.equal(sino(600), "육백");
+  assert.equal(sino(1), "일");
+  assert.equal(sino(1000), "천");
+  assert.equal(sino(1500), "천오백");
+  assert.equal(sino(12000), "만이천");
+  assert.equal(sino(1.5), "일점오");
+  assert.equal(koreanNumbers("1킬로미터 앞 신갈JC에서 원주 방면"), "일킬로미터 앞 신갈JC에서 원주 방면");
+  assert.equal(koreanNumbers("왕산로40길 방면 우회전, 300m"), "왕산로사십길 방면 우회전, 삼백m");
+  assert.equal(koreanNumbers("회전교차로에서 2번째 출구"), "회전교차로에서 두 번째 출구");
+  assert.equal(koreanNumbers("제2경인고속도로"), "제이경인고속도로");
+  // Every fixed phrase is already digit-free: the cache never sees a sentence twice.
+  const { fixedPhrases } = await import("./phrases.js");
+  for (const p of fixedPhrases()) assert.equal(p, koreanNumbers(p), p);
 });

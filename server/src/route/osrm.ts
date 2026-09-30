@@ -1,5 +1,6 @@
 import { askJson, type Congestion, type LonLat, type Route, type RouteProvider, type RouteRequest, type Segment } from "./types.js";
 import type { LinkBook } from "../road/traffic.js";
+import { koreanNumbers } from "../phrases.js";
 
 /**
  * OSRM's public demo server: OpenStreetMap roads, no key, no traffic. Not
@@ -128,7 +129,7 @@ export function korean(type: string, modifier?: string, exit?: number, road?: st
   };
   switch (type) {
     case "arrive": return "목적지 도착";
-    case "roundabout": case "rotary": return `회전교차로에서 ${exit ?? ""}번째 출구`;
+    case "roundabout": case "rotary": return exit ? `회전교차로에서 ${koreanNumbers(`${exit}번째`)} 출구` : "회전교차로 출구";
     case "merge": return `${onto}합류`;
     case "on ramp": return `${onto}진입`;
     case "off ramp": return `${onto}${modifier?.includes("left") ? "왼쪽" : "오른쪽"} 출구`;
