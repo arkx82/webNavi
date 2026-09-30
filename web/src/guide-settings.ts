@@ -174,7 +174,7 @@ const ROWS: Row[] = [
   { key: "voice", label: "음성 안내", kind: "toggle" },
   { key: "voiceName", label: "목소리", kind: "voices" },
   { key: "voice", label: "들어보기", kind: "listen", sub: "지금 목소리로 안내 문장 두 개를 바로 들려줍니다" },
-  { key: "ducking", label: "안내 중 음악 줄이기", kind: "choice", options: [["soft", "부드럽게"], ["quick", "바로"], ["off", "끔"]], sub: "음성이 나오는 동안 이 페이지의 음악을 30 %로. 부드럽게: 0.4초에 걸쳐 낮추고 1초에 걸쳐 되돌림" },
+  { key: "ducking", label: "안내 중 음악 줄이기", kind: "choice", options: [["soft", "부드럽게"], ["quick", "바로"], ["off", "끔"]], sub: "음성이 나오는 동안 이 페이지의 음악을 50 %로. 부드럽게: 0.4초에 걸쳐 낮추고 1초에 걸쳐 되돌림" },
   { key: "volume", label: "안내 음량", kind: "slider" },
   { key: "turns", label: "회전 안내", kind: "toggle", sub: "300미터 앞, 잠시 후 (고속에서는 1킬로미터·500미터)" },
   { key: "junctionNames", label: "IC · JC 이름", kind: "toggle", sub: "고속도로에서 \"1킬로미터 앞 신갈JC에서 원주 방면\" (이름마다 처음 한 번 음성 합성)" },

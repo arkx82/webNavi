@@ -53,7 +53,7 @@ export class Voice {
   /** The voice asked of the server (안내 설정 → 목소리); null is the server's own. */
   voiceName: string | null = null;
   /** How far the music drops while the voice speaks. */
-  duckTo = 0.3;
+  duckTo = 0.5;
   /** 안내 중 음악 줄이기: faded (soft), at once (quick), or not at all (off) — 안내 설정. */
   ducking: "soft" | "quick" | "off" = "soft";
   /** Players outside the graph (a TIDAL <audio>) told the level to go to and how long to take getting there. */
