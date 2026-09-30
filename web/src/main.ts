@@ -306,11 +306,11 @@ function followCar(at: LonLat) {
   const close = !!closeup;
   const canvas = map.getCanvas();
   let want = close ? { x: carSpot(0).x, y: canvas.clientHeight * CLOSEUP_CAR_AT } : carSpot(v.carLow);
-  // A card at the foot of the map (lanes, the fork): the car kept clear above it.
+  // The lane card at the top of the map: the car kept clear below it.
   const card = el("lanes");
   if (!card.hidden) {
-    const top = card.getBoundingClientRect().top - canvas.getBoundingClientRect().top;
-    want = { x: want.x, y: Math.min(want.y, top - CAR_ABOVE_CARD_PX) };
+    const bottom = card.getBoundingClientRect().bottom - canvas.getBoundingClientRect().top;
+    want = { x: want.x, y: Math.max(want.y, bottom + CAR_BELOW_CARD_PX) };
   }
   spot = spot ? { x: approach(spot.x, want.x, k(0.08)), y: approach(spot.y, want.y, k(0.08)) } : want;
   const before = map.getCenter();
@@ -355,8 +355,8 @@ function centreFor(at: LonLat, to: { x: number; y: number }, camera: { bearing: 
 }
 
 /** The middle of the map's free part — right of the trip panel, left of whatever holds the right side — lowered by [carLow]. */
-/** How far above the card at the foot of the map the car is kept. */
-const CAR_ABOVE_CARD_PX = 70;
+/** How far below the lane card at the top of the map the car is kept. */
+const CAR_BELOW_CARD_PX = 90;
 
 /** The junction shown close up now, or null: closeup.ts holds it a little past the junction, and a new route resets it (prepareHighway). */
 let closeup: Closeup | null = null;

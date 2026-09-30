@@ -245,11 +245,14 @@ body.side-open #dest-open, body.side-open #dest-panel { left: calc(var(--hud-rig
 }
 body.side-open #base-menu { right: 440px; }
 /* ---- 오른쪽 위 알림 카드 (notes.ts) ---- */
+/* What is coming (an accident spot, an incident, a rest area …): above the music dock at the foot on the right, the
+   newest nearest the dock, older ones stacking up from it. */
 #notes {
-  position: absolute; top: 16px; right: 88px; z-index: 2; width: 300px; max-width: calc(100% - 440px);
-  display: flex; flex-direction: column; gap: 8px; pointer-events: none; transition: right 0.2s;
+  position: absolute; bottom: 92px; right: 16px; z-index: 2; width: 320px; max-width: calc(100% - 440px);
+  display: flex; flex-direction: column-reverse; gap: 8px; pointer-events: none; transition: right 0.2s, bottom 0.2s;
 }
-body.side-open #notes { right: 440px; }
+body.music-on #notes { bottom: 108px; }
+body.side-open #notes { right: 368px; }
 .note {
   padding: 10px 12px; border-radius: 14px; background: var(--panel-solid);
   box-shadow: 0 2px 8px rgba(0,0,0,.35); border-left: 5px solid var(--tone, var(--accent));
@@ -554,13 +557,14 @@ body.day #resume { background: #dff1fb; color: #0b4a6f; }
 /* 밤: the map's ground dimmed, so the screen does not glare in the dark (MapLibre's own layers — the route, the pins — stay bright). */
 
 /* 차로 안내: a card at the foot of the map, the turn and the lanes to be in (lanes-strip.ts). */
+/* The lane and fork card: at the top middle of the map, the wide empty part while driving (the 목적지 button is there only when not). */
 #lanes {
-  position: absolute; bottom: calc(8px + env(safe-area-inset-bottom, 0px)); left: calc(var(--hud-right) + (100% - var(--hud-right) - 88px) / 2); transform: translateX(-50%); z-index: 2;
+  position: absolute; top: 16px; left: calc(var(--hud-right) + (100% - var(--hud-right) - 88px) / 2); transform: translateX(-50%); z-index: 2;
   display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 16px;
   background: var(--panel-solid); box-shadow: 0 4px 16px rgba(0,0,0,.45); max-width: calc(100% - 460px);
 }
-/* A song on: the dock is 320 px wide at the foot on the right, so the card is centred in what is left of it and no wider. */
-body.music-on #lanes { left: calc(var(--hud-right) + (100% - var(--hud-right) - 352px) / 2); max-width: calc(100% - var(--hud-right) - 380px); }
+/* A side sheet open: centred in what is left of it. */
+body.side-open #lanes { left: calc(var(--hud-right) + (100% - var(--hud-right) - 440px) / 2); max-width: calc(100% - var(--hud-right) - 470px); }
 #lanes .lc-head { display: flex; align-items: center; gap: 10px; white-space: nowrap; }
 #lanes .lc-arrow { display: flex; width: 40px; height: 40px; border-radius: 10px; background: #1a73e8; align-items: center; justify-content: center; }
 #lanes .lc-in { font-size: 22px; font-variant-numeric: tabular-nums; }
@@ -571,9 +575,7 @@ body.music-on #lanes { left: calc(var(--hud-right) + (100% - var(--hud-right) - 
 #lanes .lane:last-child { border-right: 0; }
 #lanes .lane.best { color: #001018; background: var(--accent); border-radius: 8px; }
 @media (max-width: 800px) {
-  #lanes { max-width: calc(100% - 120px); left: 50%; }
-  /* Too narrow to sit beside the dock: above it instead. */
-  body.music-on #lanes { left: 50%; max-width: calc(100% - 32px); bottom: calc(96px + env(safe-area-inset-bottom, 0px)); }
+  #lanes, body.side-open #lanes { max-width: calc(100% - 120px); left: 50%; }
 }
 #lanes .lc-fork { display: flex; justify-content: center; }
 #lanes .lc-follow { font-size: 20px; font-weight: 800; text-shadow: 0 1px 2px rgba(0,0,0,.4); }
