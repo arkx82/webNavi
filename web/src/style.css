@@ -615,3 +615,6 @@ body.layout-mini #sim-bar button.icon { width: 32px; height: 32px; min-height: 3
 
 /* ---- 화면 크기: every panel, card and button over the map zoomed by --ui; the map, the ground and the shade untouched ---- */
 body > *:not(#map):not(#ground):not(#night-shade) { zoom: var(--ui); }
+
+/* ---- 빠르게 (지도 해상도): no blur behind any panel — the blur is GPU work over a ground that redraws every frame ---- */
+body.fast * { backdrop-filter: none !important; }

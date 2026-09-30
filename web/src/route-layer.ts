@@ -42,20 +42,20 @@ export class RouteLayer {
     add({
       id: "alts-line", type: "line", source: "alts",
       layout: { "line-cap": "round", "line-join": "round" },
-      paint: { "line-color": "#8a8f99", "line-width": 6, "line-opacity": 0.7, "line-blur": 0.6 },
+      paint: { "line-color": "#8a8f99", "line-width": ["interpolate", ["linear"], ["zoom"], 11, 3, 15, 6, 18, 8], "line-opacity": 0.7, "line-blur": 0.3 },
     });
     add({
       id: "route-casing", type: "line", source: "route",
       layout: { "line-cap": "round", "line-join": "round" },
-      paint: { "line-color": "#0b1a33", "line-width": 12, "line-opacity": 0.9, "line-blur": 0.8 },
+      paint: { "line-color": "#0b1a33", "line-width": ["interpolate", ["linear"], ["zoom"], 11, 8, 15, 12, 18, 14], "line-opacity": 0.9, "line-blur": 0.4 },
     });
     add({
       id: "route-line", type: "line", source: "route",
       layout: { "line-cap": "round", "line-join": "round" },
       paint: {
-        "line-width": 7,
-        // The edge feathered a little: without it the line reads as stair-stepped on a 1× screen (a shader constant, no cost).
-        "line-blur": 0.6,
+        // Narrower drawn back, wider close in; the edge feathered slightly (a shader constant, no cost) on top of the canvas's own antialiasing.
+        "line-width": ["interpolate", ["linear"], ["zoom"], 11, 4, 15, 7, 18, 9],
+        "line-blur": 0.3,
         "line-color": ["match", ["get", "congestion"], 1, COLOURS[1], 2, COLOURS[2], 3, COLOURS[3], COLOURS[0]],
       },
     });

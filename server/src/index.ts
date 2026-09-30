@@ -32,6 +32,7 @@ import { Db } from "./db.js";
 import { registerUsers } from "./users.js";
 import { RefusedUrl, fetchPublic, registerGuard } from "./guard.js";
 import { registerHdmap } from "./hdmap.js";
+import fastifyCompress from "@fastify/compress";
 import { Traffic } from "./road/traffic.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -39,6 +40,8 @@ const root = resolve(here, "..");
 const env = process.env;
 
 const app = Fastify({ logger: { level: env.LOG_LEVEL ?? "info" } });
+// Answers gzipped where the browser takes it: the features round the car, a route, a playlist run to hundreds of KB on the car's link.
+await app.register(fastifyCompress, { global: true, threshold: 1024, encodings: ["gzip", "deflate"] });
 
 // The keys live here and nowhere else: the car's browser only ever sees
 // this server. They are read at every call, so a key typed on /admin is

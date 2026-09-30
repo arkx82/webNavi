@@ -87,6 +87,10 @@ export class Tracker {
   private glideTo: LonLat | null = null;
   private glideStart = 0;
   private glideS = 1;
+  /** On the road, the glide's ends as metres along it, so a bend is followed round, not cut across. */
+  private glideFromAlong: number | null = null;
+  private glideToAlong: number | null = null;
+  private shownAlong: number | null = null;
 
   private speedMps = 0;
   private reckonAlong = 0;
@@ -101,6 +105,7 @@ export class Tracker {
 
   setRoute(route: Route | null) {
     this.route = route;
+    this.glideFromAlong = this.glideToAlong = this.shownAlong = null;
     this.line = route && route.path.length > 1 ? new Line(route.path) : null;
     this.guides = [];
     this.lastProj = null;
@@ -117,6 +122,7 @@ export class Tracker {
 
   /** Forgets where the car was drawn (a pretend drive over): the next fix places it afresh, no glide from the pretend place. */
   forget() {
+    this.glideFromAlong = this.glideToAlong = this.shownAlong = null;
     this.lastFix = null;
     this.lastProj = null;
     this.shownAt = null;
@@ -158,11 +164,16 @@ export class Tracker {
       const aligned = fix.course == null || angleBetween(fix.course, proj.bearing) < 60 || (fix.speed ?? 0) < 2;
       if (proj.offM <= OFF_M && aligned) {
         target = proj.at;
+        // The glide from where the car is drawn along the road to this fix's place on it (a first fix, or one
+        // after being off the road, starts here).
+        this.glideFromAlong = this.shownAlong ?? proj.alongM;
+        this.glideToAlong = proj.alongM;
         bearing = this.speedMps > 2 ? proj.bearing : bearing;
         this.offSince = null;
         this.farSince = null;
         this.declaredOff = false;
       } else {
+        this.glideFromAlong = this.glideToAlong = this.shownAlong = null;
         this.offSince ??= now;
         const far = proj.offM > OFF_FAR_M && fix.accM <= OFF_FAR_ACC_M;
         this.farSince = far ? (this.farSince ?? now) : null;
@@ -221,10 +232,19 @@ export class Tracker {
       this.shownBearing = reckoned.bearing;
     } else {
       const t = Math.min(1, (now - this.glideStart) / (this.glideS * 1000));
-      this.shownAt = [
-        this.glideFrom[0] + (this.glideTo[0] - this.glideFrom[0]) * t,
-        this.glideFrom[1] + (this.glideTo[1] - this.glideFrom[1]) * t,
-      ];
+      if (this.line && this.glideFromAlong != null && this.glideToAlong != null && this.glideToAlong >= this.glideFromAlong) {
+        // Along the road between the two fixes: round a ramp's curve, not across it.
+        const along = this.glideFromAlong + (this.glideToAlong - this.glideFromAlong) * t;
+        const placed = this.line.place(along);
+        this.shownAt = placed.at;
+        this.shownAlong = along;
+        if (this.speedMps > 2) this.shownBearing = placed.bearing;
+      } else {
+        this.shownAt = [
+          this.glideFrom[0] + (this.glideTo[0] - this.glideFrom[0]) * t,
+          this.glideFrom[1] + (this.glideTo[1] - this.glideFrom[1]) * t,
+        ];
+      }
       if (this.glideS === SNAP_S && t < 1) mode = "snapping";
     }
 

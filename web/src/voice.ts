@@ -184,6 +184,12 @@ export class Voice {
         text = item.fallback;
         buffer = await this.buffer(text);
       }
+      // Its moment may have passed while the sound was fetched (a cache miss on a slow link): then it stays unsaid.
+      if (Date.now() > item.until) {
+        this.onLate(text, (Date.now() - item.at) / 1000);
+        void this.next();
+        return;
+      }
       await this.unlock();
       this.duck(true);
       const began = this.context.currentTime;

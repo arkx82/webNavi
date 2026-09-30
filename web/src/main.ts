@@ -47,9 +47,16 @@ import type { Guide, Health, LonLat, Place, Provider, Route } from "./types";
 // 지도 해상도 "빠르게": both maps (TMAP's under, MapLibre's over) draw at one pixel per CSS pixel — a quarter of
 // the work on a 2× screen, for a car computer that cannot keep up. Read before either map is made; a change asks
 // for a reload (the maps size their canvases once).
-if (loadGuide().mapDpr === "fast") {
-  try { Object.defineProperty(window, "devicePixelRatio", { get: () => 1, configurable: true }); } catch { /* read-only here: the maps draw sharp */ }
+const dprMode = loadGuide().mapDpr;
+const realDpr = window.devicePixelRatio || 1;
+/** The pixels per CSS pixel both maps draw at: as the screen is, 1.5 at most, or 1. */
+const mapPixelRatio = dprMode === "fast" ? 1 : dprMode === "balanced" ? Math.min(realDpr, 1.5) : Math.min(realDpr, 2);
+if (mapPixelRatio !== realDpr) {
+  // TMAP's map reads window.devicePixelRatio itself; MapLibre takes pixelRatio below.
+  try { Object.defineProperty(window, "devicePixelRatio", { get: () => mapPixelRatio, configurable: true }); } catch { /* read-only here: TMAP draws sharp */ }
 }
+// 빠르게: the blur behind every panel goes too (style.css) — a blur over a ground that redraws each frame is GPU work each frame.
+document.body.classList.toggle("fast", dprMode === "fast");
 const HOME: LonLat = [127.0276, 37.4979];
 /** ?demo: a made-up trip fills the panel, for judging the layout at a desk. */
 const demo = new URLSearchParams(location.search).has("demo");
@@ -92,7 +99,12 @@ function openMap(): maplibregl.Map {
   try {
     // Where the car last was, before the first fix comes (resume.ts), else the default.
     // fadeDuration 0: no label cross-fade on every move (a cost each frame while following); no world copies to draw.
-    const m = new maplibregl.Map({ container: "map", style, center: loadLast() ?? HOME, zoom: 15, pitch: 45, attributionControl: false, fadeDuration: 0, renderWorldCopies: false, pitchWithRotate: false });
+    // antialias: the multisampled canvas takes the stair-steps off the lines and the lanes in the tilted view; off in
+    // 빠르게, where the pixels are already few.
+    const m = new maplibregl.Map({
+      container: "map", style, center: loadLast() ?? HOME, zoom: 15, pitch: 45, attributionControl: false,
+      fadeDuration: 0, renderWorldCopies: false, pitchWithRotate: false, pixelRatio: mapPixelRatio, canvasContextAttributes: { antialias: dprMode !== "fast" },
+    });
     // A style that fails, or one that simply never comes (a dead link
     // hangs rather than refuses), gives way to the plain ground so the
     // rest of the page can go on; the log says so.
@@ -304,17 +316,12 @@ function followCar(at: LonLat) {
   const k = (share: number) => 1 - Math.pow(1 - share, frames);
   // Close up on a junction: the car low on the screen, tilted, drawn back to see the fork (closeup.ts).
   const close = !!closeup;
-  const canvas = map.getCanvas();
-  let want = close ? { x: carSpot(0).x, y: canvas.clientHeight * CLOSEUP_CAR_AT } : carSpot(v.carLow);
+  let want = close ? { x: carSpot(0).x, y: layout.height * CLOSEUP_CAR_AT } : carSpot(v.carLow);
   // The lane card at the top of the map: the car kept clear below it.
-  const card = el("lanes");
-  if (!card.hidden) {
-    const bottom = card.getBoundingClientRect().bottom - canvas.getBoundingClientRect().top;
-    want = { x: want.x, y: Math.max(want.y, bottom + CAR_BELOW_CARD_PX) };
-  }
+  if (layout.lanesBottom > 0) want = { x: want.x, y: Math.max(want.y, layout.lanesBottom + CAR_BELOW_CARD_PX) };
   spot = spot ? { x: approach(spot.x, want.x, k(0.08)), y: approach(spot.y, want.y, k(0.08)) } : want;
   const before = map.getCenter();
-  const zoomTo = close ? zoomToSee(Math.max(0, closeup!.inM), at[1], canvas.clientHeight * (CLOSEUP_CAR_AT - 0.12)) : Math.max(10, Math.min(20, speedZoom() + zoomBias));
+  const zoomTo = close ? zoomToSee(Math.max(0, closeup!.inM), at[1], layout.height * (CLOSEUP_CAR_AT - 0.12)) : Math.max(10, Math.min(20, speedZoom() + zoomBias));
   const camera = {
     bearing: tracker.cameraBearing(map.getBearing(), k(0.15)),
     pitch: approach(map.getPitch(), close ? CLOSEUP_PITCH : v.pitch, k(close ? 0.06 : 0.12)),
@@ -377,14 +384,30 @@ function showCloseup(_c: Closeup | null) {
   el("closeup").hidden = true;
 }
 
+/**
+ * The screen's layout as the frame loop needs it — the panel's right edge, the destination window's, the lane
+ * card's bottom, the canvas — measured when something changes size (a ResizeObserver), not sixty times a second:
+ * reading a box mid-frame after the frame's own writes makes the browser lay the page out again there and then.
+ */
+const layout = { hudRight: 0, destRight: 0, lanesBottom: 0, width: 0, height: 0 };
+function measure() {
+  const canvas = map.getCanvas().getBoundingClientRect();
+  layout.width = canvas.width;
+  layout.height = canvas.height;
+  layout.hudRight = el("hud").getBoundingClientRect().right;
+  const dest = el("dest-panel");
+  layout.destRight = dest.hidden ? 0 : dest.getBoundingClientRect().right;
+  const card = el("lanes");
+  layout.lanesBottom = card.hidden ? 0 : card.getBoundingClientRect().bottom - canvas.top;
+}
+const measuring = new ResizeObserver(measure);
+for (const id of ["hud", "dest-panel", "lanes", "map"]) measuring.observe(el(id));
 function carSpot(carLow = 0) {
-  const canvas = map.getCanvas();
-  const hud = el("hud").getBoundingClientRect();
   // The free part of the map: right of the top-left card, and of the destination window when it is up.
-  const left = Math.max(hud.right, el("dest-panel").hidden ? 0 : el("dest-panel").getBoundingClientRect().right);
+  const left = Math.max(layout.hudRight, layout.destRight);
   const side = !el("nearby").hidden || !el("guide").hidden || !el("weather").hidden || !el("music-dock").classList.contains("closed");
-  const right = canvas.clientWidth - (side ? 356 : 76);
-  return { x: (left + right) / 2, y: (canvas.clientHeight * (1 + carLow)) / 2 };
+  const right = layout.width - (side ? 356 : 76);
+  return { x: (left + right) / 2, y: (layout.height * (1 + carLow)) / 2 };
 }
 
 function setFollow(on: boolean) {
