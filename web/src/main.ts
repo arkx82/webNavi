@@ -2141,13 +2141,29 @@ function tellMediaSession(state: NowPlaying) {
   if (!ms || typeof MediaMetadata === "undefined") return;
   if (state.title) ms.metadata = new MediaMetadata({ title: state.title, artist: state.artist ?? "", artwork: state.art ? [{ src: state.art, sizes: "300x300" }] : [] });
   ms.playbackState = state.playing ? "playing" : "paused";
+  if (typeof ms.setPositionState === "function" && typeof state.durationS === "number" && state.durationS > 0) {
+    try {
+      ms.setPositionState({
+        duration: state.durationS,
+        playbackRate: 1,
+        position: Math.min(Math.max(0, state.positionS ?? 0), state.durationS),
+      });
+    } catch {
+      /* not supported or invalid state */
+    }
+  }
   if (sessionWired) return;
   sessionWired = true;
-  const on = (action: MediaSessionAction, fn: () => void) => { try { ms.setActionHandler(action, fn); } catch { /* not this one */ } };
+  const on = (action: MediaSessionAction, fn: (details: MediaSessionActionDetails) => void) => { try { ms.setActionHandler(action, fn); } catch { /* not this one */ } };
   on("play", () => void music?.toggle().catch(onMusicError));
   on("pause", () => void music?.toggle().catch(onMusicError));
   on("nexttrack", () => void music?.next().catch(onMusicError));
   on("previoustrack", () => void music?.previous().catch(onMusicError));
+  on("seekto", (details) => {
+    if (typeof details.seekTime === "number") {
+      void music?.seek?.(details.seekTime).catch(onMusicError);
+    }
+  });
 }
 
 const clock = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, "0")}`;

@@ -40,6 +40,8 @@ export interface GuideSettings {
   endOnArrive: boolean;
   /** 지도 해상도: as the screen is, or one pixel per CSS pixel for a slow car computer (main.ts, before the maps are made). */
   mapDpr: "auto" | "fast";
+  /** 안내 중 음악 줄이기: faded down and up round the voice, dropped at once, or left alone (voice.ts). */
+  ducking: "soft" | "quick" | "off";
   /** Traffic lights on the map: only those on the route ahead while driving, every one, or none. */
   lightsOnMap: "route" | "all" | "off";
   /** The cameras on the map, the same way. */
@@ -80,7 +82,7 @@ export interface GuideSettings {
 export type Mode = "voice" | "show" | "off";
 
 export const DEFAULTS: GuideSettings = {
-  voice: true, voiceName: null, volume: 1, turns: true, junctionNames: true, laneHints: true, merges: true, closeups: true, sendLogs: true, layout: "classic", hdLanes: true, laneGuide: true, colorLines: true, theme: "auto", nightCity: false, endOnArrive: true, mapDpr: "auto", lightsOnMap: "route", camerasOnMap: "route", nextLight: true, flashSignals: true,
+  voice: true, voiceName: null, volume: 1, turns: true, junctionNames: true, laneHints: true, merges: true, closeups: true, sendLogs: true, layout: "classic", hdLanes: true, laneGuide: true, colorLines: true, theme: "auto", nightCity: false, endOnArrive: true, mapDpr: "auto", ducking: "soft", lightsOnMap: "route", camerasOnMap: "route", nextLight: true, flashSignals: true,
   cameras: true, cameraFromM: 600, sections: true, schools: true,
   bumps: "show", curves: "show", accidents: "show", bikeAccidents: "show",
   overspeed: true, overspeedBy: 0,
@@ -172,6 +174,7 @@ const ROWS: Row[] = [
   { key: "voice", label: "음성 안내", kind: "toggle" },
   { key: "voiceName", label: "목소리", kind: "voices" },
   { key: "voice", label: "들어보기", kind: "listen", sub: "지금 목소리로 안내 문장 두 개를 바로 들려줍니다" },
+  { key: "ducking", label: "안내 중 음악 줄이기", kind: "choice", options: [["soft", "부드럽게"], ["quick", "바로"], ["off", "끔"]], sub: "음성이 나오는 동안 이 페이지의 음악을 30 %로. 부드럽게: 0.4초에 걸쳐 낮추고 1초에 걸쳐 되돌림" },
   { key: "volume", label: "안내 음량", kind: "slider" },
   { key: "turns", label: "회전 안내", kind: "toggle", sub: "300미터 앞, 잠시 후 (고속에서는 1킬로미터·500미터)" },
   { key: "junctionNames", label: "IC · JC 이름", kind: "toggle", sub: "고속도로에서 \"1킬로미터 앞 신갈JC에서 원주 방면\" (이름마다 처음 한 번 음성 합성)" },

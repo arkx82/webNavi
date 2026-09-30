@@ -295,6 +295,11 @@ export class TidalSource implements MusicSource {
   }
 
   async previous(): Promise<void> {
+    if (this.audio.currentTime > 3) {
+      this.audio.currentTime = 0;
+      this.emitNow();
+      return;
+    }
     this.at = Math.max(-1, this.at - 2);
     await this.advance();
   }
