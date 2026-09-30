@@ -231,8 +231,6 @@ button.ctl.on small { color: #000; }
 #locate { background: #fff; color: #1a73e8; }
 #locate.on { background: var(--panel); color: var(--accent); }
 body.side-open #controls { right: 368px; }
-/* The 목적지 button and window keep to the middle of what is free of the side sheet too. */
-body.side-open #dest-open, body.side-open #dest-panel { left: calc(var(--hud-right) + (100% - var(--hud-right) - 440px) / 2); }
 #base-menu {
   position: absolute; right: 88px; z-index: 3; width: 260px; padding: 10px; box-sizing: border-box;
   border-radius: 14px; background: var(--panel); backdrop-filter: blur(8px); box-shadow: 0 4px 16px rgba(0,0,0,.45);
@@ -512,25 +510,26 @@ button.ctl.wx { position: relative; }
 /* The destination window: down from the top middle of the map, so the search box stays above the keyboard
    the car's browser raises from the foot of the screen (bottom-left, it was hidden behind it). */
 #dest-panel {
-  position: absolute; top: 16px; left: calc(var(--hud-right) + (100% - var(--hud-right) - 88px) / 2); transform: translateX(-50%);
+  position: absolute; top: 16px; left: var(--hud-right);
   z-index: 3; width: 380px; max-width: calc(100% - var(--hud-right) - 100px); max-height: calc(100% - 32px);
   box-sizing: border-box; padding: 14px; border-radius: 14px; background: var(--panel); backdrop-filter: blur(8px);
   box-shadow: 0 6px 24px rgba(0,0,0,.45); display: flex; flex-direction: column; gap: 10px; overflow: auto;
   animation: drop .18s ease-out;
 }
-@keyframes drop { from { transform: translate(-50%, -24px); opacity: 0; } to { transform: translateX(-50%); opacity: 1; } }
+@keyframes drop { from { transform: translateY(-24px); opacity: 0; } to { transform: none; opacity: 1; } }
 #dest-panel > section { display: flex; flex-direction: column; gap: 10px; }
 #dest-panel > section[hidden] { display: none; }
 body.dest-open #dest-open { display: none !important; }
+/* Snug against the trip panel's right edge, at the top: the window below drops from the same edge. */
 #dest-open {
-  position: absolute; top: 16px; left: calc(var(--hud-right) + (100% - var(--hud-right) - 88px) / 2); transform: translateX(-50%);
+  position: absolute; top: 16px; left: var(--hud-right);
   z-index: 2; flex: 0 0 auto; display: none; align-items: center; gap: 8px;
   min-height: 56px; padding: 0 18px; border-radius: 999px; background: var(--accent); color: #001018; font-weight: 700; font-size: 17px;
   box-shadow: 0 2px 10px rgba(0,0,0,.45);
 }
 body.hud-min #dest-open { display: flex; }
 /* Not driving, the top-left card is only the speed and the clock. */
-body.hud-min #hud { width: auto; min-width: 240px; }
+body.hud-min #hud { width: auto; min-width: 240px; max-width: 320px; }
 
 /* ---- 낮: a light panel on a light map (theme.ts sets body.day by the sun, or the driver's choice) ---- */
 body.day {
