@@ -35,6 +35,8 @@ export interface GuideSettings {
   theme: "auto" | "light" | "dark";
   /** 야경: by night in the 3D view, the buildings lit (night-city.ts). */
   nightCity: boolean;
+  /** 도착하면 안내 종료: the drive ends by itself a few seconds after the arrival is announced. */
+  endOnArrive: boolean;
   /** Traffic lights on the map: only those on the route ahead while driving, every one, or none. */
   lightsOnMap: "route" | "all" | "off";
   /** The cameras on the map, the same way. */
@@ -75,7 +77,7 @@ export interface GuideSettings {
 export type Mode = "voice" | "show" | "off";
 
 export const DEFAULTS: GuideSettings = {
-  voice: true, voiceName: null, volume: 1, turns: true, junctionNames: true, laneHints: true, merges: true, closeups: true, sendLogs: true, layout: "classic", hdLanes: true, laneGuide: true, colorLines: true, theme: "auto", nightCity: false, lightsOnMap: "route", camerasOnMap: "route", nextLight: true, flashSignals: true,
+  voice: true, voiceName: null, volume: 1, turns: true, junctionNames: true, laneHints: true, merges: true, closeups: true, sendLogs: true, layout: "classic", hdLanes: true, laneGuide: true, colorLines: true, theme: "auto", nightCity: false, endOnArrive: true, lightsOnMap: "route", camerasOnMap: "route", nextLight: true, flashSignals: true,
   cameras: true, cameraFromM: 600, sections: true, schools: true,
   bumps: "show", curves: "show", accidents: "show", bikeAccidents: "show",
   overspeed: true, overspeedBy: 0,
@@ -156,6 +158,7 @@ export interface VoiceList {
 
 type Row =
   | { key: "voiceName"; label: string; kind: "voices" }
+  | { key: "voice"; label: string; kind: "listen"; sub?: string }
   | { key: keyof GuideSettings; label: string; kind: "toggle"; sub?: string }
   | { key: keyof GuideSettings; label: string; kind: "choice"; options: [number | string, string][]; sub?: string }
   | { key: "volume"; label: string; kind: "slider" };
@@ -165,6 +168,7 @@ const MODES: [string, string][] = [["voice", "음성"], ["show", "표시만"], [
 const ROWS: Row[] = [
   { key: "voice", label: "음성 안내", kind: "toggle" },
   { key: "voiceName", label: "목소리", kind: "voices" },
+  { key: "voice", label: "들어보기", kind: "listen", sub: "지금 목소리로 안내 문장 두 개를 바로 들려줍니다" },
   { key: "volume", label: "안내 음량", kind: "slider" },
   { key: "turns", label: "회전 안내", kind: "toggle", sub: "300미터 앞, 잠시 후 (고속에서는 1킬로미터·500미터)" },
   { key: "junctionNames", label: "IC · JC 이름", kind: "toggle", sub: "고속도로에서 \"1킬로미터 앞 신갈JC에서 원주 방면\" (이름마다 처음 한 번 음성 합성)" },
@@ -179,6 +183,7 @@ const ROWS: Row[] = [
   { key: "hdLanes", label: "정밀 차선 그리기", kind: "toggle", sub: "정밀도로지도가 있는 곳에서 크게 확대하면 실제 차선 · 화살표 · 횡단보도 (느린 차량이면 끄세요)" },
   { key: "layout", label: "화면 배치", kind: "choice", options: [["classic", "기본"], ["mini", "미니"]], sub: "미니: 왼쪽 창을 좁게, 시계 · 다음 신호등 · 그다음 안내는 숨김" },
   { key: "sendLogs", label: "진단 기록 보내기", kind: "toggle", sub: "주행 중 진단 기록(음성, 재탐색, 차로 판정 …)을 서버에 남겨 문제를 나중에 확인" },
+  { key: "endOnArrive", label: "도착하면 안내 종료", kind: "toggle", sub: "도착 안내 뒤 10초 뒤에 자동으로 검색 화면으로. 끄면 종료 버튼을 누를 때까지 그대로" },
   { key: "theme", label: "화면 테마", kind: "choice", options: [["auto", "자동 (해 기준)"], ["light", "밝게"], ["dark", "어둡게"]], sub: "밤에는 바탕 지도도 어둡게" },
   { key: "nightCity", label: "야경 건물", kind: "toggle", sub: "밤에 3D 화면이면 티맵·네이버 바탕 위에 건물을 옅은 금빛으로 (OpenStreetMap 건물이라 도심 밖에는 드묾. 도로가 가려 보이면 끄세요)" },
   { key: "nextLight", label: "다음 신호등 거리", kind: "toggle", sub: "안내 중 왼쪽 패널에 \"다음 신호등 250 m · 약 15초\"" },
@@ -215,9 +220,9 @@ function voiceLabel(s: GuideSettings): string {
  * after every edit, and [loadVoices] fetches what the server offers when
  * the voice list is first opened.
  */
-export function drawGuide(box: HTMLElement, s: GuideSettings, changed: (s: GuideSettings) => void, loadVoices?: () => Promise<VoiceList>, picked?: (voice: string | null) => void) {
+export function drawGuide(box: HTMLElement, s: GuideSettings, changed: (s: GuideSettings) => void, loadVoices?: () => Promise<VoiceList>, picked?: (voice: string | null) => void, listen?: () => void) {
   box.replaceChildren();
-  const redraw = () => drawGuide(box, s, changed, loadVoices, picked);
+  const redraw = () => drawGuide(box, s, changed, loadVoices, picked, listen);
   const set = (patch: Partial<GuideSettings>) => {
     Object.assign(s, patch);
     saveGuide(s);
@@ -236,6 +241,17 @@ export function drawGuide(box: HTMLElement, s: GuideSettings, changed: (s: Guide
     // Rows that only mean something with their parent on are dimmed without it.
     const parentOff = (row.key === "cameraFromM" && !s.cameras) || (row.key === "overspeedBy" && !s.overspeed) || (row.key !== "voice" && !s.voice && !(row.kind === "choice" && row.options === MODES));
     line.classList.toggle("off", parentOff);
+    if (row.kind === "listen") {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "voice-pick";
+      b.textContent = "▶ 듣기";
+      b.disabled = !s.voice || !listen;
+      b.addEventListener("click", () => listen?.());
+      line.append(b);
+      box.append(line);
+      continue;
+    }
     if (row.kind === "voices") {
       // A button that opens the list, the way a car app shows its voices.
       const b = document.createElement("button");

@@ -29,7 +29,7 @@ import { junctionOf, laneHint, motorwayAt, namedTurnPhrase } from "./highway";
 import { CLOSEUP_CAR_AT, CLOSEUP_PITCH, CloseupHold, zoomToSee, type Closeup } from "./closeup";
 import { RerouteBackoff } from "./reroute-backoff";
 import { Stillness } from "./still";
-import { TURN_NEAR_M, turnPhrase, type Turn } from "../../server/src/phrases";
+import { TURN_NEAR_M, turnPhrase, warningPhrase, type Turn } from "../../server/src/phrases";
 import { drawGuide, loadGuide, shows, wants, type VoiceList } from "./guide-settings";
 import { currentUser, logout, push as pushUserData } from "./userdata";
 import { WeatherPanel } from "./weather";
@@ -1093,6 +1093,7 @@ const warningsSaid = new Map<string, Set<number>>();
 /** A junction's key: its place to about 20 m, since each provider puts the same turn a few metres apart. */
 const junction = (at: LonLat) => `${Math.round(at[0] * 5000)},${Math.round(at[1] * 5000)}`;
 let arrived = false;
+const END_AFTER_ARRIVE_MS = 10_000;
 
 /**
  * What the panel last showed, by element: written only when it changes. The
@@ -1122,6 +1123,11 @@ function showTurn(shown: Shown) {
       arrived = true;
       saveDrive(null);
       voice.say(EVENTS.arrived);
+      // 도착하면 안내 종료: back to the search screen once the arrival has been said, unless the driver ended it already.
+      if (guide.endOnArrive) {
+        const thisDrive = route;
+        setTimeout(() => { if (route && route === thisDrive && arrived) endDrive(); }, END_AFTER_ARRIVE_MS);
+      }
       putHtml("turn-icon", arrowSvg("arrive"));
       put("turn-in", "도착");
       put("turn-text", drivingTo?.name ?? "");
@@ -1822,6 +1828,11 @@ const hdLayer: HdLayer | null = new HdLayer(map, () => guide.hdLanes);
 // 야경: the buildings lit by night, only in the tilted view and where the driver left it on.
 nightCity = new NightCity(map, () => guide.nightCity && view === "3d" && base !== "osm", showBuildings);
 themed(applyTheme(guide.theme, loadLast() ?? HOME));
+/** 들어보기: a warning and a turn, as the drive will say them, from the settings sheet. */
+function listenSample() {
+  voice.preview(warningPhrase("speed", 600, 50));
+  voice.preview(turnPhrase("left", 1000));
+}
 /** A voice chosen from the list: heard at once, and its sentences made ahead on the server. */
 function voicePicked(name: string | null) {
   voice.preview(EVENTS.start);
@@ -1839,7 +1850,7 @@ function openGuide(open: boolean) {
     nearby.show(false);
     openDock(false);
     el("weather").hidden = true;
-    drawGuide(el("guide-rows"), guide, applyGuide, loadVoices, voicePicked);
+    drawGuide(el("guide-rows"), guide, applyGuide, loadVoices, voicePicked, listenSample);
   }
   sideChanged();
 }
