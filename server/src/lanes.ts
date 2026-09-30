@@ -89,6 +89,25 @@ type End = Link & { path: LonLat[]; end: LonLat; before: number; side: number };
 /** How far past the stop line a corner is threaded, and how close to the route its links must keep. */
 const THREAD_M = 150;
 const THREAD_OFF_M = 6;
+/** A lane within this of a route vertex, running within SNAP_DEG of the route's way, is the road's; lanes within CARRIAGEWAY_M of the nearest are one carriageway. */
+const SNAP_M = 20;
+const SNAP_DEG = 30;
+const CARRIAGEWAY_M = 12;
+
+/** The nearest point of [line] to [p], how far it is, and the line's bearing there. */
+function nearestOn(p: LonLat, line: LonLat[]): { at: LonLat; off: number; bearing: number } | null {
+  let best: { at: LonLat; off: number; bearing: number } | null = null;
+  for (let i = 0; i + 1 < line.length; i++) {
+    const [ax, ay] = toXY(line[i], p), [bx, by] = toXY(line[i + 1], p);
+    const dx = bx - ax, dy = by - ay, len2 = dx * dx + dy * dy;
+    const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, -(ax * dx + ay * dy) / len2));
+    const off = Math.hypot(ax + t * dx, ay + t * dy);
+    if (!best || off < best.off) {
+      best = { at: [line[i][0] + (line[i + 1][0] - line[i][0]) * t, line[i][1] + (line[i + 1][1] - line[i][1]) * t], off, bearing: bearingOf(line[i], line[i + 1]) };
+    }
+  }
+  return best;
+}
 
 export class LaneIndex {
   private db: DatabaseSync | null = null;
@@ -231,6 +250,41 @@ export class LaneIndex {
       }
     }
     return best?.trail ?? null;
+  }
+
+  /**
+   * Where the travel-direction lanes are at each of [points] (a route's
+   * vertices, each with the route's heading there): the middle of the
+   * lanes running the same way within SNAP_M, as a point — null where
+   * there are none (no 정밀도로지도 here, or only the other way's lanes).
+   * The route's line is moved onto it: on a road drawn with both ways'
+   * lanes, the line then runs on the side the car is on.
+   */
+  snap(points: LonLat[], headings: number[]): (LonLat | null)[] {
+    const db = this.open();
+    if (!db) return points.map(() => null);
+    // A link's line parsed once a call: neighbouring vertices see the same links, and the parse is most of the cost.
+    const lines = new Map<number, LonLat[]>();
+    const lineOf = (l: Link) => { let v = lines.get(l.rowid); if (!v) { v = JSON.parse(l.coords) as LonLat[]; lines.set(l.rowid, v); } return v; };
+    return points.map((p, i) => {
+      const heading = headings[i];
+      if (!Number.isFinite(heading)) return null;
+      const d = SNAP_M / M, k = d / Math.cos((p[1] * Math.PI) / 180);
+      const near = db.near.all(p[0] + k, p[0] - k, p[1] + d, p[1] - d) as unknown as Link[];
+      const found: { at: LonLat; off: number; year: number }[] = [];
+      for (const l of near) {
+        const hit = nearestOn(p, lineOf(l));
+        if (!hit || hit.off > SNAP_M || Math.abs(diff(heading, hit.bearing)) > SNAP_DEG) continue;
+        found.push({ at: hit.at, off: hit.off, year: surveyYear(l.id) });
+      }
+      if (found.length === 0) return null;
+      // One survey where several overlap; then the lanes of this carriageway: those within a road's width of the nearest.
+      const newest = Math.max(...found.map((f) => f.year));
+      const ours = found.filter((f) => f.year === newest);
+      const least = Math.min(...ours.map((f) => f.off));
+      const row = ours.filter((f) => f.off <= least + CARRIAGEWAY_M);
+      return [row.reduce((s, f) => s + f.at[0], 0) / row.length, row.reduce((s, f) => s + f.at[1], 0) / row.length];
+    });
   }
 
   lanes(at: LonLat, inDeg: number, after: LonLat[], way: Turn | "fork" | null = null): LaneInfo | null {

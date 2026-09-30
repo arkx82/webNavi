@@ -108,3 +108,18 @@ test("a corner is threaded through the lane that turns the route's way: from the
   // A way in that no lane here takes (from the east) threads nothing.
   assert.equal(index.thread(at(0, 20), 270, after), null);
 });
+
+test("a route vertex is moved to the middle of the lanes running its way, not the oncoming ones; nowhere with no lanes", async () => {
+  const index = await indexOf([
+    // Two lanes north at x = 1.75 and 5.25 (the right side of the road), two south at x = -1.75 and -5.25.
+    link({ id: "A219A000041", lane: 1, a: "Q0", b: "Q1", l: null, r: "A219A000042" }, [[1.75, -100], [1.75, 0], [1.75, 100]]),
+    link({ id: "A219A000042", lane: 2, a: "Q0", b: "Q2", l: "A219A000041", r: null }, [[5.25, -100], [5.25, 0], [5.25, 100]]),
+    link({ id: "A219A000043", lane: 1, a: "R0", b: "R1", l: null, r: null }, [[-1.75, 100], [-1.75, 0], [-1.75, -100]]),
+    link({ id: "A219A000044", lane: 2, a: "R0", b: "R2", l: null, r: null }, [[-5.25, 100], [-5.25, 0], [-5.25, -100]]),
+  ]);
+  const [north, south, away] = index.snap([at(0, 50), at(0, 50), at(300, 50)], [0, 180, 0]);
+  const xOf = (p: LonLat) => (p[0] - O[0]) * M * Math.cos((O[1] * Math.PI) / 180);
+  assert.ok(north && Math.abs(xOf(north) - 3.5) < 0.05, `northbound → 3.5 m right: ${north && xOf(north)}`);
+  assert.ok(south && Math.abs(xOf(south) + 3.5) < 0.05, `southbound → 3.5 m left: ${south && xOf(south)}`);
+  assert.equal(away, null);
+});

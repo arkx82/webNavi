@@ -1,6 +1,9 @@
 import type { Category, Fuel, Health, LonLat, Place, Poi, Provider, Route, StationDetail } from "./types";
 import { threadRoute } from "./thread";
 
+/** Corners through the painted lanes where 정밀도로지도 has them (quick: only the turns). The whole line goes onto the lanes when a route is driven (main.ts). */
+const onLanes = (r: Route) => threadRoute(r);
+
 async function get<T>(path: string, params: Record<string, string | undefined>): Promise<T> {
   const url = new URL(path, location.origin);
   for (const [k, v] of Object.entries(params)) if (v != null) url.searchParams.set(k, v);
@@ -25,10 +28,10 @@ export const api = {
   search: (q: string, near?: LonLat) => get<Place[]>("/api/search", { q, near: near && pair(near) }),
   // Every route's corners threaded through the painted lanes where 정밀도로지도 has them (thread.ts).
   route: (provider: Provider, start: LonLat, goal: LonLat) =>
-    get<Route>("/api/route", { provider, start: pair(start), goal: pair(goal), ...moving() }).then(threadRoute),
+    get<Route>("/api/route", { provider, start: pair(start), goal: pair(goal), ...moving() }).then(onLanes),
   routes: async (start: LonLat, goal: LonLat) => {
     const a = await get<{ routes: Route[]; errors: string[] }>("/api/route", { provider: "all", start: pair(start), goal: pair(goal), ...moving() });
-    await Promise.all(a.routes.map(threadRoute));
+    await Promise.all(a.routes.map(onLanes));
     return a;
   },
   nearby: (category: Category, at: LonLat, radiusM: number, fuel?: Fuel) =>

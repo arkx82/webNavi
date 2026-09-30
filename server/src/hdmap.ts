@@ -13,6 +13,8 @@ import type { LonLat } from "./route/types.js";
  * tippecanoe and are sent so.
  */
 export const TILE_CACHE_CONTROL = "private, max-age=86400";
+/** Vertices snapped in one call (a long route comes in several). */
+export const SNAP_BATCH = 4000;
 
 export class HdTiles {
   private db: DatabaseSync | null = null;
@@ -69,6 +71,17 @@ export function registerHdmap(app: FastifyInstance, workDir: string) {
   setInterval(refresh, 3_600_000).unref();
   // The lanes at the junction ahead: at=lon,lat of the guide, in=heading into it, way=the provider's turn,
   // after=the route's next 150 m or so as lon,lat;lon,lat…
+  // The travel-direction lanes at each vertex of a route (lanes.snap): the line is drawn on the car's side of the road.
+  app.post<{ Body: { points?: LonLat[]; headings?: number[] } }>("/api/hdmap/snap", async (request, reply) => {
+    const points = Array.isArray(request.body?.points) ? request.body.points.slice(0, SNAP_BATCH) : null;
+    const headings = Array.isArray(request.body?.headings) ? request.body.headings : null;
+    const ok = (p: unknown): p is LonLat => Array.isArray(p) && p.length === 2 && p.every(Number.isFinite);
+    if (!points || !headings || headings.length !== points.length || !points.every(ok)) return reply.code(400).send({ error: "points, headings" });
+    if (!lanes.ready) return { at: points.map(() => null) };
+    const at = lanes.snap(points, headings.map(Number));
+    request.log.debug({ asked: points.length, snapped: at.filter(Boolean).length }, "route snapped to lanes");
+    return { at };
+  });
   // The corners of a route as the lanes are painted (lanes.thread): one call, every turn of the route.
   app.post<{ Body: { turns?: { at: LonLat; in: number; after: LonLat[] }[] } }>("/api/hdmap/thread", async (request, reply) => {
     const turns = Array.isArray(request.body?.turns) ? request.body.turns.slice(0, 200) : null;

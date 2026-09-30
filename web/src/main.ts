@@ -37,6 +37,7 @@ import { isFavourite, loadPlaces, samePlace, savePlaces, toggleFavourite } from 
 import { OVERLAY_STYLE, TmapBase, tmapAvailable } from "./tmap-base";
 import { NightCity } from "./night-city";
 import { CHECK, X } from "./icons";
+import { snapRoute } from "./thread";
 import type { Guide, Health, LonLat, Place, Provider, Route } from "./types";
 
 // The ground: TMAP's or NAVER's own vector map when the server has their
@@ -904,10 +905,18 @@ el("pv-close").addEventListener("click", () => {
 
 // -- 3. on the way --
 
+/** Routes whose line has been put onto the lanes (or asked to be): once each. */
+const laned = new WeakSet<Route>();
 function startDrive(r: Route) {
   const fresh = route == null;
   const elsewhere = !fresh && goal !== drivingTo;
   route = r;
+  // The line onto the travel-direction lanes where 정밀도로지도 has them — only the route driven, and in the background
+  // (a long route takes seconds): the drive starts on the provider's line and is set up again on the lanes' when they come.
+  if (!laned.has(r)) {
+    laned.add(r);
+    void snapRoute(r).then(() => { if (route === r) startDrive(r); });
+  }
   chosen = r;
   drivingTo = goal;
   routeLayer.show(route);

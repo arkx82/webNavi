@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { splice, turnsOf } from "./thread.js";
+import { applySnap, headingsOf, splice, turnsOf } from "./thread.js";
 import type { LonLat, Route } from "./types.js";
 
 /** Metres east/north of 강남역 as lon/lat. */
@@ -41,4 +41,17 @@ test("the painted arc takes the place of the cut corner, and the indices into th
   const before = r.path.length;
   assert.ok(!splice(r, [at(500, 500), at(520, 500), at(560, 500)]));
   assert.equal(r.path.length, before);
+});
+
+test("the line slides onto the lanes where they are and off them without a jog", () => {
+  // Ten vertices 20 m apart heading north; lanes 4 m to the right for the middle four.
+  const path: LonLat[] = Array.from({ length: 10 }, (_, i) => at(0, i * 20));
+  const snapped: (LonLat | null)[] = path.map((p, i) => (i >= 3 && i <= 6 ? at(4, i * 20) : null));
+  const moved = applySnap(path, snapped);
+  const dx = (i: number) => (moved[i][0] - path[i][0]) * 111_320 * Math.cos((37.4979 * Math.PI) / 180);
+  assert.ok(Math.abs(dx(4) - 4) < 0.01, "on the lanes: the full 4 m");
+  assert.ok(Math.abs(dx(2) - 4 * (1 - 20 / 60)) < 0.01, "20 m before them: two thirds of the way");
+  assert.ok(Math.abs(dx(1) - 4 * (1 - 40 / 60)) < 0.01, "40 m before: a third");
+  assert.ok(Math.abs(dx(0)) < 0.01 && Math.abs(dx(9)) < 0.01, "far from them: as drawn");
+  assert.equal(headingsOf(path).filter((h) => Math.abs(h) < 0.5).length, 10);
 });

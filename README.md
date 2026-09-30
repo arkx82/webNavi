@@ -110,7 +110,8 @@ docker compose up -d osrm nav    # osrm 서비스가 /data/korea.osrm 을 공유
 ```
 
 경로의 **코너**는 제공자가 준 꺾인 선 대신 정밀도로지도의 회전 차선 링크를 따라 다시 잇는다(`POST /api/hdmap/thread` → `web/src/thread.ts`가
-경로 폴리라인에 끼워 넣고 혼잡 구간·고속도로 구간의 색인을 함께 옮긴다). 정밀지도가 있는 교차로에서만.
+경로 폴리라인에 끼워 넣고 혼잡 구간·고속도로 구간의 색인을 함께 옮긴다). 정밀지도가 있는 교차로에서만. 그 뒤 선 전체를
+진행 방향 차선들의 가운데로 옮긴다(`POST /api/hdmap/snap`; 오는 방향 차선은 방향으로 거른다, 정밀지도가 끝나면 60 m 에 걸쳐 원래 선으로).
 
 변환 규칙은 `tools/nodelink/build.py` 머리에 있다: 도로등급 → highway(고속국도 motorway … 시군도
 unclassified), 연결로 → *_link, 링크마다 oneway·maxspeed·lanes·name·ref, 교량·터널, 회전제한
