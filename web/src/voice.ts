@@ -54,8 +54,10 @@ export class Voice {
   voiceName: string | null = null;
   /** How far the music drops while the voice speaks. */
   duckTo = 0.3;
-  /** Players outside the graph (DRM SDKs) that take the same level. */
-  readonly duckers = new Set<(level: number) => void>();
+  /** 안내 중 음악 줄이기: faded (soft), at once (quick), or not at all (off) — 안내 설정. */
+  ducking: "soft" | "quick" | "off" = "soft";
+  /** Players outside the graph (a TIDAL <audio>) told the level to go to and how long to take getting there. */
+  readonly duckers = new Set<(level: number, overMs: number) => void>();
   onError: (message: string) => void = () => {};
 
   constructor() {
@@ -232,10 +234,13 @@ export class Voice {
   }
 
   private duck(down: boolean) {
+    const level = down && this.ducking !== "off" ? this.duckTo : 1;
+    // Soft: down over about 0.4 s, back up over about a second (setTargetAtTime reaches ~95 % by three time constants).
+    const overMs = this.ducking === "soft" ? (down ? 400 : 1000) : this.ducking === "quick" ? (down ? 60 : 150) : 0;
     const now = this.context.currentTime;
     this.music.gain.cancelScheduledValues(now);
-    this.music.gain.setTargetAtTime(down ? this.duckTo : 1, now, down ? 0.08 : 0.4);
-    for (const d of this.duckers) d(down ? this.duckTo : 1);
+    this.music.gain.setTargetAtTime(level, now, Math.max(0.01, overMs / 3000));
+    for (const d of this.duckers) d(level, overMs);
   }
 }
 

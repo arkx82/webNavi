@@ -1921,6 +1921,7 @@ function applyGuide() {
   hdLayer?.refresh();
   nightCity?.refresh();
   voice.enabled = guide.voice;
+  voice.ducking = guide.ducking;
   voice.voiceName = guide.voiceName;
   voice.setVolume(guide.volume);
   cameraLayer?.redraw();
@@ -2060,8 +2061,22 @@ async function pickSource(s: MusicSource) {
   }
 }
 
-function duckBySource(level: number) {
-  music?.setVolume(level);
+/** The music's level as last set, and the fade under way: the voice asks for a level and how long to take. */
+let musicLevel = 1;
+let fading = 0;
+function duckBySource(level: number, overMs: number) {
+  cancelAnimationFrame(fading);
+  const from = musicLevel, started = performance.now();
+  if (overMs <= 0) { musicLevel = level; music?.setVolume(level); return; }
+  const step = (t: number) => {
+    const share = Math.min(1, (t - started) / overMs);
+    // Eased both ways, so neither the dip nor the return is heard as a step.
+    const eased = share < 0.5 ? 2 * share * share : 1 - Math.pow(-2 * share + 2, 2) / 2;
+    musicLevel = from + (level - from) * eased;
+    music?.setVolume(musicLevel);
+    if (share < 1) fading = requestAnimationFrame(step);
+  };
+  fading = requestAnimationFrame(step);
 }
 
 /** A playing (or paused mid-song) player keeps its bar; with nothing on, the dock shrinks to a button. */
