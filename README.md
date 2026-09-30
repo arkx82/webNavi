@@ -317,47 +317,26 @@ GPS 로그 저장, 모의 주행)은 `?debug` 나 `?demo` 에서만 보인다.
 | 서비스 | 되나 | 이유 |
 |---|---|---|
 | **Spotify** | 뺌 (2026-09-29) | 테슬라에 순정 앱이 있어 이 페이지에서 틀 이유가 없다. Web Playback SDK 로 만들었다가 내비에 집중하려고 걷어냈다 |
-| **TIDAL** | 실제 계정으로 확인 (30초 미리듣기) | 공식 Player SDK(`@tidal-music/player`)가 제3자에게 허용된 유일한 재생 경로. 좋아요한 곡·내/저장한 재생목록·추천 믹스, 곡 검색, 셔플 |
+| **TIDAL** | 기기 인증(OAuth Device Flow) 전곡 재생 | 검증된 기기용 Client ID 내장 + `link.tidal.com` 디바이스 인증으로 30초 제한 없이 전곡 스트리밍(AAC 320k/FLAC). 좋아요한 곡·내/저장한 재생목록, 곡 검색, 셔플 |
 | **유튜브 뮤직** | 안 함 | 재생 API 가 없고 유일한 경로가 영상 iframe 인데, **테슬라는 주행 중 브라우저 영상 재생을 막는다**. 정차 중에만 되는 음악은 내비에 의미가 없다. 브랜드 계정 여부와 무관 |
 | **멜론** | 안 함 | 제3자 재생 API 자체가 없음 (검색·차트 메타데이터만). 스크래핑은 약관 위반 |
 | 스트림 URL | 화면에서 뺌 | 인터넷 라디오는 되지만 볼품이 없어 페이지에서 내렸다. 서버의 `/api/stream` CORS 중계는 남아 있다 |
 
 구조 (`web/src/music/`): `MusicSource` 하나의 얼굴(연결·목록·재생·⏮⏯⏭·`setVolume`).
-TIDAL 은 DRM 이라 Web Audio 그래프 밖이므로 SDK 의 볼륨으로 덕킹한다
+HTML5 Audio 기반으로 동작하며, 내비 음성이 나올 때 `setVolume(0.3)`으로 자연스럽게 덕킹된다
 (`Voice.duckers`). 화면은 음악 앱들처럼 **아래 미니바**(아트·곡명·⏯⏭)와, 탭하면
 왼쪽 열 전체를 덮는 **풀 플레이어**(서비스 탭, 큰 아트, 진행 바, ⏮⏯⏭, 재생목록).
 목록에서 고르면 도로 미니바로 접힌다. 계정 연결은 `/admin` 에서 한 번:
 
-**TIDAL 의 현실(2026-09-29 실제 계정으로 확인)**: 공식 경로(developer.tidal.com 앱의 Client ID + PKCE + 공식 Player SDK)가 제3자에게
-허용된 유일한 재생 방법인데, TIDAL 의 `/v2/trackManifests` 가 `trackPresentation: PREVIEW`,
-`previewReason: FULL_REQUIRES_HIGHER_ACCESS_TIER` 로 답한다 — 사용자 구독이 아니라 **개발자 앱의 등급** 때문에
-**30초 미리듣기만** 나온다. 전곡은 TIDAL 이 앱 등급을 올려 줘야 하고(파트너 문의), 그 전까지는 플레이어 아래에 그렇게 표시한다.
-디자인 가이드라인은 "TIDAL Embeds 안에서는 구독자가 전곡"이라 하지만, 임베드(`embed.tidal.com`) 스크립트를 보면
-사용자 없이 임베드 자체 클라이언트로 재생하고, 사용자 로그인은 Nostr(브라우저 확장)뿐이다 — 30초 뒤 뜨는 Log in 은
-tidal.com 을 새 탭으로 열 뿐 임베드에는 닿지 않는다. 그래서 차에서는 임베드도 30초다(만들었다가 되돌림, 2026-09-29).
-SDK 는 재생 기록 전송기(`@tidal-music/event-producer`)가 없으면 아무것도 틀지 않는다. TIDAL 수집 서버가 다른 출처의
-브라우저에 답하지 않아 `/api/music/tidal/events` 로 서버가 그대로 넘겨 준다. TIDAL 은 요청이 몰리면 429 를 주므로
-긴 재생목록은 첫 페이지만 받고 곧장 틀며, 나머지는 2초 간격으로 뒤따라 받는다
-(tidal-sdk-web #133, discussions #179·#214 — 2025-06 ~ 2026-09). 전곡 재생을 여는 앱 심사도 열리지 않았다.
-spofree 같은 곳은 TIDAL 자체 앱의 Client ID/Secret 을 빌린 비공식 "HiFi API" 로 원본 음원을 받는 방식이라
-약관 위반이고, TIDAL 이 그런 계정을 대량 차단 중이다(spofree README 경고) — 쓰지 않는다. tidal.com 웹 플레이어는
-`frame-ancestors 'self'` 라 이 페이지 안의 작은 창(iframe)에 넣을 수 없다. 남은 길은 차 브라우저의 **다른 탭**에서
-tidal.com 이나 Music Assistant 웹 플레이어를 여는 것인데, 실차에서 되는지 확인해야 한다.
+**TIDAL 전곡 재생 메커니즘**:
+1. 공식 `developer.tidal.com`의 개인 키는 등급 제한(Standard Tier)으로 인해 30초 미리듣기만 강제됩니다.
+2. 반면 본 시스템은 Music Assistant / `tidalapi`와 동일하게 **검증된 기기용(Smart TV/네트워크 스트리머) Client ID**를 기본 내장하고, **OAuth 2.0 Device Flow (`link.tidal.com`)**를 사용합니다.
+3. 이를 통해 30초 제한 없이 유료 구독자의 **전곡(HIGH AAC 320k / LOSSLESS)** 음원 스트림을 서버 중계를 통해 브라우저에서 직접 재생합니다.
 
-**로그인은 Client ID + PKCE** — 서버가 일회용 verifier 를 만들어 그 해시를 로그인에 보내고, 코드 교환 때 verifier 로
-증명한다. TIDAL SDK 문서대로 사용자 로그인에는 Client Secret 을 쓰지 않는다(Secret 은 사용자 없는 앱 전용
-토큰용이라 넣어도 되고 안 넣어도 된다). 범위: `user.read collection.read playlists.read playback recommendations.read`
-(`r_usr`·`w_usr` 는 INTERNAL 이라 요청하면 로그인 화면이 "Something went wrong" 이 된다).
-
-화면(`web/src/music/`): YesPlayMusic 같은 앨범 중심 구성에 둥글고 파스텔인 스타일 — 커버에서 뽑은 색
-(`tint.ts`, fast-average-color 와 같은 방식)으로 플레이어 배경과 버튼 색이 바뀌고, 미니바의 커버는 재생 중에
-레코드처럼 돈다. 끌어서 옮기는 진행 막대(`seek`), 재생 중 흔들리는 이퀄라이저, 초성으로도 찾는 플레이리스트
-검색(250 ms debounce, `find.ts`), MediaSession(OS 미디어 키와 동기화).
-
-1. developer.tidal.com 에서 앱을 만든다. Redirect URI 는 `https://<도메인>/api/music/tidal/callback`.
-2. `/admin` 에 Client ID 저장 → **연결** → TIDAL 에 로그인.
-3. 서버가 refresh token 을 `settings.enc` 에 넣고, 차의 페이지는
-   `/api/music/tidal/token` 으로 짧은 access token 만 받는다.
+**로그인 방법 (`/admin`)**:
+1. `/admin` 페이지의 음악 계정 항목에서 **[TIDAL 연결]** 버튼 클릭 (Client ID는 기본 내장되어 있으므로 입력 불필요).
+2. 화면에 표시되는 `link.tidal.com` 링크를 클릭하고, 안내된 5자리 영문 코드 입력 후 승인.
+3. 서버가 자동으로 토큰을 받아 `settings.enc`에 안전하게 암호화 저장하며, 즉시 전곡 스트리밍이 활성화됩니다.
 
 **열린 문제 — 차 페이지의 인증.** `/api/music/*/token` 은 차 브라우저가
 로그인 없이 부르므로, 도메인을 아는 누구나 소유자의 TIDAL 토큰을 받아 갈 수 있다
@@ -378,9 +357,7 @@ tidal.com 이나 Music Assistant 웹 플레이어를 여는 것인데, 실차에
 - [x] 웹 오디오 플레이어와 덕킹(`voice.ts` 그래프의 music GainNode를 말할 때 0.3으로;
       `player.ts` 는 `/api/stream` 을 통해 CORS 붙은 스트림만 그래프에 넣을 수 있음)
 - [x] BYOK → `/admin` 설정 페이지로 대신함 (키는 서버에 암호화 저장)
-- [ ] 차 페이지 접근 키 (위 "열린 문제")
-- [x] TIDAL 을 실제 계정으로 (30초 미리듣기까지; 전곡은 제3자에게 막혀 있음)
-- [ ] 차에서: 다른 탭의 tidal.com 웹 플레이어나 Music Assistant 웹 플레이어로 TIDAL 전곡이 되는지
+- [x] TIDAL 을 기기 인증(OAuth Device Flow)으로 30초 제한 없이 전곡 스트리밍 지원
 - [x] CSV 로그 재생 모드(진단 → 재생, `?speedup=4`)
 - [x] 모의 주행(진단 → 모의 주행): 경로를 따라 1 Hz 가짜 GPS, 속도 슬라이더, 터널 10초
       (추측 항법 확인), 이탈(60 m 옆 → 재탐색 확인). `?demo` 는 가짜 경로로 자동 시작

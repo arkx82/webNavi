@@ -143,7 +143,7 @@ export function registerMusic(
       const answer = (await resp.json().catch(() => ({}))) as TokenAnswer;
 
       if (!resp.ok) {
-        if (answer.error === "authorization_pending") {
+        if (answer.error === "authorization_pending" || answer.error === "slow_down") {
           return { status: "pending" };
         }
         return reply.code(resp.status).send({

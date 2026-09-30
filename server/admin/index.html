@@ -75,10 +75,19 @@
         <label><b>DashScope</b> API 키 (Qwen3-TTS) <span class="hint" data-hint="dashscopeApiKey"></span><input name="dashscopeApiKey" /></label>
         <label><b>기본 목소리</b> Sohee(한국어) · Cherry · Serena · Ethan … — 차 화면 안내 설정에서 직접 만든 목소리까지 골라 바꿀 수 있습니다 <span class="hint" data-hint="ttsVoice"></span><input name="ttsVoice" placeholder="Cherry" /></label>
         <h2>음악 계정</h2>
-        <p class="hint">developer.tidal.com 에서 앱을 만들고 Redirect URI 에 <code id="redir-tidal"></code> 를 등록한 뒤, <b>Client ID</b> 를 저장하고(로그인은 PKCE 라 Secret 이 필요 없습니다) <b>연결</b>을 누르면 그 계정으로 로그인합니다. 토큰은 서버에 암호화되어 남고, 차의 화면은 짧은 접근 토큰만 받습니다. TIDAL 이 제3자 앱에 허락하는 재생은 30초 미리듣기입니다.</p>
-        <label><b>TIDAL</b> Client ID <span class="hint" data-hint="tidalClientId"></span><input name="tidalClientId" /></label>
-        <label><b>TIDAL</b> Client Secret (선택 — 로그인은 PKCE 라 없어도 됨) <span class="hint" data-hint="tidalClientSecret"></span><input name="tidalClientSecret" /></label>
-        <div class="row"><a class="button" id="link-tidal" href="/admin/music/tidal/login">TIDAL 연결</a><button type="button" data-disconnect="tidal">해제</button><span class="hint" id="state-tidal"></span></div>
+        <p class="hint">검증된 기기용(스마트 TV/스트리머) Client ID가 기본 내장되어 있어 <b>전곡(HiFi) 무제한 재생</b>이 가능합니다. 별도 설정 없이 바로 <b>[TIDAL 연결]</b> 버튼을 누르시면 화면에 5자리 인증 코드가 표시됩니다. 스마트폰이나 PC로 <code>link.tidal.com</code>에 접속하여 코드를 입력하면 즉시 연결됩니다. (필요 시 다른 기기 키로 변경도 가능합니다)</p>
+        <label><b>TIDAL</b> Client ID (선택 — 비워 두면 기본 내장 키 사용) <span class="hint" data-hint="tidalClientId"></span><input name="tidalClientId" /></label>
+        <label><b>TIDAL</b> Client Secret (선택 — 비워 두면 기본 내장 키 사용) <span class="hint" data-hint="tidalClientSecret"></span><input name="tidalClientSecret" /></label>
+        <div class="row">
+          <button type="button" class="primary" id="btn-tidal-connect">TIDAL 연결 (link.tidal.com)</button>
+          <button type="button" data-disconnect="tidal">해제</button>
+          <span class="hint" id="state-tidal"></span>
+        </div>
+        <div id="tidal-box" style="margin-top: 14px; padding: 14px; background: #1f1f23; border: 1px solid var(--accent); border-radius: 8px;" hidden>
+          <div style="font-weight: 500; margin-bottom: 6px;">스마트폰 또는 브라우저에서 아래 링크를 열어 코드를 승인하세요:</div>
+          <div style="font-size: 16px; margin: 8px 0;"><a id="tidal-link" href="#" target="_blank" style="color: var(--accent); text-decoration: underline;">link.tidal.com</a></div>
+          <div style="font-size: 14px; color: var(--dim);">인증 코드: <b id="tidal-code" style="font-size: 20px; color: var(--ink); letter-spacing: 2px;"></b> <span id="tidal-timer" style="margin-left: 8px;">(승인 대기 중…)</span></div>
+        </div>
         <h2>이 페이지</h2>
         <label>새 비밀번호 (바꿀 때만)<input name="password" type="password" autocomplete="new-password" /></label>
         <div class="row">
@@ -206,9 +215,8 @@ async function load() {
   const m = await call("/api/music/state");
   for (const name of ["tidal"]) {
     const st = m[name] || {};
-    $("state-" + name).textContent = st.connected ? "연결됨" : st.configured ? "미연결" : "Client ID 먼저";
+    $("state-" + name).textContent = st.connected ? "연결됨" : "미연결";
     $("state-" + name).className = "hint" + (st.connected ? " saved" : "");
-    $("redir-" + name).textContent = location.origin + "/api/music/" + name + "/callback";
   }
   const q = new URLSearchParams(location.search);
   if (q.get("music")) {
@@ -216,8 +224,67 @@ async function load() {
     history.replaceState(null, "", "/admin");
   }
 }
+
+let tidalPollTimer = null;
+const btnTidal = $("btn-tidal-connect");
+if (btnTidal) {
+  btnTidal.onclick = async () => {
+    if (tidalPollTimer) clearInterval(tidalPollTimer);
+    say("msg", "TIDAL 기기 인증 요청 중…");
+    try {
+      const res = await call("/admin/music/tidal/device", {});
+      const link = $("tidal-link");
+      const fullUrl = res.verificationUriComplete
+        ? (res.verificationUriComplete.startsWith("http") ? res.verificationUriComplete : "https://" + res.verificationUriComplete)
+        : "https://link.tidal.com";
+      link.href = fullUrl;
+      link.textContent = fullUrl;
+      $("tidal-code").textContent = res.userCode || "";
+      $("tidal-timer").textContent = "(승인 대기 중…)";
+      $("tidal-box").hidden = false;
+      say("msg", "스마트폰이나 브라우저에서 위 링크로 접속해 코드를 승인하세요", "ok");
+
+      let left = res.expiresIn || 300;
+      const intervalSec = Math.max(3, res.interval || 3);
+      let failCount = 0;
+      tidalPollTimer = setInterval(async () => {
+        left -= intervalSec;
+        if (left <= 0) {
+          clearInterval(tidalPollTimer);
+          $("tidal-timer").textContent = "(시간 만료됨 — 다시 연결을 누르세요)";
+          return;
+        }
+        try {
+          const check = await call(`/admin/music/tidal/check?deviceCode=${encodeURIComponent(res.deviceCode)}`);
+          failCount = 0;
+          if (check.status === "ok") {
+            clearInterval(tidalPollTimer);
+            $("tidal-box").hidden = true;
+            say("msg", "TIDAL 연결 완료! 전곡(HiFi) 스트리밍이 활성화되었습니다.", "ok");
+            await load();
+          }
+        } catch (err) {
+          failCount++;
+          if (failCount >= 5) {
+            clearInterval(tidalPollTimer);
+            say("msg", "TIDAL 인증 오류: " + err.message, "bad");
+          }
+        }
+      }, intervalSec * 1000);
+    } catch (e) {
+      say("msg", e.message, "bad");
+    }
+  };
+}
+
 for (const b of document.querySelectorAll("[data-disconnect]")) {
-  b.onclick = async () => { await call(`/admin/music/${b.dataset.disconnect}/disconnect`, {}); await load(); };
+  b.onclick = async () => {
+    if (tidalPollTimer) clearInterval(tidalPollTimer);
+    $("tidal-box").hidden = true;
+    await call(`/admin/music/${b.dataset.disconnect}/disconnect`, {});
+    say("msg", "음악 계정 연결을 해제했습니다", "ok");
+    await load();
+  };
 }
 
 $("form").onsubmit = async (e) => {

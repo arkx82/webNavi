@@ -905,6 +905,19 @@ el("pv-close").addEventListener("click", () => {
 
 // -- 3. on the way --
 
+/**
+ * The route's line moved (onto the lanes, a few metres sideways, the same
+ * vertices): only what holds the line is set again — drawn, matched
+ * against, the pretend drive kept at its place on it, the lanes' line.
+ * Nothing said or held about the drive is touched.
+ */
+function relined(r: Route) {
+  routeLayer.show(r);
+  tracker.setRoute(r);
+  sim?.follow(r, true);
+  routeLine = new Line(r.path);
+  bends = new WeakMap();
+}
 /** Routes whose line has been put onto the lanes (or asked to be): once each. */
 const laned = new WeakSet<Route>();
 function startDrive(r: Route) {
@@ -915,7 +928,7 @@ function startDrive(r: Route) {
   // (a long route takes seconds): the drive starts on the provider's line and is set up again on the lanes' when they come.
   if (!laned.has(r)) {
     laned.add(r);
-    void snapRoute(r).then(() => { if (route === r) startDrive(r); });
+    void snapRoute(r).then(() => { if (route === r) relined(r); });
   }
   chosen = r;
   drivingTo = goal;
@@ -1436,7 +1449,7 @@ function maneuverFor(g: Guide): Maneuver {
   return shapedOf(bent, bendAt(g));
 }
 /** The road's shape at each guide, measured once a route (bends and loops: shapedOf). */
-const bends = new WeakMap<Guide, Bend | null>();
+let bends = new WeakMap<Guide, Bend | null>();
 function bendAt(g: Guide): Bend | null {
   let b = bends.get(g);
   if (b !== undefined) return b;

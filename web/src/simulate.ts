@@ -52,9 +52,11 @@ export class Simulator {
   }
 
   /** The route changed under the car (a re-route); keep driving the new one from its start. */
-  follow(route: Route) {
+  /** A new route: from its start — or, [keepPlace], the same route with its line moved (onto the lanes): from where the car is on it. */
+  follow(route: Route, keepPlace = false) {
+    const was = keepPlace && this.line ? this.line.place(this.alongM).at : null;
     this.line = new Line(route.path);
-    this.alongM = 0;
+    this.alongM = was ? this.line.project(was, 0, this.line.path.length).alongM : 0;
   }
 
   private tick() {
