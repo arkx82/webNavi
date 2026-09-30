@@ -24,7 +24,7 @@ const LOCK_MS = 60_000;
  * callback, which proves itself by its signed state (music.ts).
  */
 const OPEN = new Set(["/api/login", "/api/logout", "/api/me", "/api/music/state"]);
-const OPEN_PATTERN = /^\/api\/music\/[a-z]+\/callback$/;
+const OPEN_PATTERN = /^\/api\/music\/[a-z]+(\/callback|\/track\/|\/token|\/v1\/)/;
 /** Loaded by <script> tags before any login: an empty script rather than a refusal. */
 const SCRIPTS = new Set(["/api/map/tmap.js", "/api/map/naver.js"]);
 
