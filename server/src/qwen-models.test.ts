@@ -3,12 +3,23 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CHAIN, SpentBook, saysSpent, voiceOn } from "./qwen-models.js";
+import { CHAIN, SpentBook, SpentError, realtimeFault, saysSpent, voiceOn } from "./qwen-models.js";
 import { Speaker, wavOf } from "./tts.js";
 
 test("Model Studio's free-tier refusal is told from any other", () => {
   assert.ok(saysSpent(`{"code":"AllocationQuota.FreeTierOnly","message":"The free tier of the model has been exhausted."}`));
   assert.ok(!saysSpent(`{"code":"InvalidApiKey"}`));
+});
+
+test("a realtime session's refusal is read whether it comes as an error event or bare, and the spent allowance is told", () => {
+  const model = "qwen3-tts-flash-realtime";
+  // Seen 2026-09-30: no type, then the socket dropped with 1006 — which read as a stray failure, not a spent model.
+  const bare = { code: "AllocationQuota.FreeTierOnly", message: "The free quota has been exhausted.", request_id: "x" };
+  assert.ok(realtimeFault(model, bare) instanceof SpentError);
+  assert.ok(realtimeFault(model, { type: "error", error: { code: "AllocationQuota.FreeTierOnly" } }) instanceof SpentError);
+  assert.match(realtimeFault(model, { type: "error", error: { code: "InvalidParameter", message: "bad voice" } })!.message, /InvalidParameter: bad voice/);
+  assert.equal(realtimeFault(model, { type: "session.created" }), null);
+  assert.equal(realtimeFault(model, { type: "response.audio.delta" }), null);
 });
 
 test("a voice the old snapshot lacks is spoken by the plainest one of the same sex", () => {

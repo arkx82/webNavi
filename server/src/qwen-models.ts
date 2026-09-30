@@ -93,6 +93,19 @@ const REALTIME_URL = "wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime";
  * sent and committed, and the audio gathered as it comes (24 kHz 16-bit
  * mono, like the others). Throws SpentError where the allowance is gone.
  */
+/**
+ * What a realtime message refuses with, or null: the "error" event, and
+ * the bare {code, message} Model Studio sends with no type at all — which
+ * is how the spent free allowance comes (AllocationQuota.FreeTierOnly),
+ * before the socket is simply dropped (closed 1006, no reason).
+ */
+export function realtimeFault(model: string, event: { type?: string; code?: string; message?: string; error?: { code?: string; message?: string } }): Error | null {
+  const said = event.type === "error" ? event.error : event.type === undefined && event.code ? event : null;
+  if (!said) return null;
+  const text = [said.code, said.message].filter(Boolean).join(": ");
+  return saysSpent(text) ? new SpentError(model) : new Error(`${model}: ${text}`);
+}
+
 export function realtime(key: string, model: string, voice: string, text: string, timeoutMs = 30_000): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -120,9 +133,9 @@ export function realtime(key: string, model: string, voice: string, text: string
       if (event.type === "response.audio.delta" && event.delta) chunks.push(Buffer.from(event.delta, "base64"));
       else if (event.type === "response.done") socket.send(JSON.stringify({ type: "session.finish" }));
       else if (event.type === "session.finished") finish(null);
-      else if (event.type === "error") {
-        const said = [event.error?.code, event.error?.message].filter(Boolean).join(": ");
-        finish(saysSpent(said) ? new SpentError(model) : new Error(`${model}: ${said}`));
+      else {
+        const fault = realtimeFault(model, event);
+        if (fault) finish(fault);
       }
     };
     socket.onerror = () => finish(new Error(`${model}: socket failed`));
