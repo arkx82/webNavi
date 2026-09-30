@@ -1271,6 +1271,8 @@ function laneStopCard(along: number): LaneCard | null {
   };
 }
 
+/** Every turn has a card at the foot of the map; straight on, the arrival, the start and the wordless ones do not. */
+const hasTurnCard = (m: Maneuver) => m !== "straight" && m !== "arrive" && m !== "depart" && m !== "other";
 /** The turn just passed, kept on the card until the car is through the junction (TURN_HELD_M past it). */
 let heldTurn: { guide: Guide; alongM: number } | null = null;
 const TURN_HELD_M = 40;
@@ -1281,7 +1283,9 @@ function showLanes(shown: Shown) {
   if (shown.alongM != null && route) askLaneStops(shown.alongM);
   // The next guide changed while the last was close: the car is at that junction — hold it (a slow screen may
   // draw no frame in the last few metres before it, so the change itself is what is watched for).
-  if (lastNext && next?.guide !== lastNext.guide && shown.alongM != null && lastNext.alongM - shown.alongM < 30 && lastNext.alongM - shown.alongM > -TURN_HELD_M) heldTurn = lastNext;
+  // Only a turn that has a card of its own is held: a 톨게이트 just passed held for 40 m hid the IC 300 m after it.
+  if (lastNext && next?.guide !== lastNext.guide && shown.alongM != null && lastNext.alongM - shown.alongM < 30 && lastNext.alongM - shown.alongM > -TURN_HELD_M
+    && hasTurnCard(maneuverFor(lastNext.guide))) heldTurn = lastNext;
   lastNext = next && shown.alongM != null ? { guide: next.guide, alongM: shown.alongM + next.inM } : null;
   // Through the junction the card stays: the guide just passed is still the one to show until 40 m on.
   if (heldTurn && shown.alongM != null && route && shown.alongM - heldTurn.alongM < TURN_HELD_M && route.guides.includes(heldTurn.guide)) {
@@ -1289,7 +1293,7 @@ function showLanes(shown: Shown) {
   } else heldTurn = null;
   const m = next && route ? maneuverFor(next.guide) : null;
   // Every turn (not straight on, not the arrival), from 400 m in town or a kilometre on a motorway.
-  const within = next && m && route && routeLine && guide.laneGuide && m !== "straight" && m !== "arrive" && m !== "depart" && m !== "other"
+  const within = next && m && route && routeLine && guide.laneGuide && hasTurnCard(m)
     && next.inM <= ((onMotorway.get(next.guide) ?? false) ? LANES_MOTORWAY_M : LANES_TOWN_M) && next.inM > -TURN_HELD_M;
   if (!within) {
     lanesShown = false;
