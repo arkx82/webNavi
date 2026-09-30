@@ -608,6 +608,12 @@ function openSearch(open: boolean) {
   layoutPanels();
   if (open) el<HTMLInputElement>("q").focus();
 }
+// The 목적지 button hugs the trip panel's actual right edge: narrow before a route (the speed and the clock), and
+// pushed along as the panel grows with a notice or a drive. --hud-edge is in the panel's own layout pixels, as the
+// button's left is (both are zoomed alike by --ui).
+const hudEdge = () => document.documentElement.style.setProperty("--hud-edge", `${el("hud").offsetLeft + el("hud").offsetWidth}px`);
+new ResizeObserver(hudEdge).observe(el("hud"));
+hudEdge();
 el("dest-open").addEventListener("click", () => openSearch(true));
 el("dest-close").addEventListener("click", () => openSearch(false));
 let currentScreen: Screen = "search";
@@ -1920,6 +1926,8 @@ function applyGuide() {
   themed(applyTheme(guide.theme, here()));
   hdLayer?.refresh();
   nightCity?.refresh();
+  // 화면 크기: everything over the map scaled together (style.css zooms the overlays by --ui).
+  document.documentElement.style.setProperty("--ui", String(guide.uiScale || 1));
   voice.enabled = guide.voice;
   voice.ducking = guide.ducking;
   voice.voiceName = guide.voiceName;
