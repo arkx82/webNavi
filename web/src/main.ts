@@ -479,6 +479,9 @@ function setBase(next: Base, remember = true) {
   el("base-label").textContent = BASE_NAMES[base];
   el("osm-credit").hidden = base !== "osm";
   drawBaseMenu();
+  // The lit buildings are for a dark ground: on and off with the ground.
+  nightCity?.refresh();
+  showBuildings();
 }
 
 /** What each ground is, and why one cannot be chosen right now. */
@@ -1817,7 +1820,7 @@ setInterval(() => { cameraLayer?.redraw(); themed(applyTheme(guide.theme, here()
 // 정밀도로지도's lanes on the ground, close in; white by night, grey on a light day map.
 const hdLayer: HdLayer | null = new HdLayer(map, () => guide.hdLanes);
 // 야경: the buildings lit by night, only in the tilted view and where the driver left it on.
-nightCity = new NightCity(map, () => guide.nightCity && view === "3d", showBuildings);
+nightCity = new NightCity(map, () => guide.nightCity && view === "3d" && base !== "osm", showBuildings);
 themed(applyTheme(guide.theme, loadLast() ?? HOME));
 /** A voice chosen from the list: heard at once, and its sentences made ahead on the server. */
 function voicePicked(name: string | null) {

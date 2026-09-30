@@ -6,19 +6,23 @@ import type maplibregl from "maplibre-gl";
  * the way a city looks from the road after dark. OpenStreetMap's building
  * footprints and heights (OpenFreeMap's tiles: the same the OSM ground
  * draws its grey buildings from), so the effect is only as full as OSM is:
- * dense in Seoul and the big cities, thin elsewhere. On the OSM ground
- * the style's own grey buildings step aside while these are shown.
+ * dense in Seoul and the big cities, thin elsewhere. Only over a ground
+ * that is dark by night (TMAP's, NAVER's, under the shade): the OSM
+ * ground stays light after dark, and lit buildings on a light map look
+ * wrong — there the style's own grey ones stay.
  */
 export const NIGHT_CITY_MIN_ZOOM = 14;
 export const NIGHT_CITY_LAYER = "night-city";
 const SOURCE = "night-city";
 const TILES = "https://tiles.openfreemap.org/planet";
 
-/** Gold by height: a low block glows dimly, a tower shines. */
+/** Gold by height: a low block glows dimly, a tower shines. Faint, so the road and the route stay in view under them. */
+const HEIGHT: maplibregl.ExpressionSpecification = ["to-number", ["get", "render_height"], 8];
 const COLOUR: maplibregl.ExpressionSpecification = [
-  "interpolate", ["linear"], ["coalesce", ["get", "render_height"], 0],
-  0, "#5a4622", 20, "#a37b2c", 60, "#d9a441", 150, "#f2c96b",
+  "interpolate", ["linear"], HEIGHT,
+  0, "#6b5a3a", 20, "#a8863f", 60, "#d1a752", 150, "#e9c477",
 ];
+export const NIGHT_CITY_OPACITY = 0.35;
 
 export class NightCity {
   private ready = false;
@@ -72,9 +76,9 @@ export class NightCity {
         layout: { visibility: "none" },
         paint: {
           "fill-extrusion-color": COLOUR,
-          "fill-extrusion-height": ["coalesce", ["get", "render_height"], 8],
-          "fill-extrusion-base": ["coalesce", ["get", "render_min_height"], 0],
-          "fill-extrusion-opacity": 0.75,
+          "fill-extrusion-height": HEIGHT,
+          "fill-extrusion-base": ["to-number", ["get", "render_min_height"], 0],
+          "fill-extrusion-opacity": NIGHT_CITY_OPACITY,
           "fill-extrusion-vertical-gradient": true,
         },
       }, before);
