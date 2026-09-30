@@ -37,13 +37,18 @@ import { isFavourite, loadPlaces, samePlace, savePlaces, toggleFavourite } from 
 import { OVERLAY_STYLE, TmapBase, tmapAvailable } from "./tmap-base";
 import { NightCity } from "./night-city";
 import { CHECK, X } from "./icons";
-import { NaverBase, naverAvailable } from "./naver-base";
 import type { Guide, Health, LonLat, Place, Provider, Route } from "./types";
 
 // The ground: TMAP's or NAVER's own vector map when the server has their
 // keys (Korean roads as they know them: tmap-base.ts, naver-base.ts), else
 // a key-free OpenStreetMap style — or any style URL through VITE_MAP_STYLE.
 // The 지도 button goes round the ones that are there.
+// 지도 해상도 "빠르게": both maps (TMAP's under, MapLibre's over) draw at one pixel per CSS pixel — a quarter of
+// the work on a 2× screen, for a car computer that cannot keep up. Read before either map is made; a change asks
+// for a reload (the maps size their canvases once).
+if (loadGuide().mapDpr === "fast") {
+  try { Object.defineProperty(window, "devicePixelRatio", { get: () => 1, configurable: true }); } catch { /* read-only here: the maps draw sharp */ }
+}
 const HOME: LonLat = [127.0276, 37.4979];
 /** ?demo: a made-up trip fills the panel, for judging the layout at a desk. */
 const demo = new URLSearchParams(location.search).has("demo");
@@ -51,10 +56,12 @@ const demo = new URLSearchParams(location.search).has("demo");
 // car and the desk, not for driving: shown with ?debug, or in the demo.
 if (!demo && !new URLSearchParams(location.search).has("debug")) document.getElementById("diag")!.hidden = true;
 const OSM_STYLE: string = import.meta.env.VITE_MAP_STYLE ?? "https://tiles.openfreemap.org/styles/liberty";
-type Base = "tmap" | "naver" | "osm";
-const BASE_ORDER: Base[] = ["tmap", "naver", "osm"];
-const BASE_NAMES: Record<Base, string> = { tmap: "티맵", naver: "네이버", osm: "OSM" };
-const baseReady = (b: Base) => (b === "tmap" ? tmapAvailable() : b === "naver" ? naverAvailable() : true);
+// TMAP is the ground; OSM only stands in where there is no TMAP key (a desk). NAVER's map was a ground too, but
+// it is flat under tilt (no buildings) and the owner found it not worth having; the picker is for ?debug now.
+type Base = "tmap" | "osm";
+const BASE_ORDER: Base[] = ["tmap", "osm"];
+const BASE_NAMES: Record<Base, string> = { tmap: "티맵", osm: "OSM" };
+const baseReady = (b: Base) => (b === "tmap" ? tmapAvailable() : true);
 let base: Base = (() => {
   let kept: string | null = null;
   try { kept = localStorage.getItem("nav-base"); } catch { /* private window */ }
@@ -148,18 +155,18 @@ const marker = new maplibregl.Marker({ element: car, rotationAlignment: "map", p
 // the car — 현위치 takes it back, and on the way it goes back by itself
 // after a while. Pinching only zooms, and the car stays followed.
 
-type View = "3d" | "heading" | "north";
+type View = "3d" | "heading";
 // Zoom follows the speed (autozoom.ts); each view only shifts it — flat
 // views a little further out, since they show no road beyond the top edge.
 const VIEWS: Record<View, { pitch: number; zoomShift: number; label: string; /** Share of the height pushed above the car. */ carLow: number }> = {
   "3d": { pitch: 55, zoomShift: 0, label: "3D", carLow: 0.4 },
   heading: { pitch: 0, zoomShift: -0.4, label: "2D", carLow: 0.28 },
-  north: { pitch: 0, zoomShift: -0.6, label: "북쪽", carLow: 0 },
 };
-const ORDER: View[] = ["3d", "heading", "north"];
+const ORDER: View[] = ["3d", "heading"];
 /** Left alone this long after a hand moved it, the map goes back to the car. */
 const RETURN_MS = 5_000;
 let view: View = (() => {
+  // "north" (a north-up flat map) was a view once; a browser that kept it gets the flat one.
   try { const v = localStorage.getItem("nav-view") as View; return v in VIEWS ? v : "3d"; } catch { return "3d"; }
 })();
 let follow = true;
@@ -295,7 +302,7 @@ function followCar(at: LonLat) {
   const frames = gap > 1000 ? 1 : Math.min(gap, 250) / (1000 / 60);
   const k = (share: number) => 1 - Math.pow(1 - share, frames);
   // Close up on a junction: the car low on the screen, tilted, drawn back to see the fork (closeup.ts).
-  const close = closeup && view !== "north";
+  const close = !!closeup;
   const canvas = map.getCanvas();
   let want = close ? { x: carSpot(0).x, y: canvas.clientHeight * CLOSEUP_CAR_AT } : carSpot(v.carLow);
   // A card at the foot of the map (lanes, the fork): the car kept clear above it.
@@ -308,7 +315,7 @@ function followCar(at: LonLat) {
   const before = map.getCenter();
   const zoomTo = close ? zoomToSee(Math.max(0, closeup!.inM), at[1], canvas.clientHeight * (CLOSEUP_CAR_AT - 0.12)) : Math.max(10, Math.min(20, speedZoom() + zoomBias));
   const camera = {
-    bearing: view === "north" ? lerpAngle(map.getBearing(), 0, k(0.15)) : tracker.cameraBearing(map.getBearing(), k(0.15)),
+    bearing: tracker.cameraBearing(map.getBearing(), k(0.15)),
     pitch: approach(map.getPitch(), close ? CLOSEUP_PITCH : v.pitch, k(close ? 0.06 : 0.12)),
     // Quick when coming back to the car; slow as the speed changes, like a drive.
     zoom: approach(map.getZoom(), zoomTo, k(returning ? 0.12 : close ? 0.05 : 0.03)),
@@ -442,13 +449,13 @@ function setView(next: View) {
   try { localStorage.setItem("nav-view", view); } catch { /* private window */ }
   const v = VIEWS[view];
   el("view-label").textContent = v.label;
-  el("view-ic").style.transform = view === "north" ? "" : view === "3d" ? "perspective(40px) rotateX(28deg)" : "";
-  el("view-mode").classList.toggle("on", view !== "north");
+  el("view-ic").style.transform = view === "3d" ? "perspective(40px) rotateX(28deg)" : "";
+  el("view-mode").classList.toggle("on", view === "3d");
   zoomBias = 0;
   nightCity?.refresh();
   showBuildings();
   // Following, the frame eases there; off the car, the map turns on the spot.
-  if (!follow) map.easeTo({ pitch: v.pitch, bearing: view === "north" ? 0 : map.getBearing(), duration: 500 });
+  if (!follow) map.easeTo({ pitch: v.pitch, bearing: map.getBearing(), duration: 500 });
 }
 /** 야경: the buildings lit by night in the tilted view (night-city.ts); made with the other layers below. */
 let nightCity: NightCity | null = null;
@@ -477,7 +484,7 @@ el("view-mode").addEventListener("click", () => setView(ORDER[(ORDER.indexOf(vie
 
 // ---- the ground --------------------------------------------------------------
 
-let ground: TmapBase | NaverBase | null = null;
+let ground: TmapBase | null = null;
 /** Onto [next]: the other ground away, MapLibre's own style swapped only to or from OSM. */
 function setBase(next: Base, remember = true) {
   if (!baseReady(next)) next = BASE_ORDER.find(baseReady)!;
@@ -491,7 +498,6 @@ function setBase(next: Base, remember = true) {
   if ((was === "osm") !== (base === "osm")) map.setStyle(base === "osm" ? OSM_STYLE : OVERLAY_STYLE);
   try {
     if (base === "tmap") ground = new TmapBase(el("ground"), map);
-    if (base === "naver") ground = new NaverBase(el("ground"), map);
   } catch (e) {
     log(`${BASE_NAMES[base]} 지도 실패 ${(e as Error).message} — OSM 으로`);
     return setBase("osm", false);
@@ -507,8 +513,7 @@ function setBase(next: Base, remember = true) {
 /** What each ground is, and why one cannot be chosen right now. */
 function baseNote(b: Base): string {
   if (b === "osm") return "오픈스트리트맵 · 키 없이 · 한국 골목은 빠지기도";
-  if (baseReady(b)) return b === "tmap" ? "티맵 도로망 · 혼잡도와 같은 데이터" : "네이버 지도 · 상호와 건물이 자세함";
-  if (b === "naver" && window.naverRefused) return `인증 실패 — NCP 콘솔 Web 서비스 URL 에 ${location.origin}`;
+  if (baseReady(b)) return "티맵 도로망 · 혼잡도와 같은 데이터";
   return "서버에 키가 없음 (/admin)";
 }
 function drawBaseMenu() {
@@ -529,6 +534,8 @@ function drawBaseMenu() {
     box.append(button);
   }
 }
+// The ground picker only at a desk (?debug): in the car the ground is TMAP, full stop.
+el("base-mode").hidden = !new URLSearchParams(location.search).has("debug");
 el("base-mode").addEventListener("click", (e) => {
   e.stopPropagation();
   const menu = el("base-menu");
@@ -544,18 +551,7 @@ document.addEventListener("pointerdown", (e) => {
   const menu = el("base-menu");
   if (!menu.hidden && !menu.contains(e.target as Node) && !el("base-mode").contains(e.target as Node)) menu.hidden = true;
 });
-// NAVER says no only after its script has run (the key's settings are
-// checked on its server): off its ground, and out of the round.
-function naverRefused() {
-  log(`네이버 지도 인증 실패 — NCP 콘솔 Maps 앱의 Web 서비스 URL 에 ${location.origin} 이 있는지 확인하세요`);
-  if (base === "naver") setBase(BASE_ORDER.find(baseReady)!, false);
-  else drawBaseMenu();
-}
-window.addEventListener("naver-refused", naverRefused);
 setBase(base, false);
-// The refusal can come before this module runs (its answer races the
-// page's own scripts), so it is looked for once more here.
-if (window.naverRefused) naverRefused();
 el("locate").addEventListener("click", () => setFollow(true));
 for (const [id, by] of [["zoom-in", 1], ["zoom-out", -1]] as const) {
   el(id).addEventListener("click", () => {

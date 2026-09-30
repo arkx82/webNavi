@@ -8,15 +8,6 @@
     <!-- TMAP's vector map, when the server has a TMAP key (an empty script
          otherwise). Blocking on purpose: TMAP's loader document.writes the SDK. -->
     <script src="/api/map/tmap.js"></script>
-    <!-- NAVER's GL map likewise; a refusal (no Dynamic Map, or this address
-         not registered) is noted so the app picks another ground. -->
-    <script>
-      window.navermap_authFailure = function () {
-        window.naverRefused = true;
-        window.dispatchEvent(new Event("naver-refused"));
-      };
-    </script>
-    <script src="/api/map/naver.js"></script>
   </head>
   <body class="hud-min">
     <div id="ground" hidden></div>
