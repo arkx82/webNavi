@@ -2095,9 +2095,16 @@ function wearTint(art: string | undefined) {
   });
 }
 
+/** What the dock last drew: the track, its state and its note. A time tick with the same draws only the progress. */
+let drawnNow = "";
 function showNow(state: NowPlaying) {
   now = state;
   nowAt = performance.now();
+  // The player reports its time several times a second; the track, the art, the buttons and the media session
+  // are drawn again only when one of them changed (each redraw re-made two SVGs and a MediaMetadata).
+  const key = `${state.title ?? ""}\u0001${state.artist ?? ""}\u0001${state.art ?? ""}\u0001${state.playing ? 1 : 0}\u0001${state.note ?? ""}\u0001${state.durationS ?? ""}`;
+  if (key === drawnNow) { drawProgress(); return; }
+  drawnNow = key;
   drawDockSize();
   const has = !!state.title;
   el("music-dock").classList.toggle("playing", state.playing);
