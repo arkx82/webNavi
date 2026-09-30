@@ -143,7 +143,8 @@ export class CameraLayer {
       layout: {
         "icon-image": ["get", "icon"],
         // Small as the map draws back, full size close in: a sign the size of a street block at zoom 13 looked adrift.
-        "icon-size": ["*", ["case", ["get", "next"], 1.5, 1], ["interpolate", ["exponential", 1.6], ["zoom"], 12, 0.35, 14, 0.55, 16, 0.8, 18, 1]],
+        // The zoom curve must be the outermost expression (MapLibre drops the layer otherwise); the next one's 1.5 goes in each stop.
+        "icon-size": ["interpolate", ["exponential", 1.6], ["zoom"], ...[[12, 0.35], [14, 0.55], [16, 0.8], [18, 1]].flatMap(([z, s]) => [z, ["*", ["case", ["get", "next"], 1.5, 1], s]])] as maplibregl.ExpressionSpecification,
         "icon-pitch-alignment": "map",
         "text-pitch-alignment": "map",
         "icon-allow-overlap": true,

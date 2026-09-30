@@ -195,3 +195,17 @@ test("a camera first learned of at 250 m gets its 300 m rung alone, not the 600 
   assert.equal(watch.due(560).length, 0);
   assert.equal(watch.due(700).length, 0);
 });
+
+test("a 신호·과속 camera given as two rows is one warning", () => {
+  const watch = new RouteWatch(route);
+  watch.add([
+    { id: "sig", kind: "signal", ...lonLat(offset(start, 0, 800)) },
+    { id: "spd", kind: "speed", ...lonLat(offset(start, 0, 815)), limit: 50 },
+    // 100 m on: another camera, its own warning.
+    { id: "next", kind: "signal", ...lonLat(offset(start, 0, 900)) },
+  ]);
+  const due = watch.due(250);
+  assert.deepEqual(due.map((d) => d.feature.id), ["sig"]);
+  assert.equal(phraseFor(due[0]), "육백미터 앞에 신호 과속 단속 카메라가 있습니다, 제한 속도 오십입니다");
+  assert.equal(watch.ahead(250).length, 2);
+});

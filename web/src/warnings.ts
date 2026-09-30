@@ -83,6 +83,17 @@ export interface WatchPrefs {
 }
 const ALL: WatchPrefs = { wants: () => true, cameraFromM: 600 };
 
+/** Cameras this close along the route are one camera. */
+const CAMERA_TWIN_M = 40;
+const MERGED_CAMERAS = new Set<Kind>(["speed", "signal", "speed-signal"]);
+/** Two rows for one camera as one: speed and signal together are a 신호·과속 camera; the limit is whichever says one. The first row's id is kept, so what was said of it stays said. */
+function mergeCameras(a: Feature, b: Feature): Feature {
+  const speed = a.kind !== "signal" || b.kind !== "signal";
+  const signal = a.kind !== "speed" || b.kind !== "speed";
+  const kind: Kind = speed && signal ? "speed-signal" : speed ? "speed" : "signal";
+  return { ...a, kind, limit: a.limit ?? b.limit };
+}
+
 export class RouteWatch {
   private line: Line;
   /** Every feature on the route, sorted by where it is along it. */
@@ -114,6 +125,12 @@ export class RouteWatch {
       return;
     }
     if (p.offM > Math.max(REACH_M[f.kind] ?? ON_ROUTE_M, f.radiusM ?? 0)) return;
+    // One camera, one warning: a 신호·과속 camera the lists give as two rows (a speed one and a signal one,
+    // or the same one from two sources) was said twice at once, "과속 단속 … 오십" and "신호 단속" together.
+    if (MERGED_CAMERAS.has(f.kind)) {
+      const twin = this.onRoute.find((o) => MERGED_CAMERAS.has(o.feature.kind) && Math.abs(o.alongM - p.alongM) <= CAMERA_TWIN_M);
+      if (twin) { twin.feature = mergeCameras(twin.feature, f); return; }
+    }
     // A rest area on the left is the other carriageway's (Korea drives on the right).
     if (f.kind === "rest-area" && p.offM > 30 && sideOf(p.bearing, bearing(p.at[0], p.at[1], f.lon, f.lat)) < 0) return;
     // An area begins where the route enters its circle, and ends where it leaves.

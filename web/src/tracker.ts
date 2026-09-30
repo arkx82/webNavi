@@ -242,7 +242,7 @@ export class Tracker {
   }
 
   /** Smoothed bearing for the camera: turns toward the shown bearing. */
-  cameraBearing(current: number): number {
-    return lerpAngle(current, this.shownBearing, 0.15);
+  cameraBearing(current: number, share = 0.15): number {
+    return lerpAngle(current, this.shownBearing, share);
   }
 }

@@ -202,10 +202,12 @@ button.primary { background: var(--accent); color: #000; font-weight: 600; min-h
 #then { display: flex; align-items: center; gap: 8px; padding: 0 12px; font-size: 14px; color: var(--dim); }
 #then .then-label { font-size: 12px; padding: 1px 6px; border: 1px solid #3a3a44; border-radius: 6px; }
 #then svg { width: 20px; height: 20px; }
-#eta { display: flex; align-items: baseline; justify-content: space-between; padding: 4px 4px 0; }
+#eta { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 4px 4px 0; }
+/* One line each: a long "1시간 9분 · 107.0 km · 네이버" gives up its end (the provider), never breaks "도착" in two. */
+#eta > div:first-child { flex: none; white-space: nowrap; }
 #eta b { font-size: 26px; font-variant-numeric: tabular-nums; }
 #eta small { color: var(--dim); }
-#eta-left { color: var(--dim); font-size: 15px; }
+#eta-left { color: var(--dim); font-size: 15px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* ---- on the map's right edge ---- */
 /* The column moves left of whatever holds the right side: the 주변 sheet
    or the open player. */

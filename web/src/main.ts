@@ -278,9 +278,20 @@ requestAnimationFrame(frame);
 
 const approach = (from: number, to: number, k: number) => (Math.abs(to - from) < 0.005 ? to : from + (to - from) * k);
 
+/** When the camera last followed, so its easing goes by time, not by frames. */
+let followedAt = 0;
+
 /** One frame of following: everything eases toward where it should be. */
 function followCar(at: LonLat) {
   const v = VIEWS[view];
+  // The easing shares below are per frame at 60 fps. A slower browser (the car's, a busy one) draws fewer
+  // frames, and at the same shares took seconds to find the car after 안내 시작: scaled here to the time
+  // since the last frame, the glide takes as long at any frame rate. A long gap (not following) is one frame.
+  const now = performance.now();
+  const gap = now - followedAt;
+  followedAt = now;
+  const frames = gap > 1000 ? 1 : Math.min(gap, 250) / (1000 / 60);
+  const k = (share: number) => 1 - Math.pow(1 - share, frames);
   // Close up on a junction: the car low on the screen, tilted, drawn back to see the fork (closeup.ts).
   const close = closeup && view !== "north";
   const canvas = map.getCanvas();
@@ -291,18 +302,18 @@ function followCar(at: LonLat) {
     const top = card.getBoundingClientRect().top - canvas.getBoundingClientRect().top;
     want = { x: want.x, y: Math.min(want.y, top - CAR_ABOVE_CARD_PX) };
   }
-  spot = spot ? { x: approach(spot.x, want.x, 0.08), y: approach(spot.y, want.y, 0.08) } : want;
+  spot = spot ? { x: approach(spot.x, want.x, k(0.08)), y: approach(spot.y, want.y, k(0.08)) } : want;
   const before = map.getCenter();
   const zoomTo = close ? zoomToSee(Math.max(0, closeup!.inM), at[1], canvas.clientHeight * (CLOSEUP_CAR_AT - 0.12)) : Math.max(10, Math.min(20, speedZoom() + zoomBias));
   const camera = {
-    bearing: view === "north" ? lerpAngle(map.getBearing(), 0, 0.15) : tracker.cameraBearing(map.getBearing()),
-    pitch: approach(map.getPitch(), close ? CLOSEUP_PITCH : v.pitch, close ? 0.06 : 0.12),
+    bearing: view === "north" ? lerpAngle(map.getBearing(), 0, k(0.15)) : tracker.cameraBearing(map.getBearing(), k(0.15)),
+    pitch: approach(map.getPitch(), close ? CLOSEUP_PITCH : v.pitch, k(close ? 0.06 : 0.12)),
     // Quick when coming back to the car; slow as the speed changes, like a drive.
-    zoom: approach(map.getZoom(), zoomTo, returning ? 0.12 : close ? 0.05 : 0.03),
+    zoom: approach(map.getZoom(), zoomTo, k(returning ? 0.12 : close ? 0.05 : 0.03)),
   };
   let center = centreFor(at, spot, camera);
   if (returning) {
-    const eased: LonLat = [before.lng + (center[0] - before.lng) * 0.15, before.lat + (center[1] - before.lat) * 0.15];
+    const eased: LonLat = [before.lng + (center[0] - before.lng) * k(0.15), before.lat + (center[1] - before.lat) * k(0.15)];
     if (metres(eased[0], eased[1], center[0], center[1]) < 1) returning = false;
     center = eased;
   }
@@ -334,7 +345,7 @@ const CAR_ABOVE_CARD_PX = 70;
 let closeup: Closeup | null = null;
 const closeupHold = new CloseupHold({
   motorway: (g) => onMotorway.get(g) ?? false,
-  maneuver: (g) => maneuverOf(route!.provider, g),
+  maneuver: (g) => maneuverFor(g),
   label: (g) => {
     const j = junctionOf(g);
     return ["분기점", j?.name, j?.toward && `${j.toward} 방면`].filter(Boolean).join(" · ");
@@ -901,6 +912,7 @@ function startDrive(r: Route) {
   // place (the same camera, the same junction, once); a new place starts afresh.
   if (fresh || elsewhere) {
     turnsSaid.clear();
+    linesSaid.clear();
     warningsSaid.clear();
     popups.clear();
     dismissed.clear();
@@ -1088,6 +1100,8 @@ tracker.onOffRoute = async (at) => {
 
 /** The rungs already spoken, per guide (speech.ts decides which and when). */
 const turnsSaid = new Map<string, Set<number>>();
+/** Junctions whose guide line ("분홍색 유도선을 따라가세요") was said: once a junction, not at every far rung. */
+const linesSaid = new Set<string>();
 /** The same for the road's warnings, by feature. */
 const warningsSaid = new Map<string, Set<number>>();
 /** A junction's key: its place to about 20 m, since each provider puts the same turn a few metres apart. */
@@ -1136,13 +1150,13 @@ function showTurn(shown: Shown) {
     return;
   }
   const g = shown.nextGuide.guide;
-  const m = maneuverOf(route.provider, g);
+  const m = maneuverFor(g);
   putHtml("turn-icon", arrowSvg(m));
   put("turn-in", km(shown.nextGuide.inM));
   put("turn-text", shortOf(g));
   if (shown.thenGuide && shown.thenGuide.inM - shown.nextGuide.inM < 800) {
     el("then").hidden = false;
-    putHtml("then-icon", arrowSvg(maneuverOf(route.provider, shown.thenGuide.guide), 20));
+    putHtml("then-icon", arrowSvg(maneuverFor(shown.thenGuide.guide), 20));
     put("then-text", `${km(shown.thenGuide.inM - shown.nextGuide.inM)} 후 ${shortOf(shown.thenGuide.guide)}`);
   } else {
     el("then").hidden = true;
@@ -1162,7 +1176,10 @@ function showTurn(shown: Shown) {
   voice.say(named ?? due.text, named ? due.text : plain, { key: `turn:${key}:${due.rung}`, turn: true });
   // The first far rung (a kilometre out): the guide line's colour where it is painted, else which side to be on.
   const colour = due.rung > TURN_NEAR_M ? lineColour(g, m) : null;
-  if (colour && guide.colorLines) voice.say(GUIDE_LINES[colour], undefined, { key: `line:${key}`, turn: true });
+  if (colour && guide.colorLines) {
+    if (!linesSaid.has(key)) voice.say(GUIDE_LINES[colour], undefined, { key: `line:${key}`, turn: true });
+    linesSaid.add(key);
+  }
   else if (motorway && guide.laneHints && due.rung >= 1000 && !lanesShown) {
     const hint = laneHint(m);
     if (hint) voice.say(hint, undefined, { key: `lane:${key}`, turn: true });
@@ -1264,7 +1281,7 @@ function showLanes(shown: Shown) {
   if (heldTurn && shown.alongM != null && route && shown.alongM - heldTurn.alongM < TURN_HELD_M && route.guides.includes(heldTurn.guide)) {
     next = { guide: heldTurn.guide, inM: heldTurn.alongM - shown.alongM };
   } else heldTurn = null;
-  const m = next && route ? maneuverOf(route.provider, next.guide) : null;
+  const m = next && route ? maneuverFor(next.guide) : null;
   // Every turn (not straight on, not the arrival), from 400 m in town or a kilometre on a motorway.
   const within = next && m && route && routeLine && guide.laneGuide && m !== "straight" && m !== "arrive" && m !== "depart" && m !== "other"
     && next.inM <= ((onMotorway.get(next.guide) ?? false) ? LANES_MOTORWAY_M : LANES_TOWN_M) && next.inM > -TURN_HELD_M;
@@ -1288,7 +1305,7 @@ function showLanes(shown: Shown) {
     const before = line.place(p.alongM - 30).at;
     const inDeg = bearing(before[0], before[1], p.at[0], p.at[1]);
     const after = Array.from({ length: 11 }, (_, k) => line.place(p.alongM + k * 15).at);
-    const way = wayOf(maneuverOf(route!.provider, g));
+    const way = wayOf(maneuverFor(g));
     const q = new URLSearchParams({ at: `${g.at[0]},${g.at[1]}`, in: String(Math.round(inDeg)), after: after.map((a) => `${a[0].toFixed(6)},${a[1].toFixed(6)}`).join(";") });
     if (way) q.set("way", way);
     void fetch(`/api/hdmap/lanes?${q}`).then((a) => (a.ok ? a.json() : null)).then((info: Lanes | null) => {
@@ -1376,12 +1393,40 @@ function namedFor(g: Guide, m: Maneuver, rung: number): string | null {
   const j = junctionOf(g);
   return j ? namedTurnPhrase(m as Turn, rung, j) : null;
 }
-/** The way the route bends at [g]: its bearing 40 m before against 40 m after. */
+/** Junction words with no side in them ("분기도로 진입", "고속도로 출구"): the side is the road's to show. */
+const JUNCTION_WORDS = /분기|진입|진출|출구|램프|IC|JC|나들목/;
+const TOLL_WORDS = /톨게이트|요금소/;
+/** Guides whose way was read off the bend, once each. */
+const bentWays = new WeakMap<Guide, Maneuver>();
+/**
+ * A guide's way on this route: its words, else its code (maneuverOf), else,
+ * for a junction that names no side, the way the road bends there. Without
+ * that a "분기도로 진입" had a dot for an arrow, no picture of the fork and
+ * no side said.
+ */
+function maneuverFor(g: Guide): Maneuver {
+  const m = maneuverOf(route!.provider, g);
+  const words = `${g.text} ${g.name ?? ""}`;
+  if (m !== "other" || !JUNCTION_WORDS.test(words) || TOLL_WORDS.test(words)) return m;
+  let bent = bentWays.get(g);
+  if (bent === undefined) {
+    if (!routeLine) return m;
+    bent = bendOf(g) ?? "other";
+    bentWays.set(g, bent);
+  }
+  return bent;
+}
+
+/**
+ * The way the route bends at [g]: its bearing 100 m before against 100 m
+ * after (a fork parts slowly; over 40 m most read under 10°). A motorway
+ * exit that bends neither way clearly is on the right, as nearly all are.
+ */
 function bendOf(g: Guide): Turn | null {
   if (!routeLine) return null;
   const at = routeLine.project(g.at, 0, routeLine.path.length).alongM;
   const exit = /출구|진출/.test(g.text) && (onMotorway.get(g) ?? false);
-  return fromBend(routeLine.place(at - 40).bearing, routeLine.place(at + 40).bearing, exit);
+  return fromBend(routeLine.place(at - 100).bearing, routeLine.place(at + 100).bearing, exit) ?? (exit ? "ramp-right" : null);
 }
 /** A new route: which guides are on motorways, and their named sentences asked for now, to be ready. */
 function prepareHighway(r: Route) {
@@ -1398,7 +1443,7 @@ function prepareHighway(r: Route) {
   if (!guide.junctionNames || !guide.turns) return;
   for (const g of r.guides) {
     if (!onMotorway.get(g)) continue;
-    const m = maneuverOf(r.provider, g);
+    const m = maneuverFor(g);
     for (const rung of [1000, 500]) {
       const text = namedFor(g, m, rung);
       if (text) voice.prefetch(text);
@@ -2180,6 +2225,8 @@ function simSpeed(): number {
 }
 el<HTMLInputElement>("sim-speed").addEventListener("input", () => {
   el("sim-speed-label").textContent = el<HTMLInputElement>("sim-speed").value;
+  // The bar on the drive screen too, whichever control moved it.
+  el("sim-kmh").textContent = el<HTMLInputElement>("sim-speed").value;
   if (sim) sim.speedMps = simSpeed();
 });
 function startSim() {
@@ -2351,6 +2398,8 @@ if (new URLSearchParams(location.search).has("debug")) {
     get watch() { return watch; },
     get sim() { return sim; },
     recheck: () => recheckRoute(),
+    /** Each guide of the route with the way it is shown and said as. */
+    ways: () => route?.guides.map((g) => ({ text: g.text, name: g.name, code: g.turnType, m: maneuverFor(g) })) ?? [],
   };
 }
 
