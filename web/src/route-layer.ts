@@ -82,7 +82,17 @@ export class RouteLayer {
     const lines: GeoJSON.Feature[] = [];
     const dots: GeoJSON.Feature[] = [];
     if (route) {
-      for (const s of route.segments) {
+      // Every stretch of the path, the ones no segment names as unknown: a line with holes is not a route.
+      const segments = [...route.segments].sort((a, b) => a.from - b.from);
+      let at = 0;
+      const whole: { from: number; to: number; congestion: number }[] = [];
+      for (const s of segments) {
+        if (s.from > at) whole.push({ from: at, to: s.from, congestion: 0 });
+        whole.push(s);
+        at = Math.max(at, s.to);
+      }
+      if (at < route.path.length - 1) whole.push({ from: at, to: route.path.length, congestion: 0 });
+      for (const s of whole) {
         const coords = route.path.slice(s.from, Math.min(route.path.length, s.to + 1));
         if (coords.length < 2) continue;
         lines.push({ type: "Feature", properties: { congestion: s.congestion }, geometry: { type: "LineString", coordinates: coords } });

@@ -16,3 +16,15 @@ test("a motorway runs from its entrance to the exit, or to the first town turn",
   assert.deepEqual(motorwaysByGuides(guides, 430), [[20, 300], [320, 400]]);
   assert.deepEqual(motorwaysByGuides(guides.slice(0, 3), 430), [[20, 429]]);
 });
+
+test("the stretches NAVER's sections leave out are drawn as unknown, so the line has no holes", async () => {
+  const { coverPath } = await import("./types.js");
+  const covered = coverPath([{ from: 47, to: 225, congestion: 1 }, { from: 276, to: 329, congestion: 3 }], 504);
+  assert.deepEqual(covered, [
+    { from: 0, to: 47, congestion: 0 }, { from: 47, to: 225, congestion: 1 }, { from: 225, to: 276, congestion: 0 },
+    { from: 276, to: 329, congestion: 3 }, { from: 329, to: 504, congestion: 0 },
+  ]);
+  // Sections out of order, or overlapping, come out in order and whole; none at all is one unknown stretch.
+  assert.deepEqual(coverPath([{ from: 10, to: 20, congestion: 2 }, { from: 0, to: 12, congestion: 1 }], 20), [{ from: 0, to: 12, congestion: 1 }, { from: 12, to: 20, congestion: 2 }]);
+  assert.deepEqual(coverPath([], 5), [{ from: 0, to: 5, congestion: 0 }]);
+});

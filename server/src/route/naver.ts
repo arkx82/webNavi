@@ -1,4 +1,4 @@
-import { askJson, isMotorwayName, markMotorway, type LonLat, type Route, type RouteProvider, type RouteRequest, type Segment } from "./types.js";
+import { type LonLat, type Route, type RouteProvider, type RouteRequest, type Segment, askJson, coverPath, isMotorwayName, markMotorway } from "./types.js";
 
 /**
  * Naver Cloud Directions 5. One `path` of [lon, lat]; guides and sections
@@ -55,11 +55,12 @@ export class Naver implements RouteProvider {
         distanceM: g.distance,
         turnType: g.type,
       })),
-      segments: first.section.map((s) => ({
+      // The sections name the main roads only; the rest of the path is drawn as unknown, not left out.
+      segments: coverPath(first.section.map((s) => ({
         from: s.pointIndex,
         to: s.pointIndex + s.pointCount,
         congestion: Math.min(3, Math.max(0, s.congestion)) as Segment["congestion"],
-      })),
+      })), first.path.length),
     };
     // The named sections and the stretches between a guide's "고속도로 진입" and its exit, joined in order.
     const stretches: [number, number][] = [

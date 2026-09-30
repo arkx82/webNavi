@@ -52,6 +52,26 @@ export function isMotorwayName(name: string | undefined | null): boolean {
   return !!name && MOTORWAY_NAME.test(name.replace(/\s+/g, ""));
 }
 
+/**
+ * [segments] made to cover the whole path (0 to [pathLength]): sorted, and
+ * every stretch no segment names filled in as unknown (0). NAVER names
+ * only the main roads' sections — of 504 points, three sections left
+ * 0–47, 225–276 and 329–503 to no one, and the line had holes.
+ */
+export function coverPath(segments: Segment[], pathLength: number): Segment[] {
+  const sorted = [...segments].filter((s) => s.to > s.from).sort((a, b) => a.from - b.from);
+  const out: Segment[] = [];
+  let at = 0;
+  for (const s of sorted) {
+    const from = Math.max(at, s.from), to = Math.min(pathLength, s.to);
+    if (from > at) out.push({ from: at, to: from, congestion: 0 });
+    if (to > from) out.push({ from, to, congestion: s.congestion });
+    at = Math.max(at, to);
+  }
+  if (at < pathLength) out.push({ from: at, to: pathLength, congestion: 0 });
+  return out;
+}
+
 /** Adds [from, to) to [route.motorways], joining it to the last range where they touch. */
 export function markMotorway(route: Route, from: number, to: number) {
   if (to <= from) return;
