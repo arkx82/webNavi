@@ -91,12 +91,28 @@ open https://nav.example.com/admin   # 비밀번호 정하고 키 입력, 사용
 것만 경로 위로 친다(반대편 차로의 돌발은 아직 걸러지지 않을 수 있다). 미세먼지
 측정소를 거리로 고르려면 `측정소정보` 서비스를 따로 활용신청해야 한다.
 
+## 자체 경로 (표준노드링크 + OSRM)
+
+3사 옆에 네 번째 후보 **자체**: 국가교통정보센터 전국표준노드링크(its.go.kr, 전국 링크
+약 156만 개·회전제한 4.4만 건)를 OSM 형식으로 바꿔 이 서버의 OSRM(MLD)이 길을 찾는다.
+아직 교통 정보 없이 제한속도 기준이고, ITS 소통정보(링크 ID가 같다)를 붙이는 게 다음 단계.
+
+```bash
+# its.go.kr → 자료실 → 전국표준노드링크에서 최신 NODELINKDATA.zip 하나를 /mnt/data/nodelink/ 에, 풀어서
+python3 tools/nodelink/build.py /mnt/data/nodelink/2026-09-14 /mnt/data/webnavi/nodelink
+docker compose up -d osrm nav    # osrm 서비스가 /data/korea.osrm 을 서빙, nav 는 KOREA_OSRM_URL 로 묻는다
+```
+
+변환 규칙은 `tools/nodelink/build.py` 머리에 있다: 도로등급 → highway(고속국도 motorway … 시군도
+unclassified), 연결로 → *_link, 링크마다 oneway·maxspeed·lanes·name·ref, 교량·터널, 회전제한
+(좌회전·직진·우회전·회전 금지) → restriction 관계. 큰 교차로는 짧은 내부 링크의 고리로 그려져 있어 회전제한은 그 고리를 거치는 via-way 관계가 되고, 고리를 한 바퀴 도는 것과 유턴 허용(011) 없는 고리 유턴은 자동으로 막는다. 시간제 회전제한은 전일제로 본다. OSRM 은 6.0 (5.26 은 via-way 여러 개에서 죽는다).
+
 ## API
 
 | 호출 | 답 |
 |---|---|
 | `GET /api/health` | 제공자별 키 유무, 색인된 시설물 수 |
-| `GET /api/route?provider=tmap\|kakao\|naver&start=lon,lat&goal=lon,lat` | 세 제공자를 한 모양으로: `path`, `guides`, `segments{congestion 0..3}` |
+| `GET /api/route?provider=tmap\|kakao\|naver\|korea&start=lon,lat&goal=lon,lat` | 제공자를 한 모양으로: `path`, `guides`, `segments{congestion 0..3}`. `korea` 는 아래 자체 경로 |
 | `GET /api/route?provider=all&…` | 키 있는 제공자 전부 동시에: `{routes, errors}` |
 | `GET /api/search?q=&near=lon,lat` | 카카오 로컬 키워드 검색, 가까운 순 |
 | `GET /api/nearby?cat=&at=lon,lat&r=&fuel=` | 주변 한 종류. `cat` = gas·ev·parking·food·cafe·cvs·hospital·pharmacy·bank·rest. 주유소는 오피넷(`fuel` B027 휘발유·D047 경유·B034 고급·K015 LPG의 가격), 충전소는 환경공단(급속/완속 빈 수, 최대 kW, 요금), 나머지는 카카오 카테고리 |

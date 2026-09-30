@@ -8,6 +8,8 @@ services:
     env_file: .env
     environment:
       WORK_DIR: /work
+      # Our own routes: OSRM over 표준노드링크 (the osrm service below).
+      KOREA_OSRM_URL: http://osrm:5000
     volumes:
       - ./server/data:/data:ro
       # Keys typed on /admin, encrypted; the master key sits beside them.
@@ -19,6 +21,16 @@ services:
     expose: ["8080"]
     # Plain http on the LAN; a Cloudflare Tunnel on this host points here for https.
     ports: ["8088:8080"]
+
+  # Our own router: OSRM over 표준노드링크, the graph tools/nodelink/build.py
+  # makes on the host under /mnt/data/webnavi/nodelink. Reached only by nav.
+  osrm:
+    image: ghcr.io/project-osrm/osrm-backend:v6.0.0
+    restart: unless-stopped
+    command: osrm-routed --algorithm mld --max-table-size 1000 /data/korea.osrm
+    volumes:
+      - /mnt/data/webnavi/nodelink:/data:ro
+    expose: ["5000"]
 
   # Not used while a Cloudflare Tunnel ends HTTPS; uncomment to go back to Caddy.
   # # TLS in front: the browser only hands out geolocation and wake lock on

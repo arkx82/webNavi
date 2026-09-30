@@ -52,6 +52,8 @@ const providers: Record<Provider, RouteProvider> = {
   // OpenStreetMap roads with no key and no traffic: the desk's provider,
   // and the road under the demo. Left out of "all" when a real one answers.
   osrm: new Osrm(),
+  // The same engine over 표준노드링크 on this host (tools/nodelink/build.py; compose's osrm service).
+  korea: new Osrm(env.KOREA_OSRM_URL ?? "http://osrm:5000", "korea", !!env.KOREA_OSRM_URL),
 };
 
 const search = new KakaoSearch(settings.reader("kakaoRestKey"));
@@ -473,7 +475,7 @@ app.get<{ Querystring: { url: string } }>("/api/stream", async (request, reply) 
 // The settings page, and one real call per service to prove a key.
 const admin = registerAdmin(app, settings, {
   status: () => ({
-    tmap: providers.tmap.ready, kakao: providers.kakao.ready, naver: providers.naver.ready, osrm: "키 없음(무료)",
+    tmap: providers.tmap.ready, kakao: providers.kakao.ready, naver: providers.naver.ready, osrm: "키 없음(무료)", 자체경로: providers.korea.ready ? `OSRM ${env.KOREA_OSRM_URL}` : "KOREA_OSRM_URL 없음",
     검색: search.ready, 음성: speaker.ready, 목소리: speaker.voice,
     "음성 모델": speaker.ready ? (speaker.spent.current() ?? "무료 한도 모두 소진") + (speaker.spent.spentModels().length ? ` (소진: ${speaker.spent.spentModels().length}개)` : "") : false,
     "주유 가격": nearby.opinet.ready, 충전소: nearby.ev.ready ? true : nearby.kakao.ready ? "카카오 (빈 충전기 수 없음)" : false,
@@ -498,6 +500,7 @@ const admin = registerAdmin(app, settings, {
       tmap: await word(providers.tmap.ready, () => providers.tmap.route({ start, goal })),
       kakao: await word(providers.kakao.ready, () => providers.kakao.route({ start, goal })),
       naver: await word(providers.naver.ready, () => providers.naver.route({ start, goal })),
+      자체경로: await word(providers.korea.ready, () => providers.korea.route({ start, goal })),
       검색: await word(search.ready, () => search.find("서울역")),
       "주유 가격": await word(nearby.opinet.ready, () => nearby.opinet.near(start, 2000, "B027")),
       충전소: await word(nearby.ev.ready, () => nearby.ev.near(start, 1000)),

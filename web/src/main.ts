@@ -67,7 +67,9 @@ const STYLE_WAIT_S = 8;
 const GROUND: maplibregl.StyleSpecification = {
   version: 8, sources: {}, layers: [{ id: "ground", type: "background", paint: { "background-color": "#e6e2d8" } }],
 };
-const NAMES: Record<Provider, string> = { tmap: "티맵", kakao: "카카오", naver: "네이버", osrm: "OSM" };
+const NAMES: Record<Provider, string> = { tmap: "티맵", kakao: "카카오", naver: "네이버", osrm: "OSM", korea: "자체" };
+/** Providers whose route knows no traffic: the card says so beside the time. */
+const NO_TRAFFIC = new Set<Provider>(["osrm", "korea"]);
 /** How often the road is asked again for a better way, and how much better it must be. */
 const RECHECK_MS = 6 * 60_000;
 const BETTER_BY_S = 3 * 60;
@@ -837,7 +839,7 @@ function drawOffers() {
     const tag = r === quickest ? `<span class="tag">가장 빠름</span>` : r === shortest ? `<span class="tag alt">최단 거리</span>` : "";
     li.innerHTML =
       `<div class="l1"><b>${minutes(r.durationS)}</b><span>${arrivalAt(r.durationS)} 도착</span>${tag}</div>` +
-      `<div class="l2">${km(r.distanceM)} · ${NAMES[r.provider]}${r.provider === "osrm" ? " (교통 정보 없음)" : ""}</div>` +
+      `<div class="l2">${km(r.distanceM)} · ${NAMES[r.provider]}${NO_TRAFFIC.has(r.provider) ? " (교통 정보 없음)" : ""}</div>` +
       `<div class="bar">${trafficBar(r)}</div>`;
     li.addEventListener("click", () => {
       chosen = r;
@@ -2268,7 +2270,7 @@ if (demo) map.once("load", async () => {
       { from: q(0.5), to: q(0.7), congestion: 3 }, { from: q(0.7), to: n, congestion: 1 },
     ],
   });
-  health = { ok: true, providers: { tmap: true, kakao: true, naver: true, osrm: true }, safetyFeatures: 48210, search: true, tts: true };
+  health = { ok: true, providers: { tmap: true, kakao: true, naver: true, osrm: true, korea: false }, safetyFeatures: 48210, search: true, tts: true };
   goal = { name: "스타벅스 선릉역점", address: "서울 강남구 테헤란로 340", at: path[n - 1] };
   offers = [fake("kakao", 14 * 60), fake("tmap", 16 * 60), fake("naver", 19 * 60)];
   chosen = offers[0];

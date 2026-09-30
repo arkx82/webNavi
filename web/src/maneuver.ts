@@ -52,7 +52,7 @@ export function maneuverOf(provider: Provider, guide: Guide): Maneuver {
 
 function readManeuver(provider: Provider, guide: Guide): Maneuver {
   const t = guide.turnType;
-  if (provider === "osrm" && typeof t === "string") {
+  if ((provider === "osrm" || provider === "korea") && typeof t === "string") {
     const [type, mod] = t.split("/");
     if (type === "arrive") return "arrive";
     if (type === "roundabout" || type === "rotary") return "roundabout";

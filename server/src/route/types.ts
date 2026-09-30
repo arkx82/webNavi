@@ -1,6 +1,7 @@
 /** One shape for every provider's answer, so the client never sees three. */
 
-export type Provider = "tmap" | "kakao" | "naver" | "osrm";
+/** korea: our own OSRM over 표준노드링크 (tools/nodelink/build.py), served by docker compose's osrm service. */
+export type Provider = "tmap" | "kakao" | "naver" | "osrm" | "korea";
 
 /** [lon, lat] — GeoJSON order, which is what MapLibre and Turf take. */
 export type LonLat = [number, number];

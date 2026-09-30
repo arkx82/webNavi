@@ -24,11 +24,14 @@ interface OsrmAnswer {
 }
 
 export class Osrm implements RouteProvider {
-  readonly name = "osrm" as const;
-  constructor(private base = "https://router.project-osrm.org") {}
-  /** Always offered; it is the provider of last resort. */
+  /**
+   * [name] "osrm": the public demo server, always offered, the provider of
+   * last resort. "korea": the same engine on this host over 표준노드링크
+   * (KOREA_OSRM_URL, docker compose's osrm service), offered when that is set.
+   */
+  constructor(private base = "https://router.project-osrm.org", readonly name: "osrm" | "korea" = "osrm", private readonly on = true) {}
   get ready() {
-    return true;
+    return this.on;
   }
 
   async route({ start, goal }: RouteRequest): Promise<Route> {
