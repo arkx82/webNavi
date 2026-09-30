@@ -33,6 +33,8 @@ export interface GuideSettings {
   layout: "classic" | "mini";
   /** 낮/밤: by the sun where the car is, or always light, or always dark (theme.ts). */
   theme: "auto" | "light" | "dark";
+  /** 야경: by night in the 3D view, the buildings lit (night-city.ts). */
+  nightCity: boolean;
   /** Traffic lights on the map: only those on the route ahead while driving, every one, or none. */
   lightsOnMap: "route" | "all" | "off";
   /** The cameras on the map, the same way. */
@@ -73,7 +75,7 @@ export interface GuideSettings {
 export type Mode = "voice" | "show" | "off";
 
 export const DEFAULTS: GuideSettings = {
-  voice: true, voiceName: null, volume: 1, turns: true, junctionNames: true, laneHints: true, merges: true, closeups: true, sendLogs: true, layout: "classic", hdLanes: true, laneGuide: true, colorLines: true, theme: "auto", lightsOnMap: "route", camerasOnMap: "route", nextLight: true, flashSignals: true,
+  voice: true, voiceName: null, volume: 1, turns: true, junctionNames: true, laneHints: true, merges: true, closeups: true, sendLogs: true, layout: "classic", hdLanes: true, laneGuide: true, colorLines: true, theme: "auto", nightCity: true, lightsOnMap: "route", camerasOnMap: "route", nextLight: true, flashSignals: true,
   cameras: true, cameraFromM: 600, sections: true, schools: true,
   bumps: "show", curves: "show", accidents: "show", bikeAccidents: "show",
   overspeed: true, overspeedBy: 0,
@@ -178,6 +180,7 @@ const ROWS: Row[] = [
   { key: "layout", label: "화면 배치", kind: "choice", options: [["classic", "기본"], ["mini", "미니"]], sub: "미니: 왼쪽 창을 좁게, 시계 · 다음 신호등 · 그다음 안내는 숨김" },
   { key: "sendLogs", label: "진단 기록 보내기", kind: "toggle", sub: "주행 중 진단 기록(음성, 재탐색, 차로 판정 …)을 서버에 남겨 문제를 나중에 확인" },
   { key: "theme", label: "화면 테마", kind: "choice", options: [["auto", "자동 (해 기준)"], ["light", "밝게"], ["dark", "어둡게"]], sub: "밤에는 바탕 지도도 어둡게" },
+  { key: "nightCity", label: "야경 건물", kind: "toggle", sub: "밤에 3D 화면이면 건물에 불이 켜진 듯 (OpenStreetMap 건물이라 도심 밖에는 드묾. 느린 차량이면 끄세요)" },
   { key: "nextLight", label: "다음 신호등 거리", kind: "toggle", sub: "안내 중 왼쪽 패널에 \"다음 신호등 250 m · 약 15초\"" },
   { key: "lightsOnMap", label: "지도에 신호등", kind: "choice", options: [["route", "경로만"], ["all", "모두"], ["off", "끔"]], sub: "경로만: 안내 중 가는 길 앞 3km 안의 것만. 점멸 중이면 노란색" },
   { key: "cameraFromM", label: "카메라 안내 시작", kind: "choice", options: [[1000, "1km 앞"], [600, "600m 앞"], [300, "300m 앞"]] },

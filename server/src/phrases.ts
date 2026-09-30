@@ -94,31 +94,35 @@ export const LIMITS = [30, 40, 50, 60, 70, 80, 90, 100, 110];
 export const SCHOOL_LIMITS = [30, 40, 50];
 
 export function warningPhrase(kind: Warning, rungM: number, limit?: number): string {
-  const d = `${distance(rungM)} 앞`;
+  // "600미터 앞에 …가 있습니다", not "600미터 앞 …": the bare 앞 at a phrase's edge is what the voice
+  // stretches ("아앞…"); with a particle after it the sentence runs on as speech does.
+  const at = `${distance(rungM)} 앞에`;
+  const from = `${distance(rungM)} 앞에서`;
+  const since = `${distance(rungM)} 앞부터`;
   // "…, 제한 속도 80입니다": a sentence that ends, as the car apps say it.
   const lim = limit && LIMITS.includes(limit) ? `, 제한 속도 ${limit}입니다` : "";
   const schoolLim = limit && SCHOOL_LIMITS.includes(limit) ? `, 제한 속도 ${limit}입니다` : "";
   switch (kind) {
-    case "speed": return lim ? `${d} 과속 단속${lim}` : `${d} 과속 단속 구간입니다`;
-    case "signal": return `${d} 신호 단속 구간입니다`;
-    case "speed-signal": return lim ? `${d} 신호 과속 단속${lim}` : `${d} 신호 과속 단속 구간입니다`;
-    case "section-start": return lim ? `${d} 구간 단속 시작${lim}` : `${d} 구간 단속이 시작됩니다`;
-    case "section-end": return `${d} 구간 단속이 끝납니다`;
-    case "bump": return `${d} 과속 방지턱입니다`;
+    case "speed": return `${at} 과속 단속 카메라가 있습니다${lim}`;
+    case "signal": return `${at} 신호 단속 카메라가 있습니다`;
+    case "speed-signal": return `${at} 신호 과속 단속 카메라가 있습니다${lim}`;
+    case "section-start": return `${from} 구간 단속이 시작됩니다${lim}`;
+    case "section-end": return `${from} 구간 단속이 끝납니다`;
+    case "bump": return `${at} 과속 방지턱이 있습니다`;
     // A school zone and its camera read the same, so the pair is said once (voice.ts drops a repeat).
-    case "school": case "school-zone": return schoolLim ? `${d} 어린이 보호구역${schoolLim}` : `${d} 어린이 보호구역입니다`;
-    case "curve": return `${d} 급커브 구간입니다`;
-    case "curves": return `${d} 연속 급커브 구간입니다`;
-    case "accident": return `${d} 사고 다발 지역입니다`;
-    case "bike-accident": return `${d} 자전거 사고 다발 지역입니다`;
-    case "incident-crash": return `${d} 교통사고가 났습니다, 주의하세요`;
-    case "incident-work": return `${d} 공사 구간입니다`;
-    case "incident-other": return `${d} 돌발 상황이 있습니다, 주의하세요`;
-    case "rest-area": return `${d} 휴게소입니다`;
+    case "school": case "school-zone": return `${since} 어린이 보호구역입니다${schoolLim}`;
+    case "curve": return `${at} 급커브 구간이 있습니다`;
+    case "curves": return `${at} 연속 급커브 구간이 있습니다`;
+    case "accident": return `${at} 사고 다발 지역이 있습니다`;
+    case "bike-accident": return `${at} 자전거 사고 다발 지역이 있습니다`;
+    case "incident-crash": return `${at} 교통사고가 났습니다, 주의하세요`;
+    case "incident-work": return `${at} 공사 구간이 있습니다`;
+    case "incident-other": return `${at} 돌발 상황이 있습니다, 주의하세요`;
+    case "rest-area": return `${at} 휴게소가 있습니다`;
     case "merge": return MERGE_PHRASE;
     case "signal-light": return FLASHING_PHRASE;
-    case "senior-zone": return `${d} 노인 보호구역입니다`;
-    default: return `${d} 주의하세요`;
+    case "senior-zone": return `${since} 노인 보호구역입니다`;
+    default: return `${at} 주의할 곳이 있습니다`;
   }
 }
 

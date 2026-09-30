@@ -16,7 +16,7 @@ test("wavOf writes a 44-byte PCM header round the samples", () => {
 
 test("the fixed phrases are the car apps' sentences, a closed set", () => {
   const phrases = fixedPhrases();
-  assert.ok(phrases.includes("600미터 앞 과속 단속, 제한 속도 50입니다"));
+  assert.ok(phrases.includes("600미터 앞에 과속 단속 카메라가 있습니다, 제한 속도 50입니다"));
   assert.ok(phrases.includes("300미터 앞에서 좌회전입니다"));
   assert.ok(phrases.includes("잠시 후 오른쪽 방향입니다"));
   assert.ok(phrases.includes("1킬로미터 앞에서 오른쪽 출구입니다"));

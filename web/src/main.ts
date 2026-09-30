@@ -35,6 +35,7 @@ import { currentUser, logout, push as pushUserData } from "./userdata";
 import { WeatherPanel } from "./weather";
 import { isFavourite, loadPlaces, samePlace, savePlaces, toggleFavourite } from "./places";
 import { OVERLAY_STYLE, TmapBase, tmapAvailable } from "./tmap-base";
+import { NightCity } from "./night-city";
 import { NaverBase, naverAvailable } from "./naver-base";
 import type { Guide, Health, LonLat, Place, Provider, Route } from "./types";
 
@@ -424,14 +425,18 @@ function setView(next: View) {
   el("view-ic").style.transform = view === "north" ? "" : view === "3d" ? "perspective(40px) rotateX(28deg)" : "";
   el("view-mode").classList.toggle("on", view !== "north");
   zoomBias = 0;
+  nightCity?.refresh();
   showBuildings();
   // Following, the frame eases there; off the car, the map turns on the spot.
   if (!follow) map.easeTo({ pitch: v.pitch, bearing: view === "north" ? 0 : map.getBearing(), duration: 500 });
 }
-/** Standing buildings are for the tilted view; flat, they only cost frames. */
+/** 야경: the buildings lit by night in the tilted view (night-city.ts); made with the other layers below. */
+let nightCity: NightCity | null = null;
+/** Standing buildings are for the tilted view; flat, they only cost frames. Lit ones by night take their place. */
 function showBuildings() {
   try {
-    if (map.getLayer("building-3d")) map.setLayoutProperty("building-3d", "visibility", view === "3d" ? "visible" : "none");
+    const standing = view === "3d" && !nightCity?.showing;
+    if (map.getLayer("building-3d")) map.setLayoutProperty("building-3d", "visibility", standing ? "visible" : "none");
   } catch { /* the style is not in yet; style.load comes back here */ }
 }
 /**
@@ -1784,10 +1789,16 @@ setInterval(() => void refreshAlerts(here()), 60_000);
 map.once("load", () => void refreshAlerts(here()));
 
 const guide = loadGuide();
+/** The screen's theme where the car is: the lane lines' colour, and the lit buildings, follow it. */
+function themed(day: boolean) {
+  hdLayer?.setDay(day);
+  nightCity?.setNight(!day);
+}
 function applyGuide() {
   document.body.classList.toggle("layout-mini", guide.layout === "mini");
-  hdLayer?.setDay(applyTheme(guide.theme, here()));
+  themed(applyTheme(guide.theme, here()));
   hdLayer?.refresh();
+  nightCity?.refresh();
   voice.enabled = guide.voice;
   voice.voiceName = guide.voiceName;
   voice.setVolume(guide.volume);
@@ -1802,10 +1813,12 @@ const cameraLayer: CameraLayer | null = new CameraLayer(map, (f, ahead) => {
   return mode === "all";
 }, log);
 // A light turning to flashing at midnight turns amber on the map; the screen turns dark at dusk.
-setInterval(() => { cameraLayer?.redraw(); hdLayer?.setDay(applyTheme(guide.theme, here())); }, 60_000);
+setInterval(() => { cameraLayer?.redraw(); themed(applyTheme(guide.theme, here())); }, 60_000);
 // 정밀도로지도's lanes on the ground, close in; white by night, grey on a light day map.
 const hdLayer: HdLayer | null = new HdLayer(map, () => guide.hdLanes);
-hdLayer.setDay(applyTheme(guide.theme, loadLast() ?? HOME));
+// 야경: the buildings lit by night, only in the tilted view and where the driver left it on.
+nightCity = new NightCity(map, () => guide.nightCity && view === "3d", showBuildings);
+themed(applyTheme(guide.theme, loadLast() ?? HOME));
 /** A voice chosen from the list: heard at once, and its sentences made ahead on the server. */
 function voicePicked(name: string | null) {
   voice.preview(EVENTS.start);

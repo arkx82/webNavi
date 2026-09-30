@@ -38,7 +38,7 @@ test("each rung speaks once, in order, as the car closes in", () => {
   const first = watch.due(250); // 550 m
   assert.equal(first.length, 1);
   assert.equal(first[0].rungM, 600);
-  assert.equal(phraseFor(first[0]), "600미터 앞 과속 단속, 제한 속도 50입니다");
+  assert.equal(phraseFor(first[0]), "600미터 앞에 과속 단속 카메라가 있습니다, 제한 속도 50입니다");
   assert.equal(watch.due(300).length, 0); // still between rungs
   const second = watch.due(520); // 280 m
   assert.equal(second[0].rungM, 300);
@@ -84,7 +84,7 @@ test("a winding stretch is one 연속 급커브, said once; a bend far on is its
   const curves = findCurves({ ...route, path, guides: [] });
   assert.deepEqual(curves.map((c) => c.kind), ["curves", "curve"]);
   const watch = new RouteWatch({ ...route, path, guides: [] });
-  assert.equal(phraseFor({ ...watch.ahead(0, 400)[0], rungM: 200 }), "200미터 앞 연속 급커브 구간입니다");
+  assert.equal(phraseFor({ ...watch.ahead(0, 400)[0], rungM: 200 }), "200미터 앞에 연속 급커브 구간이 있습니다");
 });
 
 function lonLat([lon, lat]: LonLat) {
@@ -100,7 +100,7 @@ test("an accident hotspot whose circle the route passes through is on the route"
   ]);
   assert.deepEqual(watch.ahead(100).map((a) => a.feature.id), ["spot"]);
   const due = watch.due(320);
-  assert.equal(phraseFor(due[0]), "300미터 앞 사고 다발 지역입니다");
+  assert.equal(phraseFor(due[0]), "300미터 앞에 사고 다발 지역이 있습니다");
 });
 
 test("a camera said before a re-route is not said again on the new route to the same place", () => {
@@ -124,7 +124,7 @@ test("a school zone is a strip of the route beside the school: warned before it,
   ]);
   assert.deepEqual(watch.ahead(0).map((a) => a.feature.id), ["zone"]);
   const [due] = watch.due(260);
-  assert.equal(phraseFor(due), "300미터 앞 어린이 보호구역, 제한 속도 30입니다");
+  assert.equal(phraseFor(due), "300미터 앞부터 어린이 보호구역입니다, 제한 속도 30입니다");
   assert.equal(watch.limitAt(500), null);
   assert.deepEqual(watch.limitAt(600), { limit: 30, why: "school" });
   assert.equal(watch.limitAt(900), null);
@@ -157,16 +157,16 @@ test("an incident list asked again replaces the last one", () => {
   watch.drop(["incident-crash", "incident-work", "incident-other"]);
   watch.add([{ id: "new", kind: "incident-crash", ...lonLat(offset(start, 0, 800)) }]);
   assert.deepEqual(watch.ahead(0).map((a) => a.feature.id), ["new"]);
-  assert.equal(phraseFor(watch.due(0)[0]), "1킬로미터 앞 교통사고가 났습니다, 주의하세요");
+  assert.equal(phraseFor(watch.due(0)[0]), "1킬로미터 앞에 교통사고가 났습니다, 주의하세요");
 });
 
 test("a camera's sentence ends as a sentence: its limit, or what it is", () => {
   const say = (kind: Feature["kind"], limit?: number) => phraseFor({ feature: { id: "x", kind, lon: 0, lat: 0, limit }, alongM: 0, inM: 0, rungM: 300 });
-  assert.equal(say("speed", 80), "300미터 앞 과속 단속, 제한 속도 80입니다");
-  assert.equal(say("speed"), "300미터 앞 과속 단속 구간입니다");
-  assert.equal(say("section-start", 100), "300미터 앞 구간 단속 시작, 제한 속도 100입니다");
-  assert.equal(say("section-start"), "300미터 앞 구간 단속이 시작됩니다");
-  assert.equal(say("school", 30), "300미터 앞 어린이 보호구역, 제한 속도 30입니다");
+  assert.equal(say("speed", 80), "300미터 앞에 과속 단속 카메라가 있습니다, 제한 속도 80입니다");
+  assert.equal(say("speed"), "300미터 앞에 과속 단속 카메라가 있습니다");
+  assert.equal(say("section-start", 100), "300미터 앞에서 구간 단속이 시작됩니다, 제한 속도 100입니다");
+  assert.equal(say("section-start"), "300미터 앞에서 구간 단속이 시작됩니다");
+  assert.equal(say("school", 30), "300미터 앞부터 어린이 보호구역입니다, 제한 속도 30입니다");
 });
 
 test("a traffic light warns only while it flashes, and a pass by day leaves the night's warning", async () => {
