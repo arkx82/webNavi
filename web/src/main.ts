@@ -7,7 +7,7 @@ import { Simulator } from "./simulate";
 import { RouteLayer } from "./route-layer";
 import { OFF_M, Tracker, type Shown } from "./tracker";
 import { Line, bearing, lerpAngle, metres } from "./geo";
-import { arrowSvg, fromBend, maneuverOf, type Maneuver } from "./maneuver";
+import { arrowSvg, fromBend, maneuverOf, shapedOf, type Bend, type Maneuver } from "./maneuver";
 import { lazy, type MusicSource, type NowPlaying, type Playlist } from "./music/source";
 import { debounce, matches } from "./music/find";
 import { deep, pastel, tintOf } from "./music/tint";
@@ -1218,18 +1218,18 @@ function wayOf(m: Maneuver): string | null {
   if (m === "right" || m === "sharp-right") return "right";
   if (m === "uturn") return "uturn";
   if (m === "straight") return "straight";
-  if (m === "slight-left" || m === "slight-right" || m === "ramp-left" || m === "ramp-right") return "fork";
+  if (m === "slight-left" || m === "slight-right" || m === "ramp-left" || m === "ramp-right" || m === "loop-left" || m === "loop-right") return "fork";
   return null;
 }
 /** The side to keep to before a turn, where the map has no lanes for it. */
 function sideOf(m: Maneuver): string | null {
-  if (m === "left" || m === "sharp-left" || m === "slight-left" || m === "ramp-left" || m === "uturn") return "왼쪽 차로로";
-  if (m === "right" || m === "sharp-right" || m === "slight-right" || m === "ramp-right") return "오른쪽 차로로";
+  if (m === "left" || m === "sharp-left" || m === "slight-left" || m === "ramp-left" || m === "loop-left" || m === "uturn") return "왼쪽 차로로";
+  if (m === "right" || m === "sharp-right" || m === "slight-right" || m === "ramp-right" || m === "loop-right") return "오른쪽 차로로";
   return null;
 }
 const TURN_NAME: Partial<Record<Maneuver, string>> = {
   left: "좌회전", right: "우회전", "sharp-left": "왼쪽 급회전", "sharp-right": "오른쪽 급회전", "slight-left": "왼쪽 방향",
-  "slight-right": "오른쪽 방향", "ramp-left": "왼쪽 출구", "ramp-right": "오른쪽 출구", uturn: "유턴", roundabout: "회전교차로",
+  "slight-right": "오른쪽 방향", "ramp-left": "왼쪽 출구", "ramp-right": "오른쪽 출구", uturn: "유턴", roundabout: "회전교차로", "loop-left": "왼쪽 램프", "loop-right": "오른쪽 램프",
 };
 // ---- lanes that must turn on the way straight on (정밀도로지도, lanesAlong on the server) ----
 
@@ -1357,7 +1357,7 @@ function junctionFor(g: Guide, m: Maneuver): JunctionView | null {
   const named = /IC|JC|분기|나들목|톨게이트|TG/.test(`${t} ${g.name ?? ""}`);
   if (!motorway && !named && !/고속|도시고속|자동차전용/.test(t)) return null;
   const kind: JunctionView["kind"] = /출구|진출/.test(t) ? "exit" : /입구|진입/.test(t) ? "enter" : "fork";
-  if (kind === "fork" && !(m === "slight-left" || m === "slight-right" || m === "ramp-left" || m === "ramp-right")) return null;
+  if (kind === "fork" && !(m === "slight-left" || m === "slight-right" || m === "ramp-left" || m === "ramp-right" || m === "loop-left" || m === "loop-right")) return null;
   return { kind, go, name: j?.name, toward: j?.toward };
 }
 
@@ -1367,8 +1367,8 @@ function junctionFor(g: Guide, m: Maneuver): JunctionView | null {
 const linesAsked = new Map<Guide, { left?: GuideColour; right?: GuideColour } | null>();
 /** Which branch a manoeuvre takes; null for one that is not a fork. */
 function branchOf(m: Maneuver): "left" | "right" | null {
-  if (m === "slight-left" || m === "ramp-left" || m === "left" || m === "sharp-left") return "left";
-  if (m === "slight-right" || m === "ramp-right" || m === "right" || m === "sharp-right") return "right";
+  if (m === "slight-left" || m === "ramp-left" || m === "left" || m === "sharp-left" || m === "loop-left") return "left";
+  if (m === "slight-right" || m === "ramp-right" || m === "right" || m === "sharp-right" || m === "loop-right") return "right";
   return null;
 }
 function linesFor(g: Guide, m: Maneuver): LaneCard["lines"] {
@@ -1426,14 +1426,28 @@ const bentWays = new WeakMap<Guide, Maneuver>();
 function maneuverFor(g: Guide): Maneuver {
   const m = maneuverOf(route!.provider, g);
   const words = `${g.text} ${g.name ?? ""}`;
-  if (m !== "other" || !JUNCTION_WORDS.test(words) || TOLL_WORDS.test(words)) return m;
+  if (m !== "other" || !JUNCTION_WORDS.test(words) || TOLL_WORDS.test(words)) return shapedOf(m, bendAt(g));
   let bent = bentWays.get(g);
   if (bent === undefined) {
     if (!routeLine) return m;
     bent = bendOf(g) ?? "other";
     bentWays.set(g, bent);
   }
-  return bent;
+  return shapedOf(bent, bendAt(g));
+}
+/** The road's shape at each guide, measured once a route (bends and loops: shapedOf). */
+const bends = new WeakMap<Guide, Bend | null>();
+function bendAt(g: Guide): Bend | null {
+  let b = bends.get(g);
+  if (b !== undefined) return b;
+  if (!routeLine) return null;
+  const at = routeLine.project(g.at, 0, routeLine.path.length).alongM;
+  const turn = (a: number, c: number) => ((routeLine!.place(c).bearing - routeLine!.place(a).bearing + 540) % 360) - 180;
+  let sweep = 0;
+  for (let m = at; m < at + 200 && m < routeLine.lengthM; m += 20) sweep += turn(m, Math.min(m + 20, routeLine.lengthM));
+  b = { d60: turn(Math.max(0, at - 60), Math.min(routeLine.lengthM, at + 60)), sweep200: sweep };
+  bends.set(g, b);
+  return b;
 }
 
 /**

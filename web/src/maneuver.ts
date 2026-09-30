@@ -11,7 +11,9 @@ import type { Guide, Provider } from "./types";
  */
 export type Maneuver =
   | "straight" | "left" | "right" | "slight-left" | "slight-right" | "sharp-left" | "sharp-right"
-  | "uturn" | "ramp-left" | "ramp-right" | "roundabout" | "arrive" | "depart" | "other";
+  | "uturn" | "ramp-left" | "ramp-right" | "roundabout" | "arrive" | "depart" | "other"
+  /** A loop ramp: the road curls round most of a circle (성수대교 onto 강변북로). The words say 오른쪽 방향; the arrow shows the loop. */
+  | "loop-left" | "loop-right";
 
 const TMAP: Record<number, Maneuver> = {
   11: "straight", 12: "left", 13: "right", 14: "uturn", 16: "sharp-left", 17: "slight-left", 18: "slight-right", 19: "sharp-right",
@@ -131,6 +133,12 @@ function drawArrow(m: Maneuver, size: number): string {
     case "arrive":
       body = `<circle cx="12" cy="9" r="5" fill="none" stroke="#fff" stroke-width="3"/><path d="M12 14 V22" stroke="#fff" stroke-width="3" stroke-linecap="round"/>`;
       break;
+    case "loop-right": case "loop-left": {
+      // Up, then round three quarters of a circle, the head coming back across: a loop ramp.
+      const loop = `<path d="M7 22 V12 a5.5 5.5 0 1 1 5.5 5.5 H10" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/><path d="M11.5 13 L5.5 17.5 L11.5 22 Z" fill="#fff"/>`;
+      body = m === "loop-right" ? loop : `<g transform="translate(24 0) scale(-1 1)">${loop}</g>`;
+      break;
+    }
     case "other": case "depart":
       body = `<circle cx="12" cy="12" r="4" fill="#fff"/>`;
       break;
@@ -140,13 +148,38 @@ function drawArrow(m: Maneuver, size: number): string {
   return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" aria-hidden="true">${body}</svg>`;
 }
 
+/** How the road runs at a guide: its bearing change over ±60 m (signed, right positive), and how much it sweeps over the next 200 m. */
+export interface Bend { d60: number; sweep200: number }
+/** A road that sweeps this much within 200 m is a loop ramp. */
+export const LOOP_DEG = 200;
+/** The words say one side; the road bends this much the other way: the road is believed. */
+const CONTRARY_DEG = 25;
+
+/**
+ * The manoeuvre [m] (from the words and codes) set against the road's
+ * own shape: a loop ramp is shown as one whichever side the words name;
+ * a side named against a clear bend the other way gives way to the
+ * bend (the words are the provider's, the line is where the car goes).
+ */
+export function shapedOf(m: Maneuver, bend: Bend | null): Maneuver {
+  if (!bend) return m;
+  if (m === "arrive" || m === "depart" || m === "roundabout" || m === "uturn") return m;
+  if (Math.abs(bend.sweep200) >= LOOP_DEG) return bend.sweep200 > 0 ? "loop-right" : "loop-left";
+  const side = m.endsWith("-right") || m === "right" ? 1 : m.endsWith("-left") || m === "left" ? -1 : 0;
+  if (side !== 0 && Math.sign(bend.d60) === -side && Math.abs(bend.d60) >= CONTRARY_DEG) {
+    const ramp = m.startsWith("ramp-");
+    return fromBend(0, bend.d60, ramp) ?? m;
+  }
+  return m;
+}
+
 /**
  * The way the road bends, from its bearing before a guide and after it:
  * for a guide whose words and code say no way ("고속도로 출구"), so the
  * voice still has a fixed sentence to fall back on if the guide's own
  * words cannot be rendered. Null where it runs on (under 15°).
  */
-export function fromBend(beforeDeg: number, afterDeg: number, exit: boolean): Exclude<Maneuver, "arrive" | "depart" | "other" | "roundabout"> | null {
+export function fromBend(beforeDeg: number, afterDeg: number, exit: boolean): Exclude<Maneuver, "arrive" | "depart" | "other" | "roundabout" | "loop-left" | "loop-right"> | null {
   let d = afterDeg - beforeDeg;
   while (d > 180) d -= 360;
   while (d < -180) d += 360;

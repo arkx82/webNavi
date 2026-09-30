@@ -34,9 +34,14 @@ export interface Secrets {
   tidalClientId?: string;
   tidalClientSecret?: string;
   tidalRefresh?: string;
+  tidalUserId?: string;
+  tidalCountryCode?: string;
 }
 
 export type SecretName = keyof Secrets;
+
+export const DEFAULT_TIDAL_CLIENT_ID = "fX2JxdmntZWK0ixT";
+export const DEFAULT_TIDAL_CLIENT_SECRET = "1Nn9AfDAjxrgJFJbKNWLeAyKGVGmINuXPPLHVXAvxAg=";
 
 const ENV: Record<SecretName, string | undefined> = {
   tmapAppKey: "TMAP_APP_KEY",
@@ -55,6 +60,8 @@ const ENV: Record<SecretName, string | undefined> = {
   tidalClientId: "TIDAL_CLIENT_ID",
   tidalClientSecret: "TIDAL_CLIENT_SECRET",
   tidalRefresh: undefined,
+  tidalUserId: undefined,
+  tidalCountryCode: undefined,
 };
 
 /** The fields the page edits, in the order it shows them. */
@@ -88,7 +95,11 @@ export class Settings {
     const saved = this.saved[name];
     if (saved) return saved;
     const envName = ENV[name];
-    return envName ? this.env[envName] || undefined : undefined;
+    const envVal = envName ? this.env[envName] || undefined : undefined;
+    if (envVal) return envVal;
+    if (name === "tidalClientId") return DEFAULT_TIDAL_CLIENT_ID;
+    if (name === "tidalClientSecret") return DEFAULT_TIDAL_CLIENT_SECRET;
+    return undefined;
   }
 
   /** A getter bound to one field, for a provider to read at call time. */
@@ -108,15 +119,18 @@ export class Settings {
   }
 
   /** For the page: whether each field has a value, where from, and its last characters. */
-  masked(): Record<string, { set: boolean; from: "saved" | "env" | null; hint: string }> {
-    const out: Record<string, { set: boolean; from: "saved" | "env" | null; hint: string }> = {};
+  masked(): Record<string, { set: boolean; from: "saved" | "env" | "default" | null; hint: string }> {
+    const out: Record<string, { set: boolean; from: "saved" | "env" | "default" | null; hint: string }> = {};
     for (const name of EDITABLE) {
       const saved = this.saved[name];
+      const envName = ENV[name];
+      const envVal = envName ? this.env[envName] || undefined : undefined;
       const value = this.get(name);
+      const isDefault = !saved && !envVal && (name === "tidalClientId" || name === "tidalClientSecret");
       out[name] = {
         set: !!value,
-        from: saved ? "saved" : value ? "env" : null,
-        hint: value ? (name === "ttsVoice" || name === "evTariffs" ? value : "…" + value.slice(-4)) : "",
+        from: saved ? "saved" : envVal ? "env" : isDefault ? "default" : null,
+        hint: isDefault ? "기본 내장 키 (…" + value!.slice(-4) + ")" : value ? (name === "ttsVoice" || name === "evTariffs" ? value : "…" + value.slice(-4)) : "",
       };
     }
     return out;
