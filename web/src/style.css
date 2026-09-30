@@ -227,13 +227,8 @@ button.ctl.on small { color: #000; }
 .ctl-pair button.ctl { border-radius: 0; box-shadow: none; }
 .ctl-pair button.ctl + button.ctl { border-top: 1px solid var(--line); }
 #view-ic { transition: transform 0.2s; }
-/* At the foot on the left (the music dock has the right): under the trip panel, where the 목적지 button once was. */
-#locate {
-  position: absolute; left: 16px; bottom: 16px; z-index: 1; flex: 0 0 auto; width: 60px; height: 60px; min-height: 60px; padding: 0;
-  border-radius: 50%; background: #fff; color: #1a73e8; box-shadow: 0 2px 10px rgba(0,0,0,.45);
-  display: flex; align-items: center; justify-content: center;
-}
-/* Following the car, it is quiet; off the car, it asks to be pressed. */
+/* 현위치 in the control column, under the zoom pair: white while off the car (asking to be pressed), quiet while following. */
+#locate { background: #fff; color: #1a73e8; }
 #locate.on { background: var(--panel); color: var(--accent); }
 body.side-open #controls { right: 368px; }
 /* The 목적지 button and window keep to the middle of what is free of the side sheet too. */
@@ -245,14 +240,12 @@ body.side-open #dest-open, body.side-open #dest-panel { left: calc(var(--hud-rig
 }
 body.side-open #base-menu { right: 440px; }
 /* ---- 오른쪽 위 알림 카드 (notes.ts) ---- */
-/* What is coming (an accident spot, an incident, a rest area …): above the music dock at the foot on the right, the
-   newest nearest the dock, older ones stacking up from it. */
+/* What is coming (a school zone, an accident spot, an incident, a rest area …): at the foot on the left, the newest
+   lowest and the rest stacking up towards the trip panel. */
 #notes {
-  position: absolute; bottom: 92px; right: 16px; z-index: 2; width: 320px; max-width: calc(100% - 440px);
-  display: flex; flex-direction: column-reverse; gap: 8px; pointer-events: none; transition: right 0.2s, bottom 0.2s;
+  position: absolute; bottom: 16px; left: 16px; z-index: 2; width: 320px; max-width: calc(100% - 440px);
+  display: flex; flex-direction: column-reverse; gap: 8px; pointer-events: none;
 }
-body.music-on #notes { bottom: 108px; }
-body.side-open #notes { right: 368px; }
 .note {
   padding: 10px 12px; border-radius: 14px; background: var(--panel-solid);
   box-shadow: 0 2px 8px rgba(0,0,0,.35); border-left: 5px solid var(--tone, var(--accent));
@@ -274,7 +267,7 @@ body.side-open #notes { right: 368px; }
 .note-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
 .note-chips span { font-size: 11px; padding: 2px 6px; border-radius: 6px; background: var(--card); color: var(--ink); }
 @media (max-width: 800px) {
-  #notes { width: auto; left: auto; max-width: calc(100% - 120px); }
+  #notes { width: auto; right: 16px; max-width: none; }
 }
 .menu-title { font-size: 13px; color: var(--dim); padding: 2px 4px 4px; }
 #base-options { display: flex; flex-direction: column; gap: 6px; }
