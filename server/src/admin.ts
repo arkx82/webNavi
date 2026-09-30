@@ -1,3 +1,4 @@
+import { Lockout, clientIp } from "./guard.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { readFileSync } from "node:fs";
 import { EDITABLE, type SecretName, type Settings } from "./settings.js";
@@ -21,8 +22,11 @@ export interface AdminChecks {
   status(): Record<string, unknown>;
 }
 
-export function registerAdmin(app: FastifyInstance, settings: Settings, checks: AdminChecks, pageFile: string): { guard: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown> } {
-  const failures = new Map<string, { count: number; until: number }>();
+type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
+
+export function registerAdmin(app: FastifyInstance, settings: Settings, checks: AdminChecks, pageFile: string): { guard: Guard; adminGuard: Guard } {
+  // Wrong logins by address and, under one key, for the page as a whole: a forged address does not start afresh (guard.ts).
+  const lockout = new Lockout(LOCK_AFTER, LOCK_MS);
 
   const isSecure = (request: FastifyRequest) =>
     request.protocol === "https" || request.headers["x-forwarded-proto"] === "https";
@@ -69,18 +73,16 @@ export function registerAdmin(app: FastifyInstance, settings: Settings, checks: 
   });
 
   app.post<{ Body: { password?: string } }>("/admin/api/login", async (request, reply) => {
-    const who = request.ip;
-    const lock = failures.get(who);
-    if (lock && lock.count >= LOCK_AFTER && lock.until > Date.now()) {
-      return reply.code(429).send({ error: `잠김 — ${Math.ceil((lock.until - Date.now()) / 1000)}초 뒤` });
-    }
+    const who = clientIp(request);
+    const keys = [`ip:${who}`, "admin"];
+    const wait = lockout.wait(keys);
+    if (wait) return reply.code(429).send({ error: `잠김 — ${wait}초 뒤` });
     if (!settings.checkPassword(request.body?.password ?? "")) {
-      const count = (lock?.count ?? 0) + 1;
-      failures.set(who, { count, until: Date.now() + LOCK_MS });
-      request.log.warn({ who, count }, "admin login failed");
+      lockout.failed(keys);
+      request.log.warn({ who }, "admin login failed");
       return reply.code(401).send({ error: "비밀번호가 다릅니다" });
     }
-    failures.delete(who);
+    lockout.passed(keys);
     setSession(request, reply);
     return { ok: true };
   });
@@ -118,5 +120,5 @@ export function registerAdmin(app: FastifyInstance, settings: Settings, checks: 
   const loggedOnly = async (request: FastifyRequest, reply: FastifyReply) => {
     if (!loggedIn(request)) return reply.code(401).send({ error: "login" });
   };
-  return { guard: loggedOnly };
+  return { guard: loggedOnly, adminGuard: guard };
 }

@@ -29,6 +29,7 @@ interface Doc {
 export class KakaoPlaces {
   private cache = new Cache<Poi[]>(3 * 60_000);
   private regions = new Cache<string | null>(24 * 3600_000, 2000);
+  private names = new Cache<RegionNames | null>(24 * 3600_000, 2000);
 
   constructor(private restKey: () => string | undefined) {}
   get ready() {
@@ -142,6 +143,25 @@ export class KakaoPlaces {
     });
   }
 
+  /**
+   * The region a point is in, by name — 시도, 시군구, and the 동 both ways
+   * (법정동 and 행정동) — for the lists that are keyed by words: 에어코리아's
+   * stations, 기상특보's areas.
+   */
+  async regionNames(at: LonLat): Promise<RegionNames | null> {
+    const key = `${at[0].toFixed(2)}:${at[1].toFixed(2)}`;
+    return this.names.get(key, async () => {
+      const url = new URL("https://dapi.kakao.com/v2/local/geo/coord2regioncode.json");
+      url.searchParams.set("x", String(at[0]));
+      url.searchParams.set("y", String(at[1]));
+      const answer = await ask<{ documents: { region_type: string; region_1depth_name: string; region_2depth_name: string; region_3depth_name: string }[] }>(url, this.auth(), "kakao");
+      const b = answer.documents.find((d) => d.region_type === "B") ?? answer.documents[0];
+      if (!b) return null;
+      const dongs = [...new Set(answer.documents.map((d) => d.region_3depth_name).filter(Boolean))];
+      return { sido: b.region_1depth_name, sigungu: b.region_2depth_name, dongs };
+    });
+  }
+
   private auth(): RequestInit {
     return { headers: { Authorization: `KakaoAK ${this.restKey()}` } };
   }
@@ -152,4 +172,12 @@ export function finer(categoryName: string): string | undefined {
   const parts = categoryName.split(">").map((s) => s.trim()).filter(Boolean);
   const rest = parts.slice(1, 3);
   return rest.length ? rest.join(" · ") : parts[0];
+}
+
+export interface RegionNames {
+  /** "서울특별시", "경기도", "강원특별자치도" … */
+  sido: string;
+  /** "강남구", "수원시 장안구", "양평군" … */
+  sigungu: string;
+  dongs: string[];
 }

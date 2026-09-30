@@ -24,6 +24,11 @@ export interface Secrets {
   opinetKey?: string;
   dataGoKrKey?: string;
   evTariffs?: string;
+  /** 한국도로공사 (data.ex.co.kr: rest areas, bus lanes) and ITS 국가교통정보센터 (incidents). */
+  exKey?: string;
+  itsKey?: string;
+  /** 서울 열린데이터광장 (data.seoul.go.kr): Seoul's own traffic lights, which the national standard data lacks. */
+  seoulKey?: string;
   adminHash?: string;
   /** TIDAL: the app's client, and the owner's refresh token once connected. */
   tidalClientId?: string;
@@ -43,6 +48,9 @@ const ENV: Record<SecretName, string | undefined> = {
   opinetKey: "OPINET_KEY",
   dataGoKrKey: "DATA_GO_KR_KEY",
   evTariffs: "EV_TARIFFS",
+  exKey: "EX_API_KEY",
+  itsKey: "ITS_API_KEY",
+  seoulKey: "SEOUL_API_KEY",
   adminHash: undefined,
   tidalClientId: "TIDAL_CLIENT_ID",
   tidalClientSecret: "TIDAL_CLIENT_SECRET",
@@ -53,6 +61,7 @@ const ENV: Record<SecretName, string | undefined> = {
 export const EDITABLE: SecretName[] = [
   "tmapAppKey", "kakaoRestKey", "naverClientId", "naverClientSecret", "dashscopeApiKey", "ttsVoice",
   "opinetKey", "dataGoKrKey", "evTariffs",
+  "exKey", "itsKey", "seoulKey",
   "tidalClientId", "tidalClientSecret",
 ];
 

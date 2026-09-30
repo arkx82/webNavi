@@ -64,8 +64,13 @@
         <h2>주변 (주유 가격 · 충전소)</h2>
         <p class="hint">둘 다 무료 키입니다. 없으면 주유소·충전소도 카카오로 찾되 가격과 빈 충전기 수는 빠집니다.</p>
         <label><b>오피넷</b> 인증키 (opinet.co.kr → 오픈 API) <span class="hint" data-hint="opinetKey"></span><input name="opinetKey" /></label>
-        <label><b>공공데이터포털</b> 일반 인증키 (한국환경공단 전기자동차 충전소 정보 활용신청) <span class="hint" data-hint="dataGoKrKey"></span><input name="dataGoKrKey" /></label>
+        <label><b>공공데이터포털</b> 일반 인증키 (충전소 · 단속 카메라 · 날씨 등 — 데이터마다 활용신청) <span class="hint" data-hint="dataGoKrKey"></span><input name="dataGoKrKey" /></label>
         <label><b>충전 요금</b> 운영사별 회원가, <code>이름 급속 완속</code> 을 <code>;</code> 로 구분 (예: <code>GS차지비 385 280; 에버온 360</code>). 환경부 공공요금(2026-08)은 기본 포함 <span class="hint" data-hint="evTariffs"></span><input name="evTariffs" /></label>
+        <h2>도로 · 교통</h2>
+        <p class="hint">공공데이터포털과 따로 가입해 받는 키입니다.</p>
+        <label><b>한국도로공사</b> 인증키 (data.ex.co.kr → 휴게소 · 버스전용차로) <span class="hint" data-hint="exKey"></span><input name="exKey" /></label>
+        <label><b>ITS 국가교통정보센터</b> 인증키 (its.go.kr → 돌발상황) <span class="hint" data-hint="itsKey"></span><input name="itsKey" /></label>
+        <label><b>서울 열린데이터광장</b> 인증키 (data.seoul.go.kr → 서울시 신호등 관련 정보) <span class="hint" data-hint="seoulKey"></span><input name="seoulKey" /></label>
         <h2>음성</h2>
         <label><b>DashScope</b> API 키 (Qwen3-TTS) <span class="hint" data-hint="dashscopeApiKey"></span><input name="dashscopeApiKey" /></label>
         <label><b>기본 목소리</b> Sohee(한국어) · Cherry · Serena · Ethan … — 차 화면 안내 설정에서 직접 만든 목소리까지 골라 바꿀 수 있습니다 <span class="hint" data-hint="ttsVoice"></span><input name="ttsVoice" placeholder="Cherry" /></label>
@@ -86,6 +91,18 @@
       </form>
     </section>
 
+    <h2>사용자</h2>
+    <section>
+      <p class="hint">차 화면과 폰은 여기서 만든 아이디로 로그인해야 쓸 수 있습니다. 집 · 회사 · 즐겨찾기, 최근 목적지, 안내 설정은 사용자마다 서버에 저장되어 어느 기기에서나 같습니다. 비밀번호를 바꾸면 그 사용자의 다른 기기는 다시 로그인해야 합니다.</p>
+      <table id="users"></table>
+      <div class="row">
+        <input id="new-user" placeholder="아이디" autocomplete="off" autocapitalize="off" />
+        <input id="new-user-pw" type="password" placeholder="비밀번호 (6자 이상)" autocomplete="new-password" />
+        <button type="button" id="add-user">추가</button>
+      </div>
+      <div class="msg" id="users-msg"></div>
+    </section>
+
     <h2>상태</h2>
     <section><table id="status"></table></section>
   </div>
@@ -104,6 +121,46 @@ const call = async (path, body) => {
   return j;
 };
 const say = (id, text, cls) => { const m = $(id); m.textContent = text; m.className = "msg " + (cls || ""); };
+const send = async (method, path, body) => {
+  const a = await fetch(path, { method, headers: { "Content-Type": "application/json", "X-Requested-With": "nav-admin" }, body: body === undefined ? undefined : JSON.stringify(body) });
+  const j = await a.json().catch(() => ({}));
+  if (!a.ok) throw new Error(j.error || a.status);
+  return j;
+};
+const when = (ms) => (ms ? new Date(ms).toLocaleString("ko-KR", { dateStyle: "short", timeStyle: "short" }) : "—");
+
+function showUsers(users) {
+  const t = $("users");
+  t.replaceChildren();
+  if (!users.length) { t.innerHTML = `<tr><td class="hint">아직 없습니다 — 아래에서 추가하세요</td></tr>`; return; }
+  for (const u of users) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td><b></b></td><td class="hint"></td><td><button type="button" data-pw>비밀번호 변경</button> <button type="button" data-del>삭제</button></td>`;
+    tr.querySelector("b").textContent = u.name;
+    tr.querySelector(".hint").textContent = `마지막 접속 ${when(u.lastSeen)}`;
+    tr.querySelector("[data-pw]").onclick = async () => {
+      const pw = window.prompt(`${u.name} 의 새 비밀번호 (6자 이상)`);
+      if (!pw) return;
+      try { await send("POST", `/admin/api/users/${u.id}/password`, { password: pw }); say("users-msg", `${u.name}: 비밀번호를 바꿨습니다`, "ok"); }
+      catch (e) { say("users-msg", e.message, "bad"); }
+    };
+    tr.querySelector("[data-del]").onclick = async () => {
+      if (!window.confirm(`${u.name} 를 삭제할까요? 저장한 장소와 설정도 지워집니다.`)) return;
+      try { showUsers((await send("DELETE", `/admin/api/users/${u.id}`)).users); say("users-msg", `${u.name}: 삭제했습니다`, "ok"); }
+      catch (e) { say("users-msg", e.message, "bad"); }
+    };
+    t.append(tr);
+  }
+}
+
+$("add-user").onclick = async () => {
+  try {
+    const r = await send("POST", "/admin/api/users", { name: $("new-user").value, password: $("new-user-pw").value });
+    showUsers(r.users);
+    say("users-msg", `${r.user.name}: 추가했습니다`, "ok");
+    $("new-user").value = ""; $("new-user-pw").value = "";
+  } catch (e) { say("users-msg", e.message, "bad"); }
+};
 
 async function start() {
   const s = await call("/admin/api/state");
@@ -142,6 +199,7 @@ function showStatus(status) {
   $("status").innerHTML = rows.join("");
 }
 async function load() {
+  send("GET", "/admin/api/users").then((r) => showUsers(r.users)).catch((e) => say("users-msg", e.message, "bad"));
   const r = await call("/admin/api/settings");
   showFields(r.fields);
   showStatus(r.status);

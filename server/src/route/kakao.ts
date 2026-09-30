@@ -1,4 +1,4 @@
-import { askJson, type LonLat, type Route, type RouteProvider, type RouteRequest, type Segment } from "./types.js";
+import { askJson, isMotorwayName, markMotorway, type LonLat, type Route, type RouteProvider, type RouteRequest, type Segment } from "./types.js";
 
 /**
  * Kakao Mobility directions. Roads come as flat `vertexes` [x, y, x, y, …]
@@ -11,7 +11,7 @@ interface KakaoAnswer {
     result_msg: string;
     summary: { distance: number; duration: number };
     sections: {
-      roads: { vertexes: number[]; traffic_state: number }[];
+      roads: { vertexes: number[]; traffic_state: number; name?: string }[];
       guides: { x: number; y: number; name: string; guidance: string; distance: number; type: number }[];
     }[];
   }[];
@@ -24,9 +24,9 @@ export class Kakao implements RouteProvider {
     return !!this.restKey();
   }
 
-  async route({ start, goal }: RouteRequest): Promise<Route> {
+  async route({ start, goal, heading }: RouteRequest): Promise<Route> {
     const url = new URL("https://apis-navi.kakaomobility.com/v1/directions");
-    url.searchParams.set("origin", `${start[0]},${start[1]}`);
+    url.searchParams.set("origin", `${start[0]},${start[1]}${heading != null ? `,angle=${Math.round(heading)}` : ""}`);
     url.searchParams.set("destination", `${goal[0]},${goal[1]}`);
     url.searchParams.set("priority", "RECOMMEND");
     url.searchParams.set("road_details", "true");
@@ -52,11 +52,13 @@ export class Kakao implements RouteProvider {
           route.path.push([road.vertexes[i], road.vertexes[i + 1]] as LonLat);
         }
         route.segments.push({ from: base, to: route.path.length, congestion: kakaoCongestion(road.traffic_state) });
+        if (isMotorwayName(road.name)) markMotorway(route, base, route.path.length);
       }
       for (const guide of section.guides) {
         route.guides.push({
           at: [guide.x, guide.y],
           text: guide.guidance || guide.name,
+          name: guide.name && guide.name !== guide.guidance ? guide.name : undefined,
           distanceM: guide.distance,
           turnType: guide.type,
         });

@@ -1,3 +1,4 @@
+import { escape } from "./html";
 import type { LonLat } from "./types";
 
 /**
@@ -9,8 +10,15 @@ import type { LonLat } from "./types";
 export type Sky = "clear" | "partly" | "cloudy" | "rain" | "sleet" | "snow" | "shower";
 interface Hour { t: string; temp?: number; sky: Sky; pop?: number }
 interface Day { date: string; min?: number; max?: number; am: Sky; pm: Sky; pop?: number }
+/** 에어코리아's reading at the station for the car's district (server/src/air.ts). */
+interface Air { station: string; pm10?: number; pm25?: number; pm10Grade?: Grade; pm25Grade?: Grade; time?: string; province?: boolean }
+type Grade = 1 | 2 | 3 | 4;
+const GRADE_WORDS: Record<Grade, string> = { 1: "좋음", 2: "보통", 3: "나쁨", 4: "매우 나쁨" };
+const GRADE_COLOURS: Record<Grade, string> = { 1: "#4fc3f7", 2: "#5cd65c", 3: "#ffb020", 4: "#e5484d" };
+
 interface Weather {
   place: string;
+  air?: Air | null;
   now: { temp?: number; sky: Sky; rain1h?: number; humidity?: number; windMs?: number } | null;
   hours: Hour[];
   days: Day[];
@@ -76,8 +84,11 @@ export class WeatherPanel {
     if (!w) return;
     this.button.hidden = false;
     const sky = w.now?.sky ?? w.hours[0]?.sky ?? "clear";
-    this.button.innerHTML = `${skyIcon(sky, isNight(new Date().getHours()), 30)}<small>${round(w.now?.temp ?? w.hours[0]?.temp)}</small>`;
-    this.button.title = `${SKY_WORDS[sky]} · ${w.place}`;
+    // 나쁨 or worse shows on the button itself, as a dot of its colour.
+    const worst = Math.max(w.air?.pm10Grade ?? 0, w.air?.pm25Grade ?? 0) as Grade | 0;
+    const dot = worst >= 3 ? `<i class="wx-air-dot" style="background:${GRADE_COLOURS[worst as Grade]}"></i>` : "";
+    this.button.innerHTML = `${skyIcon(sky, isNight(new Date().getHours()), 30)}<small>${round(w.now?.temp ?? w.hours[0]?.temp)}</small>${dot}`;
+    this.button.title = `${SKY_WORDS[sky]} · ${w.place}` + (worst ? ` · 미세먼지 ${GRADE_WORDS[worst as Grade]}` : "");
   }
 
   /** The sheet: now, the hours, the days. */
@@ -105,11 +116,20 @@ export class WeatherPanel {
       const left = (((d.min ?? lo) - lo) / span) * 100, width = Math.max(6, (((d.max ?? hi) - (d.min ?? lo)) / span) * 100);
       return `<div class="wx-day"><span class="wx-name">${name}</span><span class="wx-ampm">${skyIcon(d.am, false, 22)}${skyIcon(d.pm, false, 22)}</span><span class="wx-pct">${d.pop != null && d.pop >= 30 ? `${d.pop}%` : ""}</span><span class="wx-t">${round(d.min)}</span><span class="wx-bar"><i style="left:${left}%;width:${width}%"></i></span><span class="wx-t">${round(d.max)}</span></div>`;
     }).join("");
+    const air = w.air;
+    const airCell = (name: string, v?: number, g?: Grade) =>
+      `<div class="wx-air-cell"><small>${name}</small><b style="color:${g ? GRADE_COLOURS[g] : "inherit"}">${g ? GRADE_WORDS[g] : "–"}</b><span>${v != null ? `${v}㎍/㎥` : ""}</span></div>`;
+    const airRow = air
+      ? `<div class="wx-air">${airCell("미세먼지", air.pm10, air.pm10Grade)}${airCell("초미세먼지", air.pm25, air.pm25Grade)}</div>`
+      : "";
     this.body.innerHTML =
       `<div class="wx-now">${skyIcon(sky, night, 72)}<div><div class="wx-temp">${round(w.now?.temp ?? w.hours[0]?.temp)}</div><div class="wx-word">${SKY_WORDS[sky]}</div></div></div>` +
       `<div class="wx-facts">${facts.map((f) => `<span>${f}</span>`).join("")}</div>` +
+      airRow +
       `<div class="wx-hours">${hours}</div>` +
       `<div class="wx-days">${days}</div>` +
-      `<div class="wx-src">${w.place} 기준 · 자료: 기상청 단기예보·중기예보 (공공데이터포털)</div>`;
+      `<div class="wx-src">${escape(w.place)} 기준 · 자료: 기상청 단기예보·중기예보 (공공데이터포털)` +
+      (air ? `<br>미세먼지: 에어코리아 ${air.province ? `${escape(air.station)} 평균` : `${escape(air.station)} 측정소`}${air.time ? ` · ${air.time.slice(11)}` : ""}` : "") +
+      `</div>`;
   }
 }

@@ -2,9 +2,12 @@ import type { Guide, Provider } from "./types";
 
 /**
  * One set of turn arrows for four providers' turn codes. Each provider
- * numbers its manoeuvres its own way (TMAP 12 is left, Kakao 2 is left,
- * Naver 2 is left, OSRM says "turn/left"); the text is the tie-breaker
- * when a code is unknown, since all of them write 좌회전 for a left.
+ * numbers its manoeuvres its own way (TMAP 12 is left, Kakao 1 is left,
+ * Naver 2 is left, OSRM says "turn/left"). All of them also write the
+ * guide in Korean, and the words are what the driver reads, so where the
+ * words say which way ("오른쪽 방향", "10시 방향", "왼쪽 고속도로 출구")
+ * they decide; the code only where they do not. The tables are the codes
+ * seen in real answers (2026-09-30), not guessed.
  */
 export type Maneuver =
   | "straight" | "left" | "right" | "slight-left" | "slight-right" | "sharp-left" | "sharp-right"
@@ -12,51 +15,109 @@ export type Maneuver =
 
 const TMAP: Record<number, Maneuver> = {
   11: "straight", 12: "left", 13: "right", 14: "uturn", 16: "sharp-left", 17: "slight-left", 18: "slight-right", 19: "sharp-right",
+  101: "ramp-right", 102: "ramp-left", 103: "straight", 104: "ramp-right", 105: "ramp-left",
+  111: "ramp-right", 112: "ramp-left", 113: "straight", 114: "ramp-right", 115: "ramp-left",
+  117: "slight-right", 118: "slight-left",
   184: "straight", 185: "straight", 186: "straight", 187: "straight", 188: "straight", 189: "straight",
   200: "depart", 201: "arrive", 203: "arrive", 204: "arrive", 205: "arrive",
 };
 const KAKAO: Record<number, Maneuver> = {
-  1: "straight", 2: "left", 3: "right", 4: "uturn", 5: "uturn", 6: "sharp-left", 7: "slight-left", 8: "slight-right", 9: "sharp-right",
-  11: "slight-left", 12: "slight-right", 14: "ramp-right", 15: "ramp-right", 16: "slight-left", 17: "slight-right",
-  18: "straight", 19: "straight", 100: "depart", 101: "arrive", 300: "roundabout",
+  0: "straight", 1: "left", 2: "right", 3: "uturn", 5: "slight-left", 6: "slight-right",
+  9: "ramp-right", 12: "ramp-right", 44: "ramp-right", 47: "ramp-right", 49: "ramp-right",
+  // 17 + the hour: 18 is 1시 … 29 is 12시.
+  18: "slight-right", 19: "slight-right", 20: "right", 21: "sharp-right", 22: "sharp-right", 23: "uturn",
+  24: "sharp-left", 25: "sharp-left", 26: "left", 27: "slight-left", 28: "slight-left", 29: "straight",
+  82: "slight-left", 83: "slight-right",
+  100: "depart", 101: "arrive", 300: "roundabout",
 };
 const NAVER: Record<number, Maneuver> = {
-  1: "straight", 2: "left", 3: "right", 4: "uturn", 5: "uturn", 6: "slight-left", 7: "slight-right",
-  11: "ramp-right", 12: "ramp-right", 13: "roundabout", 14: "slight-left", 15: "slight-right",
+  1: "straight", 2: "left", 3: "right", 4: "slight-left", 5: "slight-right", 6: "uturn",
+  41: "slight-left", 42: "slight-right", 60: "ramp-left", 64: "slight-left",
+  66: "ramp-right", 67: "ramp-right", 68: "ramp-right", 69: "ramp-right", 74: "slight-right",
   87: "arrive", 88: "arrive", 91: "depart",
 };
 
+const OSRM_MOD: Record<string, Maneuver> = { left: "left", right: "right", "slight left": "slight-left", "slight right": "slight-right", "sharp left": "sharp-left", "sharp right": "sharp-right", uturn: "uturn", straight: "straight" };
+
+/** Read once a guide (a guide's words do not change, and the panel, the card and the close-up ask every frame). */
+const known = new WeakMap<Guide, { provider: Provider; m: Maneuver }>();
+
 export function maneuverOf(provider: Provider, guide: Guide): Maneuver {
-  const t = guide.turnType;
-  let m: Maneuver | undefined;
-  if (provider === "osrm" && typeof t === "string") {
-    const [type, mod] = t.split("/");
-    if (type === "arrive") m = "arrive";
-    else if (type === "roundabout" || type === "rotary") m = "roundabout";
-    else if (type === "off ramp" || type === "on ramp") m = mod?.includes("left") ? "ramp-left" : "ramp-right";
-    else if (mod) m = ({ left: "left", right: "right", "slight left": "slight-left", "slight right": "slight-right", "sharp left": "sharp-left", "sharp right": "sharp-right", uturn: "uturn", straight: "straight" } as Record<string, Maneuver>)[mod];
-  } else if (typeof t === "number") {
-    m = (provider === "tmap" ? TMAP : provider === "kakao" ? KAKAO : NAVER)[t];
-  }
-  return m ?? fromText(guide.text);
+  const had = known.get(guide);
+  if (had && had.provider === provider) return had.m;
+  const m = readManeuver(provider, guide);
+  known.set(guide, { provider, m });
+  return m;
 }
 
-function fromText(text: string): Maneuver {
-  if (/도착/.test(text)) return "arrive";
-  if (/유턴|U턴/.test(text)) return "uturn";
-  if (/회전교차로/.test(text)) return "roundabout";
-  if (/급좌/.test(text)) return "sharp-left";
-  if (/급우/.test(text)) return "sharp-right";
-  if (/좌회전/.test(text)) return "left";
-  if (/우회전/.test(text)) return "right";
-  if (/왼쪽|좌측/.test(text)) return "slight-left";
-  if (/오른쪽|우측|출구|진출|진입/.test(text)) return "slight-right";
-  if (/직진/.test(text)) return "straight";
+function readManeuver(provider: Provider, guide: Guide): Maneuver {
+  const t = guide.turnType;
+  if (provider === "osrm" && typeof t === "string") {
+    const [type, mod] = t.split("/");
+    if (type === "arrive") return "arrive";
+    if (type === "roundabout" || type === "rotary") return "roundabout";
+    if (type === "off ramp" || type === "on ramp") return mod?.includes("left") ? "ramp-left" : "ramp-right";
+    if (mod) {
+      const m = OSRM_MOD[mod];
+      if (m) return m;
+    }
+  }
+  const said = fromText(guide.text ?? "");
+  if (said) return said;
+  if (typeof t === "number") {
+    const m = (provider === "tmap" ? TMAP : provider === "kakao" ? KAKAO : provider === "naver" ? NAVER : {})[t];
+    if (m) return m;
+  }
   return "other";
 }
 
-/** An arrow as inline SVG, white on whatever is behind it. */
+/** A clock hour's direction: 12 ahead, 3 right, 9 left. */
+const CLOCK: Record<number, Maneuver> = {
+  12: "straight", 1: "slight-right", 2: "slight-right", 3: "right", 4: "sharp-right", 5: "sharp-right", 6: "uturn",
+  7: "sharp-left", 8: "sharp-left", 9: "left", 10: "slight-left", 11: "slight-left",
+};
+
+// The words looked for, compiled once (fromText runs for every guide asked about).
+const TAIL = /\s*후\s.*$/;
+const ARRIVE = /도착|목적지/, DEPART = /출발/, UTURN = /유턴|U턴/, ROUNDABOUT = /회전교차로/, TOLL = /톨게이트|요금소/;
+const HOUR = /(\d{1,2})\s*시\s*방향/;
+const SHARP_LEFT = /급좌/, SHARP_RIGHT = /급우/, LEFT_TURN = /좌회전/, RIGHT_TURN = /우회전/;
+const LEFT = /왼쪽|좌측/, RIGHT = /오른쪽|우측/, EXIT = /출구|진출/, MOTORWAY = /고속|전용|램프|IC|JC/, STRAIGHT = /직진/;
+
+/** The way the words say, or null when they do not say one (a 지하차도, a 톨게이트). */
+export function fromText(text: string): Maneuver | null {
+  // The guide's own action, not the "…을 따라 1025m 이동" after it.
+  const t = text.replace(TAIL, "");
+  if (ARRIVE.test(t)) return "arrive";
+  if (DEPART.test(t)) return "depart";
+  if (UTURN.test(t)) return "uturn";
+  if (ROUNDABOUT.test(t)) return "roundabout";
+  if (TOLL.test(t)) return null;
+  const hour = t.match(HOUR);
+  if (hour && CLOCK[Number(hour[1])]) return CLOCK[Number(hour[1])];
+  if (SHARP_LEFT.test(t)) return "sharp-left";
+  if (SHARP_RIGHT.test(t)) return "sharp-right";
+  if (LEFT_TURN.test(t)) return "left";
+  if (RIGHT_TURN.test(t)) return "right";
+  const left = LEFT.test(t), right = RIGHT.test(t);
+  // Off a motorway is an exit ("오른쪽 출구"); onto one is only a way to keep to ("오른쪽 방향").
+  const ramp = EXIT.test(t) && MOTORWAY.test(t);
+  if (left && !right) return ramp ? "ramp-left" : "slight-left";
+  if (right && !left) return ramp ? "ramp-right" : "slight-right";
+  if (STRAIGHT.test(t)) return "straight";
+  return null;
+}
+
+/** An arrow as inline SVG, white on whatever is behind it; made once a shape and size (the panel asks every frame). */
+const arrows = new Map<string, string>();
 export function arrowSvg(m: Maneuver, size = 56): string {
+  const key = `${m}:${size}`;
+  let svg = arrows.get(key);
+  if (svg === undefined) arrows.set(key, (svg = drawArrow(m, size)));
+  return svg;
+}
+
+function drawArrow(m: Maneuver, size: number): string {
   const rot: Partial<Record<Maneuver, number>> = { straight: 0, "slight-right": 35, right: 90, "sharp-right": 135, "slight-left": -35, left: -90, "sharp-left": -135, "ramp-right": 35, "ramp-left": -35 };
   const head = "M12 3 L20 12 L15 12 L15 21 L9 21 L9 12 L4 12 Z";
   let body: string;
@@ -77,4 +138,23 @@ export function arrowSvg(m: Maneuver, size = 56): string {
       body = `<path d="${head}" fill="#fff" transform="rotate(${rot[m] ?? 0} 12 12)"/>`;
   }
   return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" aria-hidden="true">${body}</svg>`;
+}
+
+/**
+ * The way the road bends, from its bearing before a guide and after it:
+ * for a guide whose words and code say no way ("고속도로 출구"), so the
+ * voice still has a fixed sentence to fall back on if the guide's own
+ * words cannot be rendered. Null where it runs on (under 15°).
+ */
+export function fromBend(beforeDeg: number, afterDeg: number, exit: boolean): Exclude<Maneuver, "arrive" | "depart" | "other" | "roundabout"> | null {
+  let d = afterDeg - beforeDeg;
+  while (d > 180) d -= 360;
+  while (d < -180) d += 360;
+  const a = Math.abs(d), side = d > 0 ? "right" : "left";
+  if (a < 15) return null;
+  if (exit) return side === "right" ? "ramp-right" : "ramp-left";
+  if (a < 60) return side === "right" ? "slight-right" : "slight-left";
+  if (a < 135) return side;
+  if (a < 165) return side === "right" ? "sharp-right" : "sharp-left";
+  return "uturn";
 }

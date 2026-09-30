@@ -1,16 +1,28 @@
 @import "maplibre-gl/dist/maplibre-gl.css";
 
 :root {
+  /* Where the top-left panel ends: the cards in the middle of the map are centred on what is right of it. */
+  --hud-right: 352px;
   --panel: rgba(18, 18, 20, 0.88);
+  /* The cards over the moving map: near-solid, with no blur behind them — a blur over a ground that redraws every frame is what the car's GPU cannot keep up with. */
+  --panel-solid: rgba(20, 20, 23, 0.96);
   --ink: #f2f2f2;
   --dim: #9a9a9a;
+  --card: #26262b;
+  --btn: #2a2a2e;
+  --line: #2a2a2e;
+  --field: #1c1c20;
+  --sel: #24313a;
   --accent: #4fc3f7;
   --font: -apple-system, "Segoe UI", Roboto, "Noto Sans KR", sans-serif;
 }
 html, body { margin: 0; height: 100%; background: #111; color: var(--ink); font-family: var(--font); }
 #map { position: absolute; inset: 0; }
 /* TMAP's or NAVER's ground, under MapLibre's transparent canvas (tmap-base.ts, naver-base.ts). */
-#ground { position: absolute; inset: 0; }
+#ground { position: absolute; inset: 0; isolation: isolate; }
+/* 밤: a dark sheet over the ground alone (MapLibre's own layers — the route, the pins — stay bright), instead of a filter re-run on every frame. */
+#night-shade { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.45); pointer-events: none; display: none; }
+body.night #ground:not([hidden]) + #night-shade { display: block; }
 #hud {
   position: absolute; top: 16px; left: 16px; width: 320px; max-height: calc(100% - 32px);
   padding: 16px; box-sizing: border-box; border-radius: 12px; background: var(--panel);
@@ -25,16 +37,16 @@ dd { margin: 0; font-variant-numeric: tabular-nums; }
 /* Touch targets a driver can hit: nothing under 48 px tall. */
 button, .button {
   flex: 1; min-height: 48px; padding: 0 12px; font-size: 16px; border: 0; border-radius: 8px;
-  background: #2a2a2e; color: var(--ink); font-family: inherit; text-align: center; line-height: 48px;
+  background: var(--btn); color: var(--ink); font-family: inherit; text-align: center; line-height: 48px;
 }
 button.on, .button.on { background: var(--accent); color: #000; }
 button.narrow { flex: 0 0 auto; }
 input[type="search"], input[type="url"] {
   flex: 1; min-height: 48px; padding: 0 12px; font-size: 18px; border: 0; border-radius: 8px;
-  background: #1c1c20; color: var(--ink); font-family: inherit;
+  background: var(--field); color: var(--ink); font-family: inherit;
 }
 #results { list-style: none; margin: 0; padding: 0; max-height: 40vh; overflow: auto; }
-#results li { padding: 10px 8px; border-bottom: 1px solid #2a2a2e; font-size: 16px; }
+#results li { padding: 10px 8px; border-bottom: 1px solid var(--line); font-size: 16px; }
 #results li small { display: block; color: var(--dim); font-size: 13px; }
 #trip { display: flex; flex-direction: column; gap: 8px; }
 #trip-name { font-size: 18px; font-weight: 600; }
@@ -149,7 +161,7 @@ button.icon.main { width: 74px; height: 74px; background: var(--tint); color: #1
 #music-lists li.shelf:active, #music-found li.shelf:active { transform: none; background: none; }
 /* Found songs take the lists' place until the words are cleared. */
 #music-found:not([hidden]) + #music-lists { display: none; }
-.sim { display: flex; flex-direction: column; gap: 6px; padding-top: 4px; border-top: 1px solid #2a2a2e; }
+.sim { display: flex; flex-direction: column; gap: 6px; padding-top: 4px; border-top: 1px solid var(--line); }
 .slider { font-size: 13px; color: var(--dim); }
 .slider input { width: 100%; }
 .hint { font-size: 13px; color: var(--dim); }
@@ -162,15 +174,15 @@ button.icon.main { width: 74px; height: 74px; background: var(--tint); color: #1
 .clock { font-size: 18px; color: var(--dim); font-variant-numeric: tabular-nums; }
 h4 { margin: 12px 0 4px; font-size: 13px; font-weight: 500; color: var(--dim); }
 .places { list-style: none; margin: 0; padding: 0; max-height: 40vh; overflow: auto; }
-.places li { padding: 12px 8px; border-bottom: 1px solid #2a2a2e; font-size: 16px; }
+.places li { padding: 12px 8px; border-bottom: 1px solid var(--line); font-size: 16px; }
 .places li small { display: block; color: var(--dim); font-size: 13px; }
 #s-preview, #s-drive { display: flex; flex-direction: column; gap: 10px; }
 header.place { display: flex; align-items: center; gap: 8px; }
 header.place .titles { flex: 1; }
 /* Route cards: time first, since that is the choice. */
 #offers { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
-.offer { padding: 10px 12px; border-radius: 10px; background: #26262b; border: 2px solid transparent; cursor: pointer; }
-.offer.on { border-color: var(--accent); background: #24313a; }
+.offer { padding: 10px 12px; border-radius: 10px; background: var(--card); border: 2px solid transparent; cursor: pointer; }
+.offer.on { border-color: var(--accent); background: var(--sel); }
 .offer .l1 { display: flex; align-items: baseline; gap: 8px; }
 .offer .l1 b { font-size: 22px; }
 .offer .l1 span { color: var(--dim); font-size: 14px; }
@@ -211,7 +223,7 @@ button.ctl.on { background: var(--accent); color: #000; }
 button.ctl.on small { color: #000; }
 .ctl-pair { display: flex; flex-direction: column; border-radius: 14px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,.35); }
 .ctl-pair button.ctl { border-radius: 0; box-shadow: none; }
-.ctl-pair button.ctl + button.ctl { border-top: 1px solid #2a2a2e; }
+.ctl-pair button.ctl + button.ctl { border-top: 1px solid var(--line); }
 #view-ic { transition: transform 0.2s; }
 #locate {
   position: absolute; right: 16px; bottom: 96px; z-index: 1; flex: 0 0 auto; width: 60px; height: 60px; min-height: 60px; padding: 0;
@@ -227,15 +239,44 @@ body.side-open #controls, body.side-open #locate { right: 368px; }
   display: flex; flex-direction: column; gap: 6px;
 }
 body.side-open #base-menu { right: 440px; }
+/* ---- 오른쪽 위 알림 카드 (notes.ts) ---- */
+#notes {
+  position: absolute; top: 16px; right: 88px; z-index: 2; width: 300px; max-width: calc(100% - 440px);
+  display: flex; flex-direction: column; gap: 8px; pointer-events: none; transition: right 0.2s;
+}
+body.side-open #notes { right: 440px; }
+.note {
+  padding: 10px 12px; border-radius: 14px; background: var(--panel-solid);
+  box-shadow: 0 2px 8px rgba(0,0,0,.35); border-left: 5px solid var(--tone, var(--accent));
+  display: flex; flex-direction: column; gap: 3px;
+}
+.note.rest { --tone: #4fc3f7; }
+.note.incident { --tone: #ffb020; }
+.note.school { --tone: #ffd60a; }
+.note.alert { --tone: #e5484d; }
+.note.warn { --tone: #ff8a3d; }
+/* The stack lets the map through; a card itself is a button that closes it. */
+.note { pointer-events: auto; cursor: pointer; }
+.note-x { font-size: 13px; color: var(--dim); margin-left: 4px; }
+.note-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.note-badge { font-size: 12px; font-weight: 700; color: var(--tone); }
+.note-where { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.note-title { font-size: 15px; line-height: 1.25; }
+.note-lines { font-size: 13px; color: var(--dim); line-height: 1.3; }
+.note-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.note-chips span { font-size: 11px; padding: 2px 6px; border-radius: 6px; background: var(--card); color: var(--ink); }
+@media (max-width: 800px) {
+  #notes { width: auto; left: auto; max-width: calc(100% - 120px); }
+}
 .menu-title { font-size: 13px; color: var(--dim); padding: 2px 4px 4px; }
 #base-options { display: flex; flex-direction: column; gap: 6px; }
 #base-options button {
   display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-height: 56px; line-height: 1.2;
-  padding: 8px 12px; text-align: left; background: #26262b; border: 2px solid transparent;
+  padding: 8px 12px; text-align: left; background: var(--card); border: 2px solid transparent;
 }
 #base-options button b { font-size: 16px; }
 #base-options button small { font-size: 12px; color: var(--dim); }
-#base-options button.on { border-color: var(--accent); background: #24313a; }
+#base-options button.on { border-color: var(--accent); background: var(--sel); }
 #base-options button:disabled { opacity: 0.45; }
 
 /* The car: an arrow lying on the road, turned by its heading. */
@@ -249,7 +290,7 @@ body.side-open #base-menu { right: 440px; }
 }
 #here-card header { display: flex; align-items: center; justify-content: space-between; font-size: 14px; color: var(--dim); }
 #here-list { list-style: none; margin: 0; padding: 0; }
-#here-list li { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #2a2a2e; }
+#here-list li { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
 #here-list li:last-child { border-bottom: 0; }
 #here-list .here-words { flex: 1; min-width: 0; }
 #here-list .here-name { font-size: 16px; }
@@ -263,7 +304,7 @@ button.saved { display: flex; align-items: center; gap: 10px; text-align: left; 
 button.saved span { display: flex; flex-direction: column; min-width: 0; }
 button.saved b { font-size: 15px; }
 button.saved small { font-size: 12px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 90px; }
-#saving { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 10px; background: #24313a; font-size: 14px; }
+#saving { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 10px; background: var(--sel); font-size: 14px; }
 #saving span { flex: 1; }
 #saving button { min-height: 36px; line-height: 36px; font-size: 13px; }
 #save-menu { display: flex; flex-direction: column; gap: 6px; }
@@ -278,7 +319,7 @@ button.saved small { font-size: 12px; color: var(--dim); white-space: nowrap; ov
 #sim-bar .sim-name { flex: 1; font-size: 14px; }
 #sim-bar b { font-size: 20px; font-variant-numeric: tabular-nums; min-width: 34px; text-align: right; }
 #sim-bar small { font-size: 12px; margin-right: 4px; }
-#sim-bar button.icon { width: 40px; height: 40px; min-height: 40px; background: #26262b; color: var(--ink); }
+#sim-bar button.icon { width: 40px; height: 40px; min-height: 40px; background: var(--card); color: var(--ink); }
 
 /* ---- 날씨 ---- */
 button.ctl.wx { gap: 0; }
@@ -328,25 +369,36 @@ dl.lic dd { margin: 0; line-height: 1.45; font-variant-numeric: normal; }
   padding: 12px 14px; border-radius: 14px; background: var(--panel); backdrop-filter: blur(8px);
   display: flex; flex-direction: column; gap: 8px; overflow: auto;
 }
-.gs-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid #2a2a2e; }
+.gs-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); }
 .gs-row.wide { flex-direction: column; align-items: stretch; }
 .gs-row.off { opacity: 0.4; }
 .gs-label { font-size: 15px; }
 .gs-sub { font-size: 12px; color: var(--dim); margin-top: 2px; }
 .gs-row input[type="range"] { width: 100%; }
 button.voice-pick { flex: 0 0 auto; min-height: 36px; line-height: 36px; padding: 0 14px; border-radius: 999px; font-size: 14px; background: rgba(255,255,255,.08); max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.voice-list { display: flex; flex-direction: column; gap: 4px; padding: 4px 0 10px; border-bottom: 1px solid #2a2a2e; max-height: 44vh; overflow: auto; }
+.voice-list { display: flex; flex-direction: column; gap: 4px; padding: 4px 0 10px; border-bottom: 1px solid var(--line); max-height: 44vh; overflow: auto; }
 .voice-list .v-head { font-size: 12px; color: var(--dim); padding: 8px 4px 2px; }
-.voice-list button.voice { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-height: 42px; line-height: 1.2; padding: 8px 12px; border-radius: 12px; text-align: left; background: #26262b; }
+.voice-list button.voice { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-height: 42px; line-height: 1.2; padding: 8px 12px; border-radius: 12px; text-align: left; background: var(--card); }
 .voice-list button.voice small { font-size: 12px; color: var(--dim); }
-.voice-list button.voice.on { box-shadow: inset 0 0 0 2px var(--accent); background: #24313a; }
+.voice-list button.voice.on { box-shadow: inset 0 0 0 2px var(--accent); background: var(--sel); }
 .gs-row .seg button { flex: 1; }
 button.switch { flex: 0 0 auto; width: 52px; min-height: 30px; height: 30px; padding: 0; border-radius: 15px; background: #3a3a44; position: relative; }
 button.switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 24px; height: 24px; border-radius: 50%; background: #fff; transition: left 0.15s; }
 button.switch.on { background: var(--accent); }
 button.switch.on::after { left: 25px; }
 /* The limit ahead: a road sign, and what it is for. */
-#cam { display: flex; align-items: center; gap: 10px; padding: 6px 12px; border-radius: 10px; background: #26262b; font-size: 15px; }
+/* The camera ahead: a small card at the top middle of the map, red-edged while over the limit. */
+#cam {
+  position: absolute; top: 64px; left: calc(var(--hud-right) + (100% - var(--hud-right) - 88px) / 2); transform: translateX(-50%); z-index: 2;
+  display: flex; align-items: center; gap: 10px; padding: 6px 14px 6px 6px; border-radius: 999px;
+  background: var(--panel-solid); box-shadow: 0 2px 8px rgba(0,0,0,.35); font-size: 15px; white-space: nowrap;
+  border: 2px solid transparent;
+}
+/* The red glow while over the limit: a ring behind the card faded in and out — opacity alone, which the compositor does without repainting the card. */
+#cam::after { content: ""; position: absolute; inset: -10px; border-radius: 999px; border: 8px solid rgba(255,77,79,.45); opacity: 0; pointer-events: none; }
+body.over-limit #cam { border-color: #ff4d4f; }
+body.over-limit #cam::after { animation: over 1s ease-in-out infinite alternate; }
+@keyframes over { from { opacity: 0; } to { opacity: 1; } }
 .limit-sign { width: 40px; height: 40px; border-radius: 50%; border: 5px solid #e5484d; background: #fff; color: #111; box-sizing: border-box; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 16px; }
 .big.over #speed { color: #ff4d4f; }
 
@@ -355,7 +407,7 @@ button.switch.on::after { left: 25px; }
    Chromium may predate color-mix). */
 .chips { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
 button.chip {
-  min-height: 56px; padding: 6px 0 4px; line-height: 1.1; font-size: 12px; border-radius: 10px; background: #26262b;
+  min-height: 56px; padding: 6px 0 4px; line-height: 1.1; font-size: 12px; border-radius: 10px; background: var(--card);
   display: flex; flex-direction: column; align-items: center; gap: 4px;
 }
 .chip-ic { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: var(--cs); color: var(--c); }
@@ -371,12 +423,12 @@ button.chip.on .chip-ic { background: var(--c); color: #fff; }
 #nb-listview, #nb-detail { display: flex; flex-direction: column; gap: 10px; min-height: 0; flex: 1; }
 .nb-opts { display: flex; flex-wrap: wrap; gap: 6px; }
 .nb-opts:empty { display: none; }
-.seg { display: flex; border-radius: 8px; overflow: hidden; background: #26262b; }
+.seg { display: flex; border-radius: 8px; overflow: hidden; background: var(--card); }
 .seg button { flex: 0 0 auto; min-height: 36px; line-height: 36px; padding: 0 10px; font-size: 13px; border-radius: 0; background: transparent; }
 .seg button.on { background: var(--accent); color: #000; }
 button.toggle { flex: 0 0 auto; min-height: 36px; line-height: 36px; padding: 0 12px; font-size: 13px; }
 #nb-list { list-style: none; margin: 0 -14px; padding: 0; overflow: auto; flex: 1; min-height: 0; }
-.nb-item { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid #2a2a2e; cursor: pointer; }
+.nb-item { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); cursor: pointer; }
 .nb-ic { flex: 0 0 auto; width: 32px; height: 32px; border-radius: 50%; background: var(--c); color: #fff; display: flex; align-items: center; justify-content: center; }
 .nb-ic.big { width: 44px; height: 44px; }
 .nb-main { flex: 1; min-width: 0; }
@@ -392,7 +444,7 @@ button.back { flex: 0 0 auto; align-self: flex-start; min-height: 36px; line-hei
 .nb-d-head { display: flex; align-items: center; gap: 12px; }
 .nb-d-head .title { font-size: 19px; white-space: normal; }
 .prices { display: grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: 6px; }
-.price { padding: 8px 10px; border-radius: 10px; background: #26262b; display: flex; flex-direction: column; gap: 2px; }
+.price { padding: 8px 10px; border-radius: 10px; background: var(--card); display: flex; flex-direction: column; gap: 2px; }
 .price small { font-size: 12px; color: var(--dim); }
 .price b { font-size: 20px; font-variant-numeric: tabular-nums; }
 .price.on { box-shadow: inset 0 0 0 2px #f5821f; }
@@ -400,3 +452,141 @@ button.back { flex: 0 0 auto; align-self: flex-start; min-height: 36px; line-hei
 #nb-d-rows dd { font-variant-numeric: normal; }
 #nb-detail .primary { flex: 0 0 auto; margin-top: auto; }
 #nb-d-rows { flex: 0 1 auto; }
+
+/* 미세먼지 in the weather sheet, and its dot on the button when 나쁨 or worse. */
+.wx-air { display: flex; gap: 8px; margin: 4px 0 8px; }
+.wx-air-cell { flex: 1; display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: 10px; background: var(--card); }
+.wx-air-cell small { font-size: 12px; color: var(--dim); }
+.wx-air-cell b { font-size: 17px; }
+.wx-air-cell span { font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
+button.ctl.wx { position: relative; }
+.wx-air-dot { position: absolute; top: 6px; right: 6px; width: 10px; height: 10px; border-radius: 50%; box-shadow: 0 0 0 2px var(--panel); }
+
+#gps-warn { padding: 8px 10px; border-radius: 8px; background: #3a2a10; color: #ffcf70; font-size: 14px; line-height: 1.3; }
+
+/* ---- 로그인 (boot.ts) ---- */
+#login { position: fixed; inset: 0; z-index: 50; background: #111; display: flex; align-items: center; justify-content: center; padding: 16px; }
+#login form { width: min(360px, 100%); display: flex; flex-direction: column; gap: 12px; padding: 24px; border-radius: 14px; background: var(--panel); }
+#login .login-title { font-size: 26px; font-weight: 700; margin-bottom: 4px; }
+#login label { display: flex; flex-direction: column; gap: 4px; font-size: 14px; color: var(--dim); }
+#login input { min-height: 48px; padding: 0 12px; font-size: 18px; border: 0; border-radius: 8px; background: var(--field); color: var(--ink); font-family: inherit; }
+#login button.primary { background: var(--accent); color: #000; font-weight: 700; }
+#login .login-note { min-height: 20px; font-size: 14px; color: #ffcf70; }
+.row.account { align-items: center; justify-content: space-between; margin: 12px 0 4px; font-size: 14px; color: var(--dim); }
+.gs-sub.warn { color: #ffcf70; padding: 4px 0 6px; }
+
+/* 분기점 확대 표시: top middle of the free part of the map. */
+#closeup {
+  position: absolute; top: 16px; left: calc(var(--hud-right) + (100% - var(--hud-right) - 88px) / 2); transform: translateX(-50%); z-index: 2;
+  padding: 8px 14px; border-radius: 999px; background: rgba(79, 195, 247, 0.92); color: #001018; font-weight: 700; font-size: 15px;
+  box-shadow: 0 2px 8px rgba(0,0,0,.35); pointer-events: none; white-space: nowrap;
+}
+#resume { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; background: #10324a; color: #bfe8ff; font-size: 14px; line-height: 1.3; }
+#resume span { flex: 1; }
+#resume button { min-height: 40px; line-height: 40px; font-size: 14px; }
+
+/* 다음 신호등 on the drive panel. */
+#next-light { display: flex; align-items: center; gap: 10px; padding: 6px 12px; border-radius: 10px; background: var(--card); font-size: 15px; }
+#next-light b { font-size: 17px; font-variant-numeric: tabular-nums; }
+#next-light .nl-words { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+#next-light .nl-words > span { white-space: nowrap; }
+#next-light small { color: var(--dim); font-size: 13px; }
+.light-ic { display: inline-flex; gap: 3px; padding: 4px 5px; border-radius: 6px; background: var(--field); border: 1.5px solid #fff; }
+.light-ic i { width: 7px; height: 7px; border-radius: 50%; background: #ff4d4f; }
+.light-ic i:nth-child(2) { background: #ffb020; }
+.light-ic i:nth-child(3) { background: #12b76a; }
+#audio-locked { padding: 8px 10px; border-radius: 8px; background: #3a1d1d; color: #ffb4b4; font-size: 14px; }
+
+/* The place being gone to. */
+.dest-pin { width: 26px; height: 34px; background: no-repeat center/contain url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 26 34'%3E%3Cpath d='M13 33s11-12.4 11-20A11 11 0 0 0 2 13c0 7.6 11 20 11 20z' fill='%23e5484d' stroke='%23fff' stroke-width='2'/%3E%3Ccircle cx='13' cy='13' r='4' fill='%23fff'/%3E%3C/svg%3E"); filter: drop-shadow(0 2px 3px rgba(0,0,0,.45)); }
+#pv-find { width: 100%; }
+
+/* ---- 차 화면: the panel keeps to the speed and the drive; the search is folded behind 목적지 ---- */
+#quick-cats { display: none !important; }
+.search-head { display: flex; align-items: center; justify-content: space-between; font-size: 15px; }
+.search-head .icon { flex: 0 0 auto; min-height: 36px; line-height: 36px; padding: 0 10px; }
+/* The start-menu window: from the bottom left, up to below the speed card. */
+#dest-panel {
+  position: absolute; left: 16px; bottom: 16px; z-index: 3; width: 360px; max-width: calc(100% - 32px); max-height: calc(100% - 150px);
+  box-sizing: border-box; padding: 14px; border-radius: 14px; background: var(--panel); backdrop-filter: blur(8px);
+  box-shadow: 0 6px 24px rgba(0,0,0,.45); display: flex; flex-direction: column; gap: 10px; overflow: auto;
+  animation: rise .18s ease-out;
+}
+@keyframes rise { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+#dest-panel > section { display: flex; flex-direction: column; gap: 10px; }
+#dest-panel > section[hidden] { display: none; }
+body.dest-open #dest-open { display: none !important; }
+#dest-open {
+  position: absolute; left: 16px; bottom: 16px; z-index: 2; flex: 0 0 auto; display: none; align-items: center; gap: 8px;
+  min-height: 56px; padding: 0 18px; border-radius: 999px; background: var(--accent); color: #001018; font-weight: 700; font-size: 17px;
+  box-shadow: 0 2px 10px rgba(0,0,0,.45);
+}
+body.hud-min #dest-open { display: flex; }
+/* Not driving, the top-left card is only the speed and the clock. */
+body.hud-min #hud { width: auto; min-width: 240px; }
+
+/* ---- 낮: a light panel on a light map (theme.ts sets body.day by the sun, or the driver's choice) ---- */
+body.day {
+  --panel: rgba(250, 250, 252, 0.94);
+  --ink: #16181d;
+  --dim: #5f6570;
+  --card: #eceef2;
+  --btn: #e3e6eb;
+  --line: #d9dce2;
+  --field: #ffffff;
+  --sel: #d8ecf8;
+}
+body.day .limit-sign { background: #fff; }
+body.day #gps-warn { background: #fff3d6; color: #7a4b00; }
+body.day #audio-locked { background: #ffe3e3; color: #8a1f1f; }
+body.day #resume { background: #dff1fb; color: #0b4a6f; }
+/* 밤: the map's ground dimmed, so the screen does not glare in the dark (MapLibre's own layers — the route, the pins — stay bright). */
+
+/* 차로 안내: a card at the foot of the map, the turn and the lanes to be in (lanes-strip.ts). */
+#lanes {
+  position: absolute; bottom: calc(8px + env(safe-area-inset-bottom, 0px)); left: calc(var(--hud-right) + (100% - var(--hud-right) - 88px) / 2); transform: translateX(-50%); z-index: 2;
+  display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 16px;
+  background: var(--panel-solid); box-shadow: 0 4px 16px rgba(0,0,0,.45); max-width: calc(100% - 460px);
+}
+#lanes .lc-head { display: flex; align-items: center; gap: 10px; white-space: nowrap; }
+#lanes .lc-arrow { display: flex; width: 40px; height: 40px; border-radius: 10px; background: #1a73e8; align-items: center; justify-content: center; }
+#lanes .lc-in { font-size: 22px; font-variant-numeric: tabular-nums; }
+#lanes .lc-what { font-size: 16px; font-weight: 600; }
+#lanes .lc-lanes { display: flex; padding: 4px; border-radius: 12px; background: var(--card); }
+#lanes .lc-lanes[hidden] { display: none; }
+#lanes .lane { width: 50px; height: 54px; display: flex; align-items: center; justify-content: center; color: var(--dim); border-right: 2px dashed var(--line); }
+#lanes .lane:last-child { border-right: 0; }
+#lanes .lane.best { color: #001018; background: var(--accent); border-radius: 8px; }
+@media (max-width: 800px) { #lanes { max-width: calc(100% - 120px); left: 50%; } }
+body.no-music #locate { bottom: 16px; }
+#lanes .lc-fork { display: flex; justify-content: center; }
+#lanes .lc-follow { font-size: 20px; font-weight: 800; text-shadow: 0 1px 2px rgba(0,0,0,.4); }
+#lanes .lc-fork[hidden], #lanes .lc-follow[hidden] { display: none; }
+#lanes .lc-note { font-size: 15px; font-weight: 700; color: #ffb020; }
+#lanes .lc-note[hidden] { display: none; }
+body.day #lanes .lc-note { color: #b35c00; }
+#lanes .lane { position: relative; flex-direction: column; }
+#lanes .lane.only { color: #ff8a3d; }
+#lanes .lane.only i { font-style: normal; font-size: 11px; font-weight: 800; line-height: 1; color: #ff8a3d; margin-top: -2px; }
+body.day #lanes .lane.only, body.day #lanes .lane.only i { color: #c2410c; }
+
+/* ---- 미니 배치 (안내 설정 → 화면 배치): the panel narrower, and only what a glance needs ---- */
+body.layout-mini { --hud-right: 292px; }
+body.layout-mini #hud { width: 260px; padding: 10px; gap: 6px; }
+body.layout-mini.hud-min #hud { width: auto; min-width: 0; }
+body.layout-mini .big { font-size: 40px; }
+body.layout-mini .big small { font-size: 14px; }
+/* The car shows the time already; the next light and the turn after are left to the full layout. */
+body.layout-mini #clock, body.layout-mini #next-light, body.layout-mini #then { display: none !important; }
+body.layout-mini #turn { padding: 8px 10px; gap: 10px; }
+body.layout-mini #turn-icon { width: 44px; height: 44px; }
+body.layout-mini #turn-icon svg { width: 44px; height: 44px; }
+body.layout-mini #turn-in { font-size: 26px; }
+body.layout-mini #turn-text { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+body.layout-mini #eta { padding: 0 2px; gap: 8px; }
+body.layout-mini #eta b { font-size: 18px; }
+body.layout-mini #eta-left { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+body.layout-mini #s-drive .row button { min-height: 36px; line-height: 36px; font-size: 14px; }
+body.layout-mini #sim-bar b { font-size: 16px; }
+body.layout-mini #sim-bar button.icon { width: 32px; height: 32px; min-height: 32px; }
+#lanes .lc-fork svg { color: var(--ink); }

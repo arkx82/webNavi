@@ -6,28 +6,35 @@ services:
     build: .
     restart: unless-stopped
     env_file: .env
+    environment:
+      WORK_DIR: /work
     volumes:
       - ./server/data:/data:ro
       # Keys typed on /admin, encrypted; the master key sits beside them.
       - nav_config:/config
       # Phrases rendered once, kept across rebuilds.
       - nav_tts:/tts
+      # What tools/hdmap/build.py builds from 정밀도로지도 (it runs on the host, against the raw zips there).
+      - /mnt/data/webnavi:/work
     expose: ["8080"]
+    # Plain http on the LAN; a Cloudflare Tunnel on this host points here for https.
+    ports: ["8088:8080"]
 
-  # TLS in front: the browser only hands out geolocation and wake lock on
-  # https, so the car must reach this through a real certificate.
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    env_file: .env
-    ports: ["80:80", "443:443"]
-    volumes:
-      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
+  # Not used while a Cloudflare Tunnel ends HTTPS; uncomment to go back to Caddy.
+  # # TLS in front: the browser only hands out geolocation and wake lock on
+  # # https, so the car must reach this through a real certificate.
+  # caddy:
+  #   image: caddy:2-alpine
+  #   restart: unless-stopped
+  #   env_file: .env
+  #   ports: ["80:80", "443:443"]
+  #   volumes:
+  #     - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+  #     - caddy_data:/data
+  #     - caddy_config:/config
 
 volumes:
   nav_config:
   nav_tts:
-  caddy_data:
-  caddy_config:
+  # caddy_data:
+  # caddy_config:

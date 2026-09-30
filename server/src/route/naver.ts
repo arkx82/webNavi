@@ -1,4 +1,4 @@
-import { askJson, type LonLat, type Route, type RouteProvider, type RouteRequest, type Segment } from "./types.js";
+import { askJson, isMotorwayName, markMotorway, type LonLat, type Route, type RouteProvider, type RouteRequest, type Segment } from "./types.js";
 
 /**
  * Naver Cloud Directions 5. One `path` of [lon, lat]; guides and sections
@@ -13,7 +13,8 @@ interface NaverAnswer {
       summary: { distance: number; duration: number };
       path: LonLat[];
       guide: { pointIndex: number; type: number; instructions: string; distance: number }[];
-      section: { pointIndex: number; pointCount: number; congestion: number }[];
+      /** The main roads on the way, each named. */
+      section: { pointIndex: number; pointCount: number; congestion: number; name?: string }[];
     }[];
   };
 }
@@ -42,7 +43,7 @@ export class Naver implements RouteProvider {
     );
     const first = answer.route?.traoptimal?.[0];
     if (answer.code !== 0 || !first) throw new Error(`naver: ${answer.message}`);
-    return {
+    const route: Route = {
       provider: this.name,
       distanceM: first.summary.distance,
       // Naver's duration is milliseconds.
@@ -60,5 +61,7 @@ export class Naver implements RouteProvider {
         congestion: Math.min(3, Math.max(0, s.congestion)) as Segment["congestion"],
       })),
     };
+    for (const s of first.section) if (isMotorwayName(s.name)) markMotorway(route, s.pointIndex, s.pointIndex + s.pointCount);
+    return route;
   }
 }

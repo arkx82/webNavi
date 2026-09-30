@@ -13,9 +13,24 @@ export { EVENTS };
 /** A far rung is said only this close to its distance: 500 m from 350 m out, not from 170. */
 const FAR_ENOUGH = 0.7;
 
+const FAST_RUNGS = [1000, 500, TURN_NEAR_M];
+const TOWN_RUNGS = [300, TURN_NEAR_M];
+const ALL_RUNGS = [...new Set([...FAST_RUNGS, ...TOWN_RUNGS])];
+
 /** The distances a turn is spoken at, for the speed the car is doing. */
 export function turnRungs(speedKmh: number): number[] {
-  return speedKmh >= 70 ? [1000, 500, TURN_NEAR_M] : [300, TURN_NEAR_M];
+  return [...(speedKmh >= 70 ? FAST_RUNGS : TOWN_RUNGS)];
+}
+
+/**
+ * The set a junction's turn is said from is settled by its first sentence,
+ * read back from what was said: a car doing 75 that dips to 65 and back
+ * would otherwise hear 1 km, 500 m, then 300 m — each set's own unsaid rung.
+ */
+function rungsFor(speedKmh: number, said: Set<number>): number[] {
+  if (said.has(300)) return [...TOWN_RUNGS];
+  if (said.has(1000) || said.has(500)) return [...FAST_RUNGS];
+  return turnRungs(speedKmh);
 }
 
 const TURNS = new Set<Maneuver>([
@@ -30,23 +45,29 @@ const TURNS = new Set<Maneuver>([
  * then "잠시 후" in one breath.
  */
 export function turnSpeech(maneuver: Maneuver, inM: number, speedKmh: number, said: Set<number>, guideText: string): string | null {
+  return turnSay(maneuver, inM, speedKmh, said, guideText)?.text ?? null;
+}
+
+/** The same, with the rung it was said at (a far one gets the junction's name and the side to move to). */
+export function turnSay(maneuver: Maneuver, inM: number, speedKmh: number, said: Set<number>, guideText: string): { text: string; rung: number } | null {
   if (maneuver === "depart") return null;
-  let rungs = turnRungs(speedKmh);
+  let rungs = rungsFor(speedKmh, said);
   // Straight on and the arrival are said once, close in.
   if (maneuver === "straight" || maneuver === "arrive") rungs = [TURN_NEAR_M];
   const inside = rungs.filter((r) => inM <= r);
   if (inside.length === 0) return null;
   const rung = Math.min(...inside);
   if (said.has(rung)) return null;
-  for (const r of rungs) if (r >= rung) said.add(r);
+  // The further rungs of both sets are said with it: none is owed after a nearer one.
+  for (const r of ALL_RUNGS) if (r >= rung) said.add(r);
   // First seen well inside a far rung (just re-routed, or a guide that
   // came late): "500미터 앞" at 170 m is wrong, so wait for 잠시 후 instead.
   if (rung > TURN_NEAR_M && inM < rung * FAR_ENOUGH) return null;
-  if (maneuver === "arrive") return EVENTS.nearGoal;
-  if (TURNS.has(maneuver)) return turnPhrase(maneuver as Turn, rung);
+  if (maneuver === "arrive") return { text: EVENTS.nearGoal, rung };
+  if (TURNS.has(maneuver)) return { text: turnPhrase(maneuver as Turn, rung), rung };
   const short = spokenGuide(guideText);
   if (!short) return null;
-  return rung <= TURN_NEAR_M ? `잠시 후 ${short}` : `${rung >= 1000 ? `${rung / 1000}킬로미터` : `${rung}미터`} 앞 ${short}`;
+  return { text: rung <= TURN_NEAR_M ? `잠시 후 ${short}` : `${rung >= 1000 ? `${rung / 1000}킬로미터` : `${rung}미터`} 앞 ${short}`, rung };
 }
 
 /**

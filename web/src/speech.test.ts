@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fixedPhrases } from "../../server/src/phrases";
+import { ALERT_KINDS, ALERT_LEVELS, alertPhrase, fixedPhrases } from "../../server/src/phrases";
 import { EVENTS, spokenGuide, turnRungs, turnSpeech } from "./speech";
 import { phraseFor, type Kind } from "./warnings";
 import type { Maneuver } from "./maneuver";
@@ -70,5 +70,49 @@ test("every sentence the page can say from the vocabulary is one the server rend
       }
     }
   }
+  // The kinds with their own rungs, and every 기상특보 the page can say.
+  const more: [Kind, number, number | undefined][] = [
+    ["school-zone", 300, 30], ["school-zone", 300, 50], ["school", 300, 30],
+    ["incident-crash", 1000, undefined], ["incident-work", 300, undefined], ["incident-other", 1000, undefined], ["rest-area", 2000, undefined],
+  ];
+  for (const [kind, rungM, limit] of more) {
+    const s = phraseFor({ feature: { id: "x", kind, lon: 0, lat: 0, limit }, alongM: 0, inM: 0, rungM });
+    assert.ok(fixed.has(s), `not rendered ahead: ${s}`);
+  }
+  for (const k of ALERT_KINDS) for (const l of ALERT_LEVELS) assert.ok(fixed.has(alertPhrase(k, l)));
   assert.deepEqual(turnRungs(50), [300, 150]);
+});
+
+test("a motorway junction's name and way come from any provider's text", async () => {
+  const { junctionOf, namedTurnPhrase, laneHint, findMerges } = await import("./highway");
+  assert.deepEqual(junctionOf({ text: "신갈JC에서 원주 방면으로 왼쪽 방향 후 영동 고속도로를 따라 3845m 이동" }), { name: "신갈JC", toward: "원주" });
+  assert.deepEqual(junctionOf({ text: "신갈분기점에서 '원주, 인천' 방면으로 오른쪽 방향" }), { name: "신갈분기점", toward: "원주" });
+  assert.deepEqual(junctionOf({ text: "인천 원주 방면으로 오른쪽 고속도로 진입", name: "신갈JC" }), { name: "신갈JC", toward: "인천" });
+  assert.equal(junctionOf({ text: "우회전" }), null);
+  assert.equal(namedTurnPhrase("slight-left", 1000, { name: "신갈JC", toward: "원주" }), "1킬로미터 앞 신갈JC에서 원주 방면, 왼쪽 방향입니다");
+  assert.equal(namedTurnPhrase("ramp-right", 500, { toward: "용인" }), "500미터 앞 용인 방면, 오른쪽 출구입니다");
+  assert.equal(laneHint("ramp-right"), "오른쪽 차로로 미리 이동하세요");
+  assert.equal(laneHint("straight"), null);
+  // An entrance at 1 km along a 3 km road: the merge is placed a ramp's length on, and said from 150 m before it.
+  const path = Array.from({ length: 31 }, (_, i) => [127, 37 + (i * 100) / 111_320] as [number, number]);
+  const merges = findMerges({ provider: "tmap", distanceM: 3000, durationS: 200, path, segments: [], motorways: [[10, 31]],
+    guides: [{ at: path[10], text: "서초IC에서 부산 방면으로 오른쪽 고속도로 입구", distanceM: 0, turnType: 101 }] });
+  assert.equal(merges.length, 1);
+  assert.equal(merges[0].kind, "merge");
+  assert.ok(fixedPhrases().includes("잠시 후 합류 구간입니다, 주의하세요"));
+  assert.ok(fixedPhrases().includes("오른쪽 차로로 미리 이동하세요"));
+});
+
+test("a speed that dips across 70 km/h does not bring the other set's rungs: the set first said from is kept", () => {
+  const said = new Set<number>();
+  assert.equal(turnSpeech("left", 980, 75, said, ""), "1킬로미터 앞에서 좌회전입니다");
+  assert.equal(turnSpeech("left", 480, 72, said, ""), "500미터 앞에서 좌회전입니다");
+  assert.equal(turnSpeech("left", 290, 65, said, ""), null); // not "300미터 앞" on top of "500미터 앞"
+  assert.equal(turnSpeech("left", 140, 65, said, ""), "잠시 후 좌회전입니다");
+  // And from town: said at 300 m, a burst past 70 km/h adds no "500미터 앞".
+  const town = new Set<number>();
+  assert.equal(turnSpeech("right", 290, 60, town, ""), "300미터 앞에서 우회전입니다");
+  assert.equal(turnSpeech("right", 280, 75, town, ""), null);
+  assert.equal(turnSpeech("right", 140, 75, town, ""), "잠시 후 우회전입니다");
+  assert.equal(turnSpeech("right", 100, 60, town, ""), null);
 });

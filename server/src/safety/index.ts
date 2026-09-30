@@ -8,7 +8,9 @@ import { join } from "node:path";
  * zones — every kind in one index, since the question is always "what is
  * within r metres of here", never "which cameras".
  */
-export type Kind = "speed" | "signal" | "speed-signal" | "section-start" | "section-end" | "bump" | "school" | "accident" | "bike-accident" | "other";
+export type Kind =
+  | "speed" | "signal" | "speed-signal" | "section-start" | "section-end" | "bump" | "school" | "accident" | "bike-accident"
+  | "school-zone" | "incident-crash" | "incident-work" | "incident-other" | "rest-area" | "merge" | "signal-light" | "senior-zone" | "other";
 
 export interface Feature {
   id: string;
@@ -20,8 +22,12 @@ export interface Feature {
   /** Free text the source gave for the road direction ("상행", "동쪽" …); no bearing is published. */
   direction?: string;
   name?: string;
-  /** For an area rather than a point (an accident hotspot): how far round the centre it reaches. */
+  /** For an area rather than a point (an accident hotspot, a school zone): how far round the centre it reaches. */
   radiusM?: number;
+  /** A line under the name, for the screen: the lanes an incident closes, a school zone's facility. */
+  detail?: string;
+  /** A traffic light's flashing hours: "00:00-05:00" (KST), or "always" for a flashing-yellow lamp. */
+  flash?: string;
 }
 
 const M_PER_DEG_LAT = 111_320;
@@ -41,13 +47,14 @@ export class SafetyIndex {
     }
     for (const file of files) {
       const text = decode(readFileSync(join(dir, file)));
-      index.features.push(...parseStandardData(text, file));
+      index.add(parseStandardData(text, file));
     }
     return index.build();
   }
 
   add(features: Feature[]): this {
-    this.features.push(...features);
+    // A loop, not push(...): the speed bumps alone are more arguments than a call can take.
+    for (const f of features) this.features.push(f);
     return this;
   }
 

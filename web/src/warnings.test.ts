@@ -38,7 +38,7 @@ test("each rung speaks once, in order, as the car closes in", () => {
   const first = watch.due(250); // 550 m
   assert.equal(first.length, 1);
   assert.equal(first[0].rungM, 600);
-  assert.equal(phraseFor(first[0]), "600미터 앞 과속 단속, 제한 속도 50");
+  assert.equal(phraseFor(first[0]), "600미터 앞 과속 단속, 제한 속도 50입니다");
   assert.equal(watch.due(300).length, 0); // still between rungs
   const second = watch.due(520); // 280 m
   assert.equal(second[0].rungM, 300);
@@ -113,4 +113,85 @@ test("a camera said before a re-route is not said again on the new route to the 
   again.add([cam]);
   assert.equal(again.due(260).length, 0);
   assert.equal(again.due(520)[0].rungM, 300); // the next rung still comes
+});
+
+test("a school zone is a strip of the route beside the school: warned before it, held at 30 inside", () => {
+  const watch = new RouteWatch(route);
+  // The school 60 m beside the road at 700 m along: the zone runs 550–850 m. Another 160 m off is on another street.
+  watch.add([
+    { id: "zone", kind: "school-zone", ...lonLat(offset(offset(start, 0, 700), 90, 60)), limit: 30 },
+    { id: "far", kind: "school-zone", ...lonLat(offset(offset(start, 0, 300), 90, 160)), limit: 30 },
+  ]);
+  assert.deepEqual(watch.ahead(0).map((a) => a.feature.id), ["zone"]);
+  const [due] = watch.due(260);
+  assert.equal(phraseFor(due), "300미터 앞 어린이 보호구역, 제한 속도 30입니다");
+  assert.equal(watch.limitAt(500), null);
+  assert.deepEqual(watch.limitAt(600), { limit: 30, why: "school" });
+  assert.equal(watch.limitAt(900), null);
+});
+
+test("on a motorway no school zone or speed bump is on the route, whatever is beside it", () => {
+  // The first 1 km (vertices 0–20) is a motorway; the turn east is a town street.
+  const watch = new RouteWatch({ ...route, motorways: [[0, 20]] });
+  watch.add([
+    { id: "zone-by-motorway", kind: "school-zone", ...lonLat(offset(offset(start, 0, 500), 90, 40)), limit: 30 },
+    { id: "bump-on-frontage", kind: "bump", ...lonLat(offset(offset(start, 0, 600), 90, 15)) },
+    { id: "cam", kind: "speed", ...lonLat(offset(start, 0, 700)), limit: 80 },
+    { id: "zone-in-town", kind: "school-zone", ...lonLat(offset(offset(corner, 90, 500), 0, 50)), limit: 30 },
+  ]);
+  assert.deepEqual(watch.ahead(0, 2000).map((a) => a.feature.id), ["cam", "zone-in-town"]);
+});
+
+test("a rest area on the right is ours; one on the left is the other carriageway's", () => {
+  const watch = new RouteWatch(route);
+  watch.add([
+    { id: "ours", kind: "rest-area", ...lonLat(offset(offset(start, 0, 500), 90, 120)) },
+    { id: "theirs", kind: "rest-area", ...lonLat(offset(offset(start, 0, 600), 270, 120)) },
+  ]);
+  assert.deepEqual(watch.ahead(0, 2000).map((a) => a.feature.id), ["ours"]);
+});
+
+test("an incident list asked again replaces the last one", () => {
+  const watch = new RouteWatch(route);
+  watch.add([{ id: "old", kind: "incident-work", ...lonLat(offset(start, 0, 700)) }]);
+  watch.drop(["incident-crash", "incident-work", "incident-other"]);
+  watch.add([{ id: "new", kind: "incident-crash", ...lonLat(offset(start, 0, 800)) }]);
+  assert.deepEqual(watch.ahead(0).map((a) => a.feature.id), ["new"]);
+  assert.equal(phraseFor(watch.due(0)[0]), "1킬로미터 앞 교통사고가 났습니다, 주의하세요");
+});
+
+test("a camera's sentence ends as a sentence: its limit, or what it is", () => {
+  const say = (kind: Feature["kind"], limit?: number) => phraseFor({ feature: { id: "x", kind, lon: 0, lat: 0, limit }, alongM: 0, inM: 0, rungM: 300 });
+  assert.equal(say("speed", 80), "300미터 앞 과속 단속, 제한 속도 80입니다");
+  assert.equal(say("speed"), "300미터 앞 과속 단속 구간입니다");
+  assert.equal(say("section-start", 100), "300미터 앞 구간 단속 시작, 제한 속도 100입니다");
+  assert.equal(say("section-start"), "300미터 앞 구간 단속이 시작됩니다");
+  assert.equal(say("school", 30), "300미터 앞 어린이 보호구역, 제한 속도 30입니다");
+});
+
+test("a traffic light warns only while it flashes, and a pass by day leaves the night's warning", async () => {
+  const { flashingNow } = await import("./warnings");
+  const at = (hhmm: string) => Date.parse(`2026-09-30T${hhmm}:00+09:00`);
+  assert.ok(flashingNow({ flash: "00:00-05:00" }, at("02:30")));
+  assert.ok(!flashingNow({ flash: "00:00-05:00" }, at("05:00")));
+  assert.ok(flashingNow({ flash: "22:00-05:00" }, at("23:10")));
+  assert.ok(flashingNow({ flash: "22:00-05:00" }, at("04:59")));
+  assert.ok(!flashingNow({ flash: "22:00-05:00" }, at("12:00")));
+  assert.ok(flashingNow({ flash: "always" }, at("12:00")));
+  assert.ok(!flashingNow({}, at("02:00")));
+  const watch = new RouteWatch(route);
+  watch.add([{ id: "light", kind: "signal-light", ...lonLat(offset(start, 0, 500)), flash: "always" }, { id: "day", kind: "signal-light", ...lonLat(offset(start, 0, 600)) }]);
+  const said = watch.due(320).map((d) => phraseFor(d));
+  assert.deepEqual(said, ["잠시 후 점멸 신호 교차로입니다, 서행하세요"]);
+});
+
+test("a camera first learned of at 250 m gets its 300 m rung alone, not the 600 m one and then the 300 m one", () => {
+  const watch = new RouteWatch(route);
+  // The server's answer came late: the camera 800 m along is added with the car already at 550 m.
+  watch.add([{ id: "late", kind: "speed", ...lonLat(offset(start, 0, 800)), limit: 50 }]);
+  const first = watch.due(550);
+  assert.equal(first.length, 1);
+  assert.equal(first[0].rungM, 300);
+  assert.equal(watch.due(560).length, 0);
+  assert.equal(watch.due(700).length, 0);
 });

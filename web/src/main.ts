@@ -1,27 +1,42 @@
 import maplibregl from "maplibre-gl";
-import { api } from "./api";
+import { api, setHeading } from "./api";
 import { Gps, type Fix } from "./gps";
 import { chime, keepAwake } from "./probes";
 import { Replay } from "./replay";
 import { Simulator } from "./simulate";
 import { RouteLayer } from "./route-layer";
-import { Tracker, type Shown } from "./tracker";
-import { Line, lerpAngle, metres } from "./geo";
-import { arrowSvg, maneuverOf } from "./maneuver";
+import { OFF_M, Tracker, type Shown } from "./tracker";
+import { Line, bearing, lerpAngle, metres } from "./geo";
+import { arrowSvg, fromBend, maneuverOf, type Maneuver } from "./maneuver";
 import { lazy, type MusicSource, type NowPlaying, type Playlist } from "./music/source";
 import { debounce, matches } from "./music/find";
 import { deep, pastel, tintOf } from "./music/tint";
 import { Voice } from "./voice";
-import { RouteWatch, phraseFor, type Feature } from "./warnings";
+import { RouteWatch, phraseFor, type Ahead, type Feature, type Kind } from "./warnings";
+import { Notes, incidentNote, popupNote, restNote, schoolNote, type Note } from "./notes";
+import { CameraLayer } from "./camera-layer";
+import { loadDrive, loadLast, saveDrive, saveLast, worthResuming } from "./resume";
+import { applyTheme } from "./theme";
+import { HdLayer } from "./hdmap-layer";
+import { ZoneLayer } from "./zone-layer";
+import { drawLaneCard, onlyWords, type GuideColour, type Junction as JunctionView, type LaneCard, type Lanes, type Turn as LaneTurn } from "./lanes-strip";
+import { GUIDE_LINES } from "../../server/src/phrases";
+import { ALERT_KINDS, alertPhrase, type AlertKind } from "../../server/src/phrases";
 import { Nearby } from "./nearby";
 import { autoZoom } from "./autozoom";
-import { EVENTS, turnSpeech } from "./speech";
-import { drawGuide, loadGuide, wants, type VoiceList } from "./guide-settings";
+import { EVENTS, turnSay } from "./speech";
+import { junctionOf, laneHint, motorwayAt, namedTurnPhrase } from "./highway";
+import { CLOSEUP_CAR_AT, CLOSEUP_PITCH, CloseupHold, zoomToSee, type Closeup } from "./closeup";
+import { RerouteBackoff } from "./reroute-backoff";
+import { Stillness } from "./still";
+import { TURN_NEAR_M, turnPhrase, type Turn } from "../../server/src/phrases";
+import { drawGuide, loadGuide, shows, wants, type VoiceList } from "./guide-settings";
+import { currentUser, logout, push as pushUserData } from "./userdata";
 import { WeatherPanel } from "./weather";
 import { isFavourite, loadPlaces, samePlace, savePlaces, toggleFavourite } from "./places";
 import { OVERLAY_STYLE, TmapBase, tmapAvailable } from "./tmap-base";
 import { NaverBase, naverAvailable } from "./naver-base";
-import type { Health, LonLat, Place, Provider, Route } from "./types";
+import type { Guide, Health, LonLat, Place, Provider, Route } from "./types";
 
 // The ground: TMAP's or NAVER's own vector map when the server has their
 // keys (Korean roads as they know them: tmap-base.ts, naver-base.ts), else
@@ -65,7 +80,8 @@ const map = openMap();
  */
 function openMap(): maplibregl.Map {
   try {
-    const m = new maplibregl.Map({ container: "map", style, center: HOME, zoom: 15, pitch: 45, attributionControl: false });
+    // Where the car last was, before the first fix comes (resume.ts), else the default.
+    const m = new maplibregl.Map({ container: "map", style, center: loadLast() ?? HOME, zoom: 15, pitch: 45, attributionControl: false });
     // A style that fails, or one that simply never comes (a dead link
     // hangs rather than refuses), gives way to the plain ground so the
     // rest of the page can go on; the log says so.
@@ -100,8 +116,13 @@ function openMap(): maplibregl.Map {
 
 const el = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const lines: string[] = [];
+/** Lines not yet sent to the server (안내 설정 → 진단 기록 보내기), so a drive's log can be read afterwards. */
+const unsent: string[] = [];
 function log(text: string) {
-  lines.push(`${new Date().toLocaleTimeString("ko-KR", { hour12: false })} ${text}`);
+  const line = `${new Date().toLocaleTimeString("ko-KR", { hour12: false })} ${text}`;
+  lines.push(line);
+  unsent.push(`${new Date().toISOString()} ${text}`);
+  if (unsent.length > 2000) unsent.shift();
   if (lines.length > 200) lines.shift();
   el("log").textContent = lines.join("\n");
   el("log").scrollTop = el("log").scrollHeight;
@@ -159,15 +180,53 @@ let placed = false;
 const gps = new Gps();
 const tracker = new Tracker();
 const voice = new Voice();
+voice.onSaid = (text, playedS, lengthS, waitedS) => {
+  // Short of its length means the browser stopped it (another app took the audio, the page went to the back).
+  if (playedS < lengthS - 0.2) log(`음성 끊김 ${playedS.toFixed(1)}/${lengthS.toFixed(1)}s ${text}`);
+  if (waitedS > 3) log(`음성 늦음 ${waitedS.toFixed(1)}s 기다림 ${text}`);
+};
+voice.onLate = (text, waitedS) => log(`음성 지남 ${waitedS.toFixed(1)}s 뒤라 버림 ${text}`);
 voice.onError = (m) => {
   el("voice").textContent = "실패";
   log(`음성 실패 ${m}`);
 };
-gps.onError = (m) => log(`GPS 오류 ${m}`);
+/** The browser's last refusal: 1 is a permission denied (or an insecure page), which will not mend itself. */
+let gpsRefused: number | null = null;
+gps.onError = (m) => {
+  log(`GPS 오류 ${m}`);
+  const code = Number(m.split(":")[0]);
+  if (code === 1) gpsRefused = 1;
+};
+/** A fix older than this and the car is not being tracked: the line under the speed says so. */
+const GPS_STALE_MS = 15_000;
+function gpsState(): string | null {
+  const last = gps.last;
+  // Fixes coming (the browser's, a replay's or the pretend drive's): nothing to warn of.
+  if (last && Date.now() - last.t <= GPS_STALE_MS) return null;
+  if (!window.isSecureContext) return "https 주소가 아니라 위치를 받을 수 없습니다 — Cloudflare 주소로 여세요";
+  if (gpsRefused === 1) return "위치 권한이 꺼져 있습니다 — 브라우저 설정에서 허용하세요";
+  if (!last) return "위치를 찾는 중…";
+  if (Date.now() - last.t > GPS_STALE_MS) return `위치 신호 없음 (${Math.round((Date.now() - last.t) / 1000)}초 전)`;
+  return null;
+}
+setInterval(() => {
+  const state = gpsState();
+  const line = el("gps-warn");
+  line.hidden = state == null;
+  if (state) line.textContent = state;
+}, 1000);
 gps.on(onFix);
+// Routes asked on the move start on the carriageway the car is on (Kakao and TMAP take the heading).
+setHeading(() => {
+  const f = gps.last;
+  if (!f || f.course == null || !(f.speed != null && f.speed > 2) || Date.now() - f.t > 10_000) return null;
+  return { deg: f.course, kmh: f.speed * 3.6 };
+});
 
 function onFix(fix: Fix) {
   tracker.feed(fix);
+  stillness.feed([fix.lon, fix.lat], fix.speed);
+  if (!sim?.running) saveLast([fix.lon, fix.lat]);
   void watchRoad(fix);
   el("speed").textContent = fix.speed == null ? "--" : Math.round(fix.speed * 3.6).toString();
   el("pos").textContent = `${fix.lat.toFixed(5)}, ${fix.lon.toFixed(5)}`;
@@ -186,16 +245,31 @@ function onFix(fix: Fix) {
 // Sixty times a second: the tracker says where the car is drawn, whether
 // a fix came or not; the camera turns toward the road a little each frame.
 const MODES = { waiting: "대기", gps: "GPS", reckoning: "추측 항법", snapping: "복귀 중" };
+/** What the frame loop has already complained of, by message: once each, not sixty times a second. */
+const frameErrors = new Set<string>();
 function frame() {
-  const shown = tracker.frame();
-  if (shown) {
-    marker.setLngLat(shown.at);
-    el("mode").textContent = MODES[shown.mode] + (shown.offM != null ? ` · ${Math.round(shown.offM)} m` : "");
-    marker.setRotation(shown.bearing);
-    zoomSpeed += (shown.speedMps * 3.6 - zoomSpeed) * 0.01;
-    turnInM = route ? shown.nextGuide?.inM : undefined;
-    if (follow && !handsOn()) followCar(shown.at);
-    showTurn(shown);
+  try {
+    const shown = tracker.frame();
+    if (shown) {
+      marker.setLngLat(shown.at);
+      put("mode", MODES[shown.mode] + (shown.offM != null ? ` · ${Math.round(shown.offM)} m` : ""));
+      marker.setRotation(shown.bearing);
+      zoomSpeed += (shown.speedMps * 3.6 - zoomSpeed) * 0.01;
+      turnInM = route ? shown.nextGuide?.inM : undefined;
+      closeup = closeupFor(shown);
+      showCloseup(closeup);
+      if (follow && !handsOn()) followCar(shown.at);
+      showTurn(shown);
+      showLanes(shown);
+      backoff.seen(!shown.offRoute && (shown.offM == null || shown.offM <= OFF_M));
+    }
+  } catch (e) {
+    // One bad frame (a NaN handed to the marker) must not end the loop for the rest of the drive.
+    const message = (e as Error)?.message ?? String(e);
+    if (!frameErrors.has(message)) {
+      frameErrors.add(message);
+      log(`화면 갱신 오류 ${message}`);
+    }
   }
   requestAnimationFrame(frame);
 }
@@ -206,14 +280,24 @@ const approach = (from: number, to: number, k: number) => (Math.abs(to - from) <
 /** One frame of following: everything eases toward where it should be. */
 function followCar(at: LonLat) {
   const v = VIEWS[view];
-  const want = carSpot(v.carLow);
-  spot = spot ? { x: approach(spot.x, want.x, 0.15), y: approach(spot.y, want.y, 0.15) } : want;
+  // Close up on a junction: the car low on the screen, tilted, drawn back to see the fork (closeup.ts).
+  const close = closeup && view !== "north";
+  const canvas = map.getCanvas();
+  let want = close ? { x: carSpot(0).x, y: canvas.clientHeight * CLOSEUP_CAR_AT } : carSpot(v.carLow);
+  // A card at the foot of the map (lanes, the fork): the car kept clear above it.
+  const card = el("lanes");
+  if (!card.hidden) {
+    const top = card.getBoundingClientRect().top - canvas.getBoundingClientRect().top;
+    want = { x: want.x, y: Math.min(want.y, top - CAR_ABOVE_CARD_PX) };
+  }
+  spot = spot ? { x: approach(spot.x, want.x, 0.08), y: approach(spot.y, want.y, 0.08) } : want;
   const before = map.getCenter();
+  const zoomTo = close ? zoomToSee(Math.max(0, closeup!.inM), at[1], canvas.clientHeight * (CLOSEUP_CAR_AT - 0.12)) : Math.max(10, Math.min(20, speedZoom() + zoomBias));
   const camera = {
     bearing: view === "north" ? lerpAngle(map.getBearing(), 0, 0.15) : tracker.cameraBearing(map.getBearing()),
-    pitch: approach(map.getPitch(), v.pitch, 0.12),
+    pitch: approach(map.getPitch(), close ? CLOSEUP_PITCH : v.pitch, close ? 0.06 : 0.12),
     // Quick when coming back to the car; slow as the speed changes, like a drive.
-    zoom: approach(map.getZoom(), Math.max(10, Math.min(20, speedZoom() + zoomBias)), returning ? 0.12 : 0.03),
+    zoom: approach(map.getZoom(), zoomTo, returning ? 0.12 : close ? 0.05 : 0.03),
   };
   let center = centreFor(at, spot, camera);
   if (returning) {
@@ -242,12 +326,36 @@ function centreFor(at: LonLat, to: { x: number; y: number }, camera: { bearing: 
 }
 
 /** The middle of the map's free part — right of the trip panel, left of whatever holds the right side — lowered by [carLow]. */
+/** How far above the card at the foot of the map the car is kept. */
+const CAR_ABOVE_CARD_PX = 70;
+
+/** The junction shown close up now, or null: closeup.ts holds it a little past the junction, and a new route resets it (prepareHighway). */
+let closeup: Closeup | null = null;
+const closeupHold = new CloseupHold({
+  motorway: (g) => onMotorway.get(g) ?? false,
+  maneuver: (g) => maneuverOf(route!.provider, g),
+  label: (g) => {
+    const j = junctionOf(g);
+    return ["분기점", j?.name, j?.toward && `${j.toward} 방면`].filter(Boolean).join(" · ");
+  },
+});
+function closeupFor(shown: Shown): Closeup | null {
+  if (!route || !guide.closeups) return null;
+  return closeupHold.frame(shown.alongM, shown.nextGuide);
+}
+function showCloseup(_c: Closeup | null) {
+  // The junction's name and way are on the picture at the foot of the map now (junctionFor); no chip up top.
+  el("closeup").hidden = true;
+}
+
 function carSpot(carLow = 0) {
   const canvas = map.getCanvas();
   const hud = el("hud").getBoundingClientRect();
+  // The free part of the map: right of the top-left card, and of the destination window when it is up.
+  const left = Math.max(hud.right, el("dest-panel").hidden ? 0 : el("dest-panel").getBoundingClientRect().right);
   const side = !el("nearby").hidden || !el("guide").hidden || !el("weather").hidden || !el("music-dock").classList.contains("closed");
   const right = canvas.clientWidth - (side ? 356 : 76);
-  return { x: (hud.right + right) / 2, y: (canvas.clientHeight * (1 + carLow)) / 2 };
+  return { x: (left + right) / 2, y: (canvas.clientHeight * (1 + carLow)) / 2 };
 }
 
 function setFollow(on: boolean) {
@@ -457,7 +565,32 @@ let recheck: number | null = null;
 let rerouting = false;
 const routeLayer = new RouteLayer(map);
 
+/**
+ * Where to, and the ways there, in a window rising from the 목적지 button at
+ * the bottom left (like a start menu); the panel at the top left keeps to
+ * the speed, the clock and, driving, the drive.
+ */
+let searchOpen = false;
+for (const id of ["s-search", "s-preview", "diag"]) el("dest-panel").append(el(id));
+function layoutPanels() {
+  const open = (currentScreen === "search" && searchOpen) || currentScreen === "preview";
+  el("dest-panel").hidden = !open;
+  document.body.classList.toggle("hud-min", currentScreen !== "drive");
+  document.body.classList.toggle("dest-open", open);
+}
+function openSearch(open: boolean) {
+  searchOpen = open;
+  layoutPanels();
+  if (open) el<HTMLInputElement>("q").focus();
+}
+el("dest-open").addEventListener("click", () => openSearch(true));
+el("dest-close").addEventListener("click", () => openSearch(false));
+let currentScreen: Screen = "search";
+
 function showScreen(name: Screen) {
+  currentScreen = name;
+  if (name !== "search") searchOpen = false;
+  layoutPanels();
   el("s-search").hidden = name !== "search";
   el("s-preview").hidden = name !== "preview";
   el("s-drive").hidden = name !== "drive";
@@ -495,13 +628,14 @@ function item(title: string, sub: string) {
   return li;
 }
 
-/** The last few places driven to, kept in the browser. */
+/** The last few places driven to, kept in the browser and for the user on the server. */
 function recents(): Place[] {
   try { return JSON.parse(localStorage.getItem("nav-recent") ?? "[]"); } catch { return []; }
 }
 function remember(place: Place) {
   const kept = [place, ...recents().filter((p) => p.name !== place.name)].slice(0, 6);
   try { localStorage.setItem("nav-recent", JSON.stringify(kept)); } catch { /* private window */ }
+  pushUserData("recents", kept);
 }
 function drawRecents() {
   const list = recents();
@@ -631,11 +765,38 @@ async function choose(place: Place) {
   drawSaveMenu();
   el("pv-name").textContent = place.name;
   el("pv-addr").textContent = place.address;
-  el("pv-msg").textContent = "경로 찾는 중…";
   el("offers").replaceChildren();
+  offers = [];
+  chosen = null;
+  routeLayer.show(null);
   showScreen("preview");
-  await fetchOffers();
+  // First the place itself, close up with a pin, to see it is the one meant; the ways come on 경로 찾기.
+  showDestination(place);
+  el("pv-msg").textContent = "지도에서 위치를 확인하고 경로를 찾으세요";
+  el("pv-find").hidden = false;
+  el("go-row").hidden = true;
 }
+
+/** The place being gone to, as a pin; kept through the drive, gone when it ends. */
+let destPin: maplibregl.Marker | null = null;
+function showDestination(place: Place) {
+  destPin?.remove();
+  const dot = document.createElement("div");
+  dot.className = "dest-pin";
+  destPin = new maplibregl.Marker({ element: dot, anchor: "bottom" }).setLngLat(place.at).addTo(map);
+  setFollow(false);
+  touchedAt = Date.now();
+  // Into the free part of the screen, beside the panel (an offset, as for the 주변 places).
+  const middle = carSpot(0);
+  map.easeTo({ center: place.at, zoom: 16.5, pitch: 0, bearing: 0, offset: [middle.x - map.getCanvas().clientWidth / 2, 0], duration: 900 });
+}
+
+el("pv-find").addEventListener("click", async () => {
+  el("pv-find").hidden = true;
+  el("pv-msg").textContent = "경로 찾는 중…";
+  if (await fetchOffers()) el("go-row").hidden = false;
+  else el("pv-find").hidden = false;
+});
 
 async function fetchOffers(): Promise<boolean> {
   if (!goal) return false;
@@ -646,7 +807,8 @@ async function fetchOffers(): Promise<boolean> {
     offers = answer.routes.sort((a, b) => a.durationS - b.durationS);
     // Keep the driven provider if it answered again, else the quickest.
     chosen = offers.find((r) => r.provider === (chosen ?? route)?.provider) ?? offers[0];
-    el("pv-msg").textContent = "";
+    // Without a fix the ways start from the map's middle, and say so.
+    el("pv-msg").textContent = gps.last ? "" : "현위치를 모릅니다 — 지도 가운데에서 출발하는 경로입니다";
     drawOffers();
     routeLayer.show(chosen, offers);
     setFollow(false);
@@ -709,6 +871,8 @@ el("pv-close").addEventListener("click", () => {
     offers = [];
     chosen = null;
     routeLayer.show(null);
+    destPin?.remove();
+    destPin = null;
     showScreen("search");
     setFollow(true);
   }
@@ -730,20 +894,76 @@ function startDrive(r: Route) {
   if (fresh || elsewhere) {
     turnsSaid.clear();
     warningsSaid.clear();
+    popups.clear();
+    dismissed.clear();
+    backoff.reset();
   }
-  watch = new RouteWatch(route, () => ({ wants: (k) => wants(guide, k), cameraFromM: guide.cameraFromM }), warningsSaid);
+  watch = new RouteWatch(route, () => ({ wants: (k) => wants(guide, k), shows: (k) => shows(guide, k), cameraFromM: guide.cameraFromM }), warningsSaid);
   watchedAt = null;
+  incidentsAt = null;
+  prepareHighway(route);
+  void placeRestAreas(watch);
   arrived = false;
   showScreen("drive");
   setFollow(true);
   if (goal) remember(goal);
-  if (fresh) voice.say(EVENTS.start);
+  if (resuming) voice.say(EVENTS.resumed);
+  else if (fresh) voice.say(EVENTS.start);
   else if (elsewhere) voice.say(EVENTS.changed);
+  resuming = false;
+  // Kept for a reopened page, once it is clear this is not the pretend drive (started just after).
+  setTimeout(keepDrive, 0);
   if (recheck == null) recheck = window.setInterval(() => void recheckRoute(), RECHECK_MS);
 }
 
+/** The drive in progress, written for a reopened page (resume.ts); the pretend drive is not. */
+function keepDrive() {
+  if (route && drivingTo && !sim?.running && !arrived) saveDrive({ to: drivingTo, provider: route.provider, at: Date.now() });
+}
+setInterval(keepDrive, 60_000);
+/** The next startDrive is a drive taken up again after the page was closed. */
+let resuming = false;
+
+/**
+ * A page opened while a drive was going on (closed by accident, or the car
+ * after the phone): the same place, the same provider, from here — at once,
+ * with a way to cancel, and a word that the voice needs a tap to be heard.
+ */
+async function resumeDrive() {
+  const s = loadDrive();
+  if (!s || route) return;
+  // The first fix, if it comes soon; else the last place kept.
+  for (let i = 0; i < 24 && !gps.last; i++) await new Promise((done) => setTimeout(done, 500));
+  if (route) return;
+  // Closed just short of the destination: that drive is over, not one to announce arrived at once more.
+  if (!worthResuming(s, gps.last ? here() : null)) {
+    log(`이전 안내 ${s.to.name}: 이미 도착지 근처라 잇지 않음`);
+    saveDrive(null);
+    return;
+  }
+  log(`이전 안내 이어가기: ${s.to.name} (${s.provider})`);
+  let next: Route | null = null;
+  try {
+    next = await api.route(s.provider, here(), s.to.at);
+  } catch {
+    const answer = await api.routes(here(), s.to.at).catch(() => null);
+    next = answer?.routes.sort((a, b) => a.durationS - b.durationS)[0] ?? null;
+  }
+  if (!next || route) return;
+  goal = s.to;
+  offers = [next];
+  resuming = true;
+  startDrive(next);
+  const banner = el("resume");
+  el("resume-text").textContent = `이전 안내를 이어갑니다 · ${s.to.name}` + (voice.context.state === "running" ? "" : " — 화면을 한 번 누르면 음성이 나옵니다");
+  banner.hidden = false;
+  setTimeout(() => { banner.hidden = true; }, 20_000);
+}
+el("resume-cancel").addEventListener("click", () => { el("resume").hidden = true; endDrive(); });
+
 function endDrive() {
   if (sim?.running) stopSim();
+  saveDrive(null);
   route = null;
   goal = null;
   drivingTo = null;
@@ -751,10 +971,22 @@ function endDrive() {
   chosen = null;
   routeLayer.show(null);
   tracker.setRoute(null);
+  destPin?.remove();
+  destPin = null;
   watch = null;
+  drawNotes([]);
+  zoneLayer.set([], null);
+  cameraLayer?.setLightsAhead(null);
+  el("next-light").hidden = true;
   if (recheck != null) clearInterval(recheck);
   recheck = null;
+  // The camera card, the red speed and the next-camera mark: showLimit is only otherwise called from watchRoad.
+  showLimit(null, null);
+  closeupHold.reset();
+  closeup = null;
+  backoff.reset();
   el("turn-icon").replaceChildren();
+  drawn.clear();
   drawRecents();
   showScreen("search");
   setFollow(true);
@@ -768,6 +1000,8 @@ el("routes").addEventListener("click", async () => {
     el("pv-addr").textContent = goal.address;
   }
   showScreen("preview");
+  el("pv-find").hidden = true;
+  el("go-row").hidden = false;
   el("pv-msg").textContent = "경로 다시 찾는 중…";
   await fetchOffers();
 });
@@ -776,15 +1010,19 @@ el("routes").addEventListener("click", async () => {
 async function recheckRoute() {
   if (!drivingTo || !route || !gps.last || rerouting) return;
   if (!el("s-preview").hidden) return; // the cards are open; the driver is choosing
+  if (stillness.still()) return; // parked a long while: the road has not changed for a car that does not move
+  const asked = route, to = drivingTo;
   const current = tracker.frame()?.remainingS ?? route.durationS;
   try {
-    const answer = await api.routes(here(), drivingTo.at);
+    const answer = await api.routes(here(), to.at);
+    // An off-route re-route, a new place or the drive's end came while the answer did: it is for a route no longer driven.
+    if (route !== asked || drivingTo !== to || rerouting) return;
     const best = answer.routes.sort((a, b) => a.durationS - b.durationS)[0];
     if (best && best.durationS < current - BETTER_BY_S) {
       offers = answer.routes;
       log(`더 빠른 길: ${best.provider} ${minutes(best.durationS)} (지금 ${minutes(current)})`);
       voice.say(EVENTS.faster);
-      goal = drivingTo;
+      goal = to;
       startDrive(best);
     }
   } catch (e) {
@@ -792,21 +1030,46 @@ async function recheckRoute() {
   }
 }
 
-// Off the road for three seconds: the route is asked again from here.
-tracker.onOffRoute = async () => {
+// Off the road (tracker.ts says when, and again while it stays off): the
+// route is asked again from here — of the provider already driven, one
+// call, so it comes back in a second; every provider only if that one
+// fails. Which is quicker is the periodic recheck's question, not this one's.
+/**
+ * Re-routes in a row wait longer each time (reroute-backoff.ts): the tracker
+ * starts afresh on each new route, so one that begins further from the car
+ * than OFF_M has the car off again in a second or three, and without this the
+ * road would be asked once a second for as long as that lasted.
+ */
+const backoff = new RerouteBackoff();
+tracker.onOffRoute = async (at) => {
   if (!drivingTo || !route || rerouting) return;
+  const wait = backoff.ask();
+  if (wait > 0) {
+    log(`경로 이탈 — 재탐색은 ${Math.ceil(wait)}초 뒤 (연달아 ${route.provider})`);
+    return;
+  }
   rerouting = true;
-  log("경로 이탈 — 재탐색");
+  log(`경로 이탈 — 재탐색 (${route.provider})`);
   voice.say(EVENTS.off);
-  el("eta-left").textContent = "경로 이탈 · 재탐색 중…";
+  put("eta-left", "경로 이탈 · 재탐색 중…");
+  const to = drivingTo;
+  const asked = route;
   try {
-    const answer = await api.routes(here(), drivingTo.at);
-    const again = answer.routes.sort((a, b) => a.durationS - b.durationS);
-    const same = again.find((r) => r.provider === route!.provider) ?? again[0];
-    if (same) {
-      offers = again;
-      goal = drivingTo;
-      startDrive(same);
+    let next: Route | null = null;
+    try {
+      next = await api.route(route.provider, at, to.at);
+    } catch (e) {
+      log(`재탐색 ${route.provider} 실패 ${(e as Error).message} — 전체로`);
+      const answer = await api.routes(at, to.at);
+      const again = answer.routes.sort((a, b) => a.durationS - b.durationS);
+      next = again.find((r) => r.provider === route!.provider) ?? again[0] ?? null;
+      if (next) offers = again;
+    }
+    // The drive may have ended, gone elsewhere, or been given a quicker route (recheckRoute) while the answer came.
+    if (next && drivingTo === to && route === asked) {
+      if (!offers.includes(next)) offers = [next, ...offers.filter((r) => r.provider !== next!.provider)];
+      goal = to;
+      startDrive(next);
     }
   } catch (e) {
     log(`재탐색 실패 ${(e as Error).message}`);
@@ -823,41 +1086,321 @@ const warningsSaid = new Map<string, Set<number>>();
 const junction = (at: LonLat) => `${Math.round(at[0] * 5000)},${Math.round(at[1] * 5000)}`;
 let arrived = false;
 
+/**
+ * What the panel last showed, by element: written only when it changes. The
+ * frame loop comes sixty times a second, and an innerHTML that is the same
+ * string still costs a parse and a layout each time.
+ */
+const drawn = new Map<string, string>();
+function put(id: string, text: string) {
+  if (drawn.get(id) === text) return;
+  drawn.set(id, text);
+  el(id).textContent = text;
+}
+function putHtml(id: string, html: string) {
+  if (drawn.get(id) === html) return;
+  drawn.set(id, html);
+  el(id).innerHTML = html;
+}
+
 function showTurn(shown: Shown) {
   if (!route) return;
   if (shown.remainingM != null && shown.remainingS != null) {
-    el("eta-time").textContent = arrivalAt(shown.remainingS);
-    el("eta-left").textContent = `${minutes(shown.remainingS)} · ${km(shown.remainingM)} · ${NAMES[route.provider]}`;
+    put("eta-time", arrivalAt(shown.remainingS));
+    put("eta-left", `${minutes(shown.remainingS)} · ${km(shown.remainingM)} · ${NAMES[route.provider]}`);
   }
   if (!shown.nextGuide) {
     if (shown.remainingM != null && shown.remainingM < 30 && !arrived) {
       arrived = true;
+      saveDrive(null);
       voice.say(EVENTS.arrived);
-      el("turn-icon").innerHTML = arrowSvg("arrive");
-      el("turn-in").textContent = "도착";
-      el("turn-text").textContent = drivingTo?.name ?? "";
+      putHtml("turn-icon", arrowSvg("arrive"));
+      put("turn-in", "도착");
+      put("turn-text", drivingTo?.name ?? "");
       el("then").hidden = true;
     }
     return;
   }
   const g = shown.nextGuide.guide;
-  el("turn-icon").innerHTML = arrowSvg(maneuverOf(route.provider, g));
-  el("turn-in").textContent = km(shown.nextGuide.inM);
-  el("turn-text").textContent = g.text;
+  const m = maneuverOf(route.provider, g);
+  putHtml("turn-icon", arrowSvg(m));
+  put("turn-in", km(shown.nextGuide.inM));
+  put("turn-text", shortOf(g));
   if (shown.thenGuide && shown.thenGuide.inM - shown.nextGuide.inM < 800) {
     el("then").hidden = false;
-    el("then-icon").innerHTML = arrowSvg(maneuverOf(route.provider, shown.thenGuide.guide), 20);
-    el("then-text").textContent = `${km(shown.thenGuide.inM - shown.nextGuide.inM)} 후 ${shown.thenGuide.guide.text}`;
+    putHtml("then-icon", arrowSvg(maneuverOf(route.provider, shown.thenGuide.guide), 20));
+    put("then-text", `${km(shown.thenGuide.inM - shown.nextGuide.inM)} 후 ${shortOf(shown.thenGuide.guide)}`);
   } else {
     el("then").hidden = true;
   }
   const key = junction(g.at);
   const said = turnsSaid.get(key) ?? new Set<number>();
   turnsSaid.set(key, said);
-  const sentence = turnSpeech(maneuverOf(route.provider, g), shown.nextGuide.inM, shown.speedMps * 3.6, said, g.text);
-  if (sentence && guide.turns) voice.say(sentence);
+  const due = turnSay(m, shown.nextGuide.inM, shown.speedMps * 3.6, said, g.text);
+  if (!due || !guide.turns) return;
+  const motorway = onMotorway.get(g) ?? false;
+  // On a motorway, a far rung names the junction and its way; the plain sentence is said if that cannot be had.
+  const named = motorway && guide.junctionNames && due.rung > TURN_NEAR_M ? namedFor(g, m, due.rung) : null;
+  // A guide said in its own words ("고속도로 출구") is made on the spot; if that fails, the fixed sentence for the road's bend.
+  const bent = TURN_WORDS_OK.has(m) ? null : bendOf(g);
+  const plain = bent ? turnPhrase(bent, due.rung) : undefined;
+  // Keyed by the junction and the rung: the next junction's "잠시 후 좌회전" is its own, however alike it reads.
+  voice.say(named ?? due.text, named ? due.text : plain, { key: `turn:${key}:${due.rung}`, turn: true });
+  // The first far rung (a kilometre out): the guide line's colour where it is painted, else which side to be on.
+  const colour = due.rung > TURN_NEAR_M ? lineColour(g, m) : null;
+  if (colour && guide.colorLines) voice.say(GUIDE_LINES[colour], undefined, { key: `line:${key}`, turn: true });
+  else if (motorway && guide.laneHints && due.rung >= 1000 && !lanesShown) {
+    const hint = laneHint(m);
+    if (hint) voice.say(hint, undefined, { key: `lane:${key}`, turn: true });
+  }
 }
 
+/** Which guides are on a motorway, worked out once a route. */
+let onMotorway = new Map<Guide, boolean>();
+/** The route's line, for the lanes' question (the heading in, the way after). */
+let routeLine: Line | null = null;
+
+// ---- 차로 안내: the lanes at the junction ahead (정밀도로지도, server/src/lanes.ts) ----
+
+const LANES_TOWN_M = 800;
+const LANES_MOTORWAY_M = 2000;
+/** Asked once a junction; null while the answer is coming, or where the map has none. */
+const lanesAsked = new Map<Guide, Lanes | null>();
+let lanesShown = false;
+function wayOf(m: Maneuver): string | null {
+  if (m === "left" || m === "sharp-left") return "left";
+  if (m === "right" || m === "sharp-right") return "right";
+  if (m === "uturn") return "uturn";
+  if (m === "straight") return "straight";
+  if (m === "slight-left" || m === "slight-right" || m === "ramp-left" || m === "ramp-right") return "fork";
+  return null;
+}
+/** The side to keep to before a turn, where the map has no lanes for it. */
+function sideOf(m: Maneuver): string | null {
+  if (m === "left" || m === "sharp-left" || m === "slight-left" || m === "ramp-left" || m === "uturn") return "왼쪽 차로로";
+  if (m === "right" || m === "sharp-right" || m === "slight-right" || m === "ramp-right") return "오른쪽 차로로";
+  return null;
+}
+const TURN_NAME: Partial<Record<Maneuver, string>> = {
+  left: "좌회전", right: "우회전", "sharp-left": "왼쪽 급회전", "sharp-right": "오른쪽 급회전", "slight-left": "왼쪽 방향",
+  "slight-right": "오른쪽 방향", "ramp-left": "왼쪽 출구", "ramp-right": "오른쪽 출구", uturn: "유턴", roundabout: "회전교차로",
+};
+// ---- lanes that must turn on the way straight on (정밀도로지도, lanesAlong on the server) ----
+
+interface LaneStop { alongM: number; lanes: Lanes["lanes"]; way: LaneTurn }
+/** The junctions ahead where some lane cannot go the route's way, by where their stop lines are along it. */
+let laneStops: LaneStop[] = [];
+let laneStopsAt: number | null = null;
+const LANE_STOPS_AHEAD_M = 1500;
+const LANE_STOP_SHOWN_M = 300;
+/** Asked again each 800 m: the next kilometre and a half of the route, a point every 15 m. */
+function askLaneStops(along: number) {
+  if (!routeLine || !guide.laneGuide || health?.hdmap === false) return;
+  if (laneStopsAt != null && Math.abs(along - laneStopsAt) < 800) return;
+  laneStopsAt = along;
+  const line = routeLine;
+  const pts = [];
+  for (let m = along; m <= Math.min(line.lengthM, along + LANE_STOPS_AHEAD_M); m += 15) pts.push(line.place(m).at);
+  if (pts.length < 3) return;
+  const path = pts.map((p) => `${p[0].toFixed(6)},${p[1].toFixed(6)}`).join(";");
+  void fetch(`/api/hdmap/lanes-along?path=${path}`).then((a) => (a.ok ? a.json() : null)).then((j: { junctions?: (Lanes & { stop: LonLat; way: LaneTurn })[] } | null) => {
+    if (line !== routeLine || !j?.junctions) return;
+    // The server's word for the route's way at each stop line (from the route's shape past it).
+    const found = j.junctions.map((x) => ({ alongM: line.project(x.stop, 0, line.path.length).alongM, lanes: x.lanes, way: x.way }));
+    // Keep what is still ahead from the last answer, and take the new.
+    laneStops = [...laneStops.filter((s) => s.alongM >= along - 20 && !found.some((f) => Math.abs(f.alongM - s.alongM) < 25)), ...found].sort((a, b) => a.alongM - b.alongM);
+    if (found.length) log(`전용 차로 ${found.map((f) => `${Math.round(f.alongM - along)}m ${onlyWords(f.lanes, f.way)}`).join(", ")}`);
+  }).catch(() => {});
+}
+/** The card for the next such stop line within 300 m: shown only, not said (the voice is kept for the turns). */
+function nextLaneStop(along: number): LaneStop | null {
+  // Going straight on past lanes that must turn: a turn of the route's own has its own card.
+  // Kept until 30 m past the stop line: through the junction, not gone at its edge.
+  return laneStops.find((x) => x.way === "straight" && x.alongM - along > -30 && x.alongM - along <= LANE_STOP_SHOWN_M) ?? null;
+}
+function laneStopCard(along: number): LaneCard | null {
+  const s = nextLaneStop(along);
+  if (!s) return null;
+  const note = onlyWords(s.lanes, s.way);
+  const arrow: Record<LaneTurn, Maneuver> = { straight: "straight", left: "left", right: "right", uturn: "uturn" };
+  return {
+    arrow: arrowSvg(arrow[s.way], 40),
+    inText: km(Math.max(0, Math.round((s.alongM - along) / 10) * 10)),
+    what: TURN_NAME[arrow[s.way]] ?? "직진",
+    lanes: { lanes: s.lanes },
+    side: null,
+    note,
+    way: s.way,
+  };
+}
+
+/** The turn just passed, kept on the card until the car is through the junction (TURN_HELD_M past it). */
+let heldTurn: { guide: Guide; alongM: number } | null = null;
+const TURN_HELD_M = 40;
+/** The next guide as last seen, and where it lies along the route: when it gives way to the one after, it is held. */
+let lastNext: { guide: Guide; alongM: number } | null = null;
+function showLanes(shown: Shown) {
+  let next = shown.nextGuide;
+  if (shown.alongM != null && route) askLaneStops(shown.alongM);
+  // The next guide changed while the last was close: the car is at that junction — hold it (a slow screen may
+  // draw no frame in the last few metres before it, so the change itself is what is watched for).
+  if (lastNext && next?.guide !== lastNext.guide && shown.alongM != null && lastNext.alongM - shown.alongM < 30 && lastNext.alongM - shown.alongM > -TURN_HELD_M) heldTurn = lastNext;
+  lastNext = next && shown.alongM != null ? { guide: next.guide, alongM: shown.alongM + next.inM } : null;
+  // Through the junction the card stays: the guide just passed is still the one to show until 40 m on.
+  if (heldTurn && shown.alongM != null && route && shown.alongM - heldTurn.alongM < TURN_HELD_M && route.guides.includes(heldTurn.guide)) {
+    next = { guide: heldTurn.guide, inM: heldTurn.alongM - shown.alongM };
+  } else heldTurn = null;
+  const m = next && route ? maneuverOf(route.provider, next.guide) : null;
+  // Every turn (not straight on, not the arrival), from 400 m in town or a kilometre on a motorway.
+  const within = next && m && route && routeLine && guide.laneGuide && m !== "straight" && m !== "arrive" && m !== "depart" && m !== "other"
+    && next.inM <= ((onMotorway.get(next.guide) ?? false) ? LANES_MOTORWAY_M : LANES_TOWN_M) && next.inM > -TURN_HELD_M;
+  if (!within) {
+    lanesShown = false;
+    // No turn close: a lane ahead that must turn, if there is one within 300 m.
+    drawLaneCard(el("lanes"), guide.laneGuide && route && shown.alongM != null ? laneStopCard(shown.alongM) : null);
+    return;
+  }
+  // A stop line with a turning lane that comes before the turn: that first.
+  const stop = shown.alongM != null ? nextLaneStop(shown.alongM) : null;
+  if (stop && shown.alongM != null && stop.alongM - shown.alongM < next!.inM - 30) {
+    drawLaneCard(el("lanes"), laneStopCard(shown.alongM));
+    return;
+  }
+  const g = next!.guide;
+  if (!lanesAsked.has(g) && health?.hdmap !== false) {
+    lanesAsked.set(g, null);
+    const line = routeLine!;
+    const p = line.project(g.at, 0, line.path.length);
+    const before = line.place(p.alongM - 30).at;
+    const inDeg = bearing(before[0], before[1], p.at[0], p.at[1]);
+    const after = Array.from({ length: 11 }, (_, k) => line.place(p.alongM + k * 15).at);
+    const way = wayOf(maneuverOf(route!.provider, g));
+    const q = new URLSearchParams({ at: `${g.at[0]},${g.at[1]}`, in: String(Math.round(inDeg)), after: after.map((a) => `${a[0].toFixed(6)},${a[1].toFixed(6)}`).join(";") });
+    if (way) q.set("way", way);
+    void fetch(`/api/hdmap/lanes?${q}`).then((a) => (a.ok ? a.json() : null)).then((info: Lanes | null) => {
+      lanesAsked.set(g, info && info.lanes.length ? info : null);
+      log(info?.lanes.length ? `차로 ${info.lanes.map((l) => (l.best ? `[${l.turns.join("+")}]` : l.turns.join("+"))).join(" | ")} · ${g.text}` : `차로 정보 없음 · ${g.text} (${way ?? "-"})`);
+    }).catch(() => {});
+  }
+  const info = lanesAsked.get(g) ?? null;
+  lanesShown = !!info;
+  drawLaneCard(el("lanes"), {
+    arrow: arrowSvg(m!, 40),
+    inText: km(Math.max(0, Math.round(next!.inM / 10) * 10)),
+    what: TURN_NAME[m!] ?? "",
+    lanes: info,
+    side: info ? null : sideOf(m!),
+    lines: linesFor(g, m!),
+    junction: junctionFor(g, m!),
+  });
+}
+
+/**
+ * A motorway junction's picture: a fork at a JC (or a keep-left, keep-right on a motorway), an exit off
+ * it, an entrance onto it — from the guide's words and whether the route is on a motorway there.
+ */
+function junctionFor(g: Guide, m: Maneuver): JunctionView | null {
+  const go = branchOf(m);
+  if (!go) return null;
+  const t = g.text, j = junctionOf(g);
+  const motorway = onMotorway.get(g) ?? false;
+  const named = /IC|JC|분기|나들목|톨게이트|TG/.test(`${t} ${g.name ?? ""}`);
+  if (!motorway && !named && !/고속|도시고속|자동차전용/.test(t)) return null;
+  const kind: JunctionView["kind"] = /출구|진출/.test(t) ? "exit" : /입구|진입/.test(t) ? "enter" : "fork";
+  if (kind === "fork" && !(m === "slight-left" || m === "slight-right" || m === "ramp-left" || m === "ramp-right")) return null;
+  return { kind, go, name: j?.name, toward: j?.toward };
+}
+
+// ---- 노면색깔유도선: the pink or green line to follow at a motorway junction (color-guides.ts) ----
+
+/** The junction's lines, asked once a guide; null where the list has none. */
+const linesAsked = new Map<Guide, { left?: GuideColour; right?: GuideColour } | null>();
+/** Which branch a manoeuvre takes; null for one that is not a fork. */
+function branchOf(m: Maneuver): "left" | "right" | null {
+  if (m === "slight-left" || m === "ramp-left" || m === "left" || m === "sharp-left") return "left";
+  if (m === "slight-right" || m === "ramp-right" || m === "right" || m === "sharp-right") return "right";
+  return null;
+}
+function linesFor(g: Guide, m: Maneuver): LaneCard["lines"] {
+  const go = branchOf(m);
+  const name = junctionOf(g)?.name;
+  if (!go || !name || !guide.colorLines || !route || !routeLine) return null;
+  if (!linesAsked.has(g)) {
+    linesAsked.set(g, null);
+    const line = routeLine;
+    const p = line.project(g.at, 0, line.path.length);
+    const before = line.place(p.alongM - 30).at;
+    // The motorways named in this guide and the one before ("영동 고속도로를 따라"): the list's rows for that line.
+    const n = route.guides.indexOf(g);
+    const roads = [route.guides[n - 1]?.text, g.text].flatMap((t) => [...(t ?? "").matchAll(/([가-힣0-9]+)\s*(?:고속도로|고속국도|도시고속도로)/g)].map((x) => x[1]));
+    const q = new URLSearchParams({ name, at: `${g.at[0]},${g.at[1]}`, in: String(Math.round(bearing(before[0], before[1], p.at[0], p.at[1]))), roads: [...new Set(roads)].join(",") });
+    void fetch(`/api/road/color-guide?${q}`).then((a) => (a.ok ? a.json() : null)).then((c: { left?: GuideColour; right?: GuideColour } | null) => {
+      const found = c && (c.left || c.right) ? c : null;
+      linesAsked.set(g, found);
+      log(found ? `유도선 ${name}: 왼쪽 ${found.left ?? "-"} · 오른쪽 ${found.right ?? "-"}` : `유도선 없음 · ${name}`);
+    }).catch(() => {});
+  }
+  const c = linesAsked.get(g);
+  if (!c) return null;
+  // One line alone is the exit's: it leads off the motorway, whichever side the list wrote it on.
+  if (!(c.left && c.right)) {
+    const exit = /출구|진출|나들목|IC/.test(g.text) && !/JC|분기/.test(g.text);
+    const only = c.left ?? c.right;
+    return exit ? { [go]: only, go } : null;
+  }
+  return { left: c.left, right: c.right, go };
+}
+
+/** The colour to follow at [g], when its lines are known. */
+function lineColour(g: Guide, m: Maneuver): GuideColour | null {
+  const l = linesFor(g, m);
+  return l ? l[l.go] ?? null : null;
+}
+const TURN_WORDS_OK = new Set<Maneuver>(["left", "right", "slight-left", "slight-right", "sharp-left", "sharp-right", "ramp-left", "ramp-right", "uturn", "roundabout", "straight"]);
+function namedFor(g: Guide, m: Maneuver, rung: number): string | null {
+  if (!TURN_WORDS_OK.has(m)) return null;
+  const j = junctionOf(g);
+  return j ? namedTurnPhrase(m as Turn, rung, j) : null;
+}
+/** The way the route bends at [g]: its bearing 40 m before against 40 m after. */
+function bendOf(g: Guide): Turn | null {
+  if (!routeLine) return null;
+  const at = routeLine.project(g.at, 0, routeLine.path.length).alongM;
+  const exit = /출구|진출/.test(g.text) && (onMotorway.get(g) ?? false);
+  return fromBend(routeLine.place(at - 40).bearing, routeLine.place(at + 40).bearing, exit);
+}
+/** A new route: which guides are on motorways, and their named sentences asked for now, to be ready. */
+function prepareHighway(r: Route) {
+  const line = new Line(r.path);
+  routeLine = line;
+  lanesAsked.clear();
+  linesAsked.clear();
+  laneStops = [];
+  laneStopsAt = null;
+  // The junction held close up was measured along the old line; on this one its metres would read as kilometres.
+  closeupHold.reset();
+  closeup = null;
+  onMotorway = new Map(r.guides.map((g) => [g, motorwayAt(r, line.project(g.at, 0, r.path.length).segment)]));
+  if (!guide.junctionNames || !guide.turns) return;
+  for (const g of r.guides) {
+    if (!onMotorway.get(g)) continue;
+    const m = maneuverOf(r.provider, g);
+    for (const rung of [1000, 500]) {
+      const text = namedFor(g, m, rung);
+      if (text) voice.prefetch(text);
+    }
+  }
+}
+
+/** A guide as the panel shows it: without TMAP's "… 후 영동 고속도로를 따라 121m 이동" tail. */
+const shortGuide = (text: string) => text.replace(/\s*후\s+.*?(을|를)?\s*따라\s*\d+\s*m\s*이동\s*$/, "").replace(/\s*(을|를)\s*따라\s*\d+\s*m\s*이동\s*$/, "").trim() || text;
+/** The same, once a guide (it is asked for every frame). */
+const shortGuides = new WeakMap<Guide, string>();
+function shortOf(g: Guide): string {
+  let short = shortGuides.get(g);
+  if (short === undefined) shortGuides.set(g, (short = shortGuide(g.text)));
+  return short;
+}
 const km = (m: number) => (m < 1000 ? `${Math.round(m / 10) * 10} m` : `${(m / 1000).toFixed(1)} km`);
 const minutes = (s: number) => (s < 3600 ? `${Math.round(s / 60)}분` : `${Math.floor(s / 3600)}시간 ${Math.round((s % 3600) / 60)}분`);
 const hhmm = (d: Date) => `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
@@ -906,29 +1449,205 @@ function sideChanged() {
 // ---- the road ahead --------------------------------------------------------
 
 let watch: RouteWatch | null = null;
+/** Where each warning sentence was last said from: two features this close are one thing to say. */
+const spokenAt = new Map<string, { at: LonLat; t: number }>();
+const SAME_PLACE_M = 300;
 /** Where the server was last asked what is near; asked again 500 m on or after 30 s. */
 let watchedAt: { at: LonLat; t: number } | null = null;
+/** Parked with the page open (still.ts): the polls that follow the car wait until it moves. */
+const stillness = new Stillness();
 
 async function watchRoad(fix: Fix) {
-  if (!watch || !route) return;
+  const w = watch, r = route;
+  if (!w || !r) return;
   const moved = watchedAt ? metres(watchedAt.at[0], watchedAt.at[1], fix.lon, fix.lat) : Infinity;
-  if (moved > 500 || !watchedAt || Date.now() - watchedAt.t > 30_000) {
+  if ((moved > 500 || !watchedAt || Date.now() - watchedAt.t > 30_000) && !stillness.still()) {
     watchedAt = { at: [fix.lon, fix.lat], t: Date.now() };
     try {
       const near = await (await fetch(`/api/safety/near?lon=${fix.lon}&lat=${fix.lat}&r=1500`)).json() as Feature[];
-      watch.add(near);
+      // The drive ended, or was re-routed, while the answer came: this watch is no longer the one.
+      if (watch !== w) return;
+      w.add(near);
     } catch (e) {
       log(`시설물 조회 실패 ${(e as Error).message}`);
     }
   }
+  if (watch !== w) return;
+  if (!incidentsAt || Date.now() - incidentsAt.t > INCIDENTS_EVERY_MS || metres(incidentsAt.at[0], incidentsAt.at[1], fix.lon, fix.lat) > 8000) {
+    void placeIncidents(w, [fix.lon, fix.lat]);
+  }
   const along = tracker.frame()?.alongM;
   if (along == null) return;
-  for (const due of watch.due(along)) {
+  for (const due of w.due(along)) {
+    // Only shown: a card now, gone when passed or tapped; the voice is left for what cannot wait.
+    if (!due.voice) {
+      // A rest area only once on the motorway (roadNotes has the same rule for its card).
+      if (due.feature.kind === "rest-area" && !(routeLine && motorwayAt(r, routeLine.place(along).segment))) continue;
+      popups.set(due.feature.id, due);
+      continue;
+    }
     const phrase = phraseFor(due);
+    // One sentence for things at one place (a school zone and its camera); a second camera further on is its own.
+    const f = due.feature;
+    const same = spokenAt.get(phrase);
+    if (same && metres(same.at[0], same.at[1], f.lon, f.lat) < SAME_PLACE_M && Date.now() - same.t < 20_000) continue;
+    spokenAt.set(phrase, { at: [f.lon, f.lat], t: Date.now() });
     log(`경고 ${phrase}`);
-    voice.say(phrase);
+    voice.say(phrase, undefined, { key: `warn:${f.id}:${due.rungM}` });
   }
-  showLimit(watch.limitAt(along), fix.speed);
+  showLimit(w.limitAt(along), fix.speed);
+  showNextLight(w, along, fix.speed);
+  // The protected zones on the route, as bands on the road (those the driver keeps shown).
+  zoneLayer.set(w.zones().filter((z) => shows(guide, z.feature.kind)).map((z) => ({ id: z.feature.id, kind: z.feature.kind as "school-zone" | "senior-zone", alongM: z.alongM, endM: z.endM })), routeLine);
+  drawNotes(roadNotes(w, along));
+}
+
+/** Lights this close along the route are one junction's; the nearest ahead of the car is "the next". */
+const LIGHTS_ONE_JUNCTION_M = 40;
+const LIGHTS_ON_MAP_M = 3000;
+/**
+ * The next traffic light on the route, on the drive panel, with the time to
+ * it at this speed; and the route's lights ahead handed to the map, which
+ * (안내 설정 → 경로만) draws only those.
+ */
+function showNextLight(w: RouteWatch, along: number, speedMps: number | null | undefined) {
+  const aheadAll = w.ahead(along, LIGHTS_ON_MAP_M);
+  const lights = aheadAll.filter((a) => a.feature.kind === "signal-light");
+  // The lights and the cameras on the route ahead: the ones the map draws (경로만).
+  cameraLayer?.addKnown(aheadAll.map((a) => a.feature));
+  cameraLayer?.setLightsAhead(new Set(aheadAll.map((a) => a.feature.id)));
+  const line = el("next-light");
+  // Past the stop line of the one being driven through: the next junction's.
+  const next = lights.find((a) => a.inM > 8);
+  line.hidden = !guide.nextLight || !next;
+  if (!next || line.hidden) return;
+  const count = new Set(lights.map((a) => Math.round(a.alongM / LIGHTS_ONE_JUNCTION_M))).size;
+  const secs = speedMps && speedMps > 3 ? Math.round(next.inM / speedMps) : null;
+  el("next-light-in").textContent = km(next.inM);
+  el("next-light-sub").textContent = [secs != null ? `약 ${secs}초` : null, count > 1 ? `앞 ${count}곳` : null].filter(Boolean).join(" · ");
+}
+
+// ---- shown, not said: the cards at the top right ---------------------------
+
+const notes = new Notes(el("notes"));
+const zoneLayer = new ZoneLayer(map);
+/** The things only shown that have come due this drive, until passed; and the cards the driver closed. */
+const popups = new Map<string, Ahead>();
+const dismissed = new Set<string>();
+notes.onDismiss = (id) => dismissed.add(id);
+/** More cards than this and the map is covered: the nearest are kept. */
+const MAX_NOTES = 4;
+/** The road's cards as last drawn, so a new 기상특보 can be added without waiting for a fix. */
+let lastRoadNotes: Note[] = [];
+function drawNotes(road: Note[]) {
+  lastRoadNotes = road;
+  const seen = new Set<string>();
+  const list = [...alertNotes(), ...road].filter((n) => !dismissed.has(n.id) && !seen.has(n.id) && seen.add(n.id));
+  notes.show(list.slice(0, MAX_NOTES));
+}
+
+/** How far ahead each card is shown from: a rest area tens of kilometres out is worth knowing. */
+const REST_SHOWN_M = 20_000;
+const INCIDENT_SHOWN_M = 5000;
+const SCHOOL_SHOWN_M = 500;
+
+/** The next of each: one rest area, one incident, one school zone, nearest first. */
+function roadNotes(w: RouteWatch, along: number): Note[] {
+  const ahead = w.ahead(along, REST_SHOWN_M).filter((a) => shows(guide, a.feature.kind));
+  const first = (test: (a: Ahead) => boolean, withinM: number) => ahead.find((a) => test(a) && a.inM <= withinM);
+  const out: Note[] = [];
+  const school = first((a) => a.feature.kind === "school-zone", SCHOOL_SHOWN_M);
+  if (school) out.push(schoolNote(school, along));
+  const incident = first((a) => INCIDENT_KINDS.includes(a.feature.kind) && a.inM >= -10, INCIDENT_SHOWN_M);
+  if (incident) out.push(incidentNote(incident));
+  // The things only shown, nearest first, until the car is past each.
+  for (const [id, p] of popups) {
+    if ((p.endM ?? p.alongM) < along - 10) popups.delete(id);
+  }
+  out.push(...[...popups.values()].sort((a, b) => a.alongM - b.alongM).map((p) => popupNote(p, along)));
+  // A rest area is for the motorway: shown only once the car is on one, not while still leaving town.
+  const onMotorwayNow = !!route && !!routeLine && motorwayAt(route, routeLine.place(along).segment);
+  const rest = onMotorwayNow ? first((a) => a.feature.kind === "rest-area" && a.inM >= 0, REST_SHOWN_M) : undefined;
+  if (rest) out.push(restNote(rest));
+  return out;
+}
+
+/** Every rest area, asked once per page: the server has them all, and their prices by the hour. */
+let restAreas: Promise<Feature[]> | null = null;
+async function placeRestAreas(w: RouteWatch) {
+  if (health?.road && !health.road.restAreas) return;
+  restAreas ??= fetch("/api/road/rest-areas").then(async (a) => {
+    if (!a.ok) throw new Error((await a.json().catch(() => ({}))).error ?? `${a.status}`);
+    return (await a.json()) as Feature[];
+  });
+  try {
+    const list = await restAreas;
+    if (watch === w) w.add(list);
+  } catch (e) {
+    restAreas = null;
+    log(`휴게소 실패 ${(e as Error).message}`);
+  }
+}
+
+const INCIDENT_KINDS: Kind[] = ["incident-crash", "incident-work", "incident-other"];
+const INCIDENTS_EVERY_MS = 3 * 60_000;
+let incidentsAt: { at: LonLat; t: number } | null = null;
+/** ITS's incidents round the car, again every few minutes: the cleared ones go, the new ones come. */
+async function placeIncidents(w: RouteWatch, at: LonLat) {
+  if (health?.road && !health.road.incidents) return;
+  incidentsAt = { at, t: Date.now() };
+  try {
+    const a = await fetch(`/api/road/incidents?at=${at[0]},${at[1]}&r=15000`);
+    if (!a.ok) throw new Error((await a.json().catch(() => ({}))).error ?? `${a.status}`);
+    const list = (await a.json()) as Feature[];
+    if (watch !== w) return;
+    w.drop(INCIDENT_KINDS);
+    w.add(list);
+  } catch (e) {
+    log(`돌발상황 실패 ${(e as Error).message}`);
+  }
+}
+
+// ---- 기상특보 ---------------------------------------------------------------
+
+interface Alert { kind: string; level: "주의보" | "경보"; where: "here" | "part"; area: string }
+let alertsNow: Alert[] = [];
+let alertsAt: { at: LonLat; t: number } | null = null;
+/** Each 특보 is said once a page: the voice is for its arrival, the card for its staying. */
+const alertsSaid = new Set<string>();
+
+async function refreshAlerts(at: LonLat) {
+  if (health?.road && !health.road.alerts) return;
+  const moved = alertsAt ? metres(alertsAt.at[0], alertsAt.at[1], at[0], at[1]) : Infinity;
+  if (alertsAt && moved < 10_000 && Date.now() - alertsAt.t < 10 * 60_000) return;
+  alertsAt = { at, t: Date.now() };
+  try {
+    const a = await fetch(`/api/alerts?at=${at[0]},${at[1]}`);
+    const j = (await a.json()) as { alerts?: Alert[]; error?: string };
+    if (!a.ok) throw new Error(j.error ?? `${a.status}`);
+    alertsNow = j.alerts ?? [];
+    for (const al of alertsNow) {
+      const key = `${al.kind}${al.level}`;
+      if (alertsSaid.has(key) || guide.weatherAlerts !== "voice" || !(ALERT_KINDS as readonly string[]).includes(al.kind)) continue;
+      alertsSaid.add(key);
+      voice.say(alertPhrase(al.kind as AlertKind, al.level));
+    }
+    drawNotes(lastRoadNotes);
+  } catch (e) {
+    log(`기상특보 실패 ${(e as Error).message}`);
+  }
+}
+
+function alertNotes(): Note[] {
+  if (guide.weatherAlerts === "off") return [];
+  return alertsNow.map((al) => ({
+    id: `alert:${al.kind}${al.level}`,
+    tone: "alert" as const,
+    badge: "기상특보",
+    title: `${al.kind}${al.level}`,
+    where: al.where === "here" ? "이 지역" : "일부 지역",
+    lines: [al.area],
+  }));
 }
 
 /** When the soft over-the-limit chime last sounded; it repeats while over, not faster than this. */
@@ -942,12 +1661,15 @@ const CHIME_EVERY_MS = 3000;
  */
 function showLimit(held: ReturnType<RouteWatch["limitAt"]>, speedMps: number | null | undefined) {
   el("cam").hidden = !held;
+  // The camera it is about, marked on the map (camera-layer.ts): the one the warning counts down to.
+  cameraLayer?.setNextCamera(held?.why === "camera" && held.id ? held.id : null);
   const kmh = speedMps == null ? null : speedMps * 3.6;
   const over = !!held && kmh != null && kmh > held.limit + guide.overspeedBy;
   document.querySelector(".big")!.classList.toggle("over", over);
+  document.body.classList.toggle("over-limit", over);
   if (!held) return;
   el("cam-limit").textContent = String(held.limit);
-  el("cam-what").textContent = held.why === "section" ? "구간 단속 중" : `단속 카메라 ${km(held.inM ?? 0)}`;
+  el("cam-what").textContent = held.why === "section" ? "구간 단속 중" : held.why === "school" ? "보호구역" : `단속 카메라 ${km(held.inM ?? 0)}`;
   if (over && guide.overspeed && Date.now() - chimedAt > CHIME_EVERY_MS) {
     chimedAt = Date.now();
     voice.chime();
@@ -1058,13 +1780,32 @@ el("wx-close").addEventListener("click", () => openWeather(false));
 // Where the car is, every five minutes (the panel asks again only after 10 km or a quarter of an hour).
 setInterval(() => void weather.refresh(here()), 5 * 60_000);
 map.once("load", () => void weather.refresh(here()));
+setInterval(() => void refreshAlerts(here()), 60_000);
+map.once("load", () => void refreshAlerts(here()));
 
 const guide = loadGuide();
 function applyGuide() {
+  document.body.classList.toggle("layout-mini", guide.layout === "mini");
+  hdLayer?.setDay(applyTheme(guide.theme, here()));
+  hdLayer?.refresh();
   voice.enabled = guide.voice;
   voice.voiceName = guide.voiceName;
   voice.setVolume(guide.volume);
+  cameraLayer?.redraw();
 }
+// The cameras on the map, the kinds the driver asked to hear (안내 설정).
+const cameraLayer: CameraLayer | null = new CameraLayer(map, (f, ahead) => {
+  // 경로만: what is on the route ahead while driving, and none otherwise — the map when only looked at stays clear.
+  const mode = f.kind === "signal-light" ? guide.lightsOnMap : guide.camerasOnMap;
+  if (f.kind !== "signal-light" && !wants(guide, f.kind)) return false;
+  if (mode === "route") return !!ahead?.has(f.id);
+  return mode === "all";
+}, log);
+// A light turning to flashing at midnight turns amber on the map; the screen turns dark at dusk.
+setInterval(() => { cameraLayer?.redraw(); hdLayer?.setDay(applyTheme(guide.theme, here())); }, 60_000);
+// 정밀도로지도's lanes on the ground, close in; white by night, grey on a light day map.
+const hdLayer: HdLayer | null = new HdLayer(map, () => guide.hdLanes);
+hdLayer.setDay(applyTheme(guide.theme, loadLast() ?? HOME));
 /** A voice chosen from the list: heard at once, and its sentences made ahead on the server. */
 function voicePicked(name: string | null) {
   voice.preview(EVENTS.start);
@@ -1088,6 +1829,8 @@ function openGuide(open: boolean) {
 }
 el("guide-open").addEventListener("click", () => openGuide(el("guide").hidden));
 el("guide-close").addEventListener("click", () => openGuide(false));
+el("account-name").textContent = currentUser() ? `${currentUser()!.name} 로 로그인됨` : "";
+el("logout").addEventListener("click", () => void logout());
 
 // ---- music -----------------------------------------------------------------
 // The dock is a mini bar (art, title, ⏯ ⏭) that opens into the full
@@ -1140,6 +1883,10 @@ async function drawSources(): Promise<MusicSource[]> {
     el("mini-artist").textContent = "설정 페이지에서 계정을 연결하세요";
     musicSay("연결된 음악 계정이 없습니다. /admin 에서 TIDAL 을 연결하면 여기에 나타납니다.");
   }
+  // No account connected: no music button either (it is back once one is, on the next load).
+  el("music-dock").hidden = connected.length === 0 && !music;
+  // No music button: 현위치 comes down to where it was.
+  document.body.classList.toggle("no-music", el("music-dock").hidden);
   return connected;
 }
 
@@ -1413,7 +2160,7 @@ function startSim() {
   sim?.stop();
   sim = new Simulator(gps, route);
   sim.speedMps = simSpeed();
-  sim.onEnd = () => { el("sim-toggle").classList.remove("on"); el("sim-bar").hidden = true; log("모의 주행 끝"); };
+  sim.onEnd = () => { simEnded(); log("모의 주행 끝"); };
   sim.start();
   el("sim-toggle").classList.add("on");
   el("sim-bar").hidden = false;
@@ -1422,6 +2169,10 @@ function startSim() {
 }
 function stopSim() {
   sim?.stop();
+  simEnded();
+}
+/** The pretend drive over, by itself or stopped: its bar away, and the car's own fixes back (Simulator.start took them). */
+function simEnded() {
   el("sim-toggle").classList.remove("on");
   el("sim-bar").hidden = true;
   gps.start();
@@ -1554,14 +2305,21 @@ function demoCover(h1: number, h2: number): string {
 if (new URLSearchParams(location.search).has("debug")) {
   const said: { t: number; text: string }[] = [];
   const say = voice.say.bind(voice);
-  voice.say = (text: string) => {
+  voice.say = (text: string, fallback?: string, opts?: Parameters<Voice["say"]>[2]) => {
     // Where the next turn was when this was said, to tell one junction said twice from two junctions.
     const next = tracker.frame()?.nextGuide;
     said.push({ t: Date.now(), text, guide: next ? `${junction(next.guide.at)} in ${Math.round(next.inM)}m` : "" } as { t: number; text: string });
-    say(text);
+    say(text, fallback, opts);
   };
+  // What was heard, played in full or not, and what was dropped for being late.
+  const heard: { t: number; text: string; playedS: number; lengthS: number; waitedS: number }[] = [];
+  const late: { t: number; text: string; waitedS: number }[] = [];
+  const onSaid = voice.onSaid, onLate = voice.onLate;
+  voice.onSaid = (text, playedS, lengthS, waitedS) => { heard.push({ t: Date.now(), text, playedS, lengthS, waitedS }); onSaid(text, playedS, lengthS, waitedS); };
+  voice.onLate = (text, waitedS) => { late.push({ t: Date.now(), text, waitedS }); onLate(text, waitedS); };
   (window as unknown as { nav: unknown }).nav = {
-    said, voice, tracker, gps, map,
+    said, heard, late, voice, tracker, gps, map, lanesAsked,
+    get heldTurn() { return heldTurn; },
     get route() { return route; },
     get watch() { return watch; },
     get sim() { return sim; },
@@ -1569,8 +2327,25 @@ if (new URLSearchParams(location.search).has("debug")) {
   };
 }
 
-// Audio only starts after a tap; the first one anywhere on the page does it.
-document.addEventListener("pointerdown", () => void voice.unlock().then(() => { el("voice").textContent = voice.context.state; }), { once: true });
+// The log to the server every half-minute, and as the page goes to the back or away (a beacon, which outlives it).
+function sendLog(beacon = false) {
+  if (!unsent.length || typeof guide === "undefined" || !guide.sendLogs) return;
+  const body = JSON.stringify({ lines: unsent.splice(0, unsent.length) });
+  if (beacon && navigator.sendBeacon) navigator.sendBeacon("/api/me/log", new Blob([body], { type: "application/json" }));
+  else void fetch("/api/me/log", { method: "POST", headers: { "Content-Type": "application/json" }, body, keepalive: true }).catch(() => {});
+}
+setInterval(() => sendLog(), 30_000);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") sendLog(true); });
+window.addEventListener("pagehide", () => sendLog(true));
+
+// Audio only starts after a tap, and the car's browser can put it back to sleep: every tap wakes it.
+document.addEventListener("pointerdown", () => void voice.unlock().then(() => { el("voice").textContent = voice.context.state; showAudioLocked(); }));
+voice.context.addEventListener("statechange", () => { el("voice").textContent = voice.context.state; showAudioLocked(); });
+/** While driving with the voice on and the sound asleep: a line saying a tap brings it back. */
+function showAudioLocked() {
+  el("audio-locked").hidden = voice.awake || !route || !guide.voice;
+}
+setInterval(showAudioLocked, 2000);
 
 map.on("load", async () => {
   log(`UA ${navigator.userAgent}`);
@@ -1585,4 +2360,5 @@ map.on("load", async () => {
   } catch {
     log("서버 응답 없음 (/api/health)");
   }
+  void resumeDrive();
 });

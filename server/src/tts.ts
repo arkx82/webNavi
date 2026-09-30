@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFile, readdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { fixedPhrases } from "./phrases.js";
 import { ALL_SPENT, CHAIN, SpentBook, SpentError, realtime, saysSpent, voiceOn, type Tier } from "./qwen-models.js";
 import { CLONED_MODEL } from "./voices.js";
@@ -27,6 +29,8 @@ const BASE = "https://dashscope-intl.aliyuncs.com";
 export class Speaker {
   /** Which free allowances are gone (qwen-models.ts): a spent model is passed over for the next. */
   readonly spent: SpentBook;
+  /** Told of every sentence made and every one served from disk (db.ts keeps the index). */
+  ledger: TtsLedger | null = null;
 
   constructor(private key: () => string | undefined, private dir: string, private voiceOf: () => string | undefined = () => undefined) {
     mkdirSync(dir, { recursive: true });
@@ -91,14 +95,25 @@ export class Speaker {
    */
   async say(text: string, voice = this.voice): Promise<Buffer> {
     const had = this.cached(text, voice);
-    if (had) return had;
+    if (had) {
+      this.ledger?.used(this.fileFor(text, 2, voice), voice, text, had.length);
+      return had;
+    }
     const key = this.key();
     if (!key) throw new Error("tts has no key on this server");
     if (isMadeVoice(voice)) {
       if (!this.spent.isSpent(CLONED_MODEL)) {
         try {
-          const wav = tightenWav(await this.render(key, CLONED_TIER, text, voice));
+          let wav = tightenWav(await this.render(key, CLONED_TIER, text, voice));
+          let repaired = false;
+          if (isClipped(wav)) {
+            const again = tightenWav(await this.render(key, CLONED_TIER, `${text}.`, voice).catch(() => wav));
+            if (tailRatio(again) < tailRatio(wav)) wav = again;
+            repaired = true;
+          }
           writeFileSync(this.fileFor(text, 2, voice), wav);
+          this.ledger?.made(this.fileFor(text, 2, voice), voice, text, CLONED_MODEL, wav.length);
+          if (repaired) this.ledger?.repaired?.(this.fileFor(text, 2, voice));
           return wav;
         } catch (e) {
           if (!(e instanceof SpentError)) throw e;
@@ -108,12 +123,14 @@ export class Speaker {
       return this.say(text, this.voice === voice ? "Cherry" : this.voice);
     }
     let wav: Buffer | null = null;
+    let model: string | null = null;
     // Down the chain: a model whose free allowance is gone says so and the
     // next one speaks; any other refusal is the answer.
     for (const tier of CHAIN) {
       if (this.spent.isSpent(tier.model)) continue;
       try {
         wav = await this.render(key, tier, text, voice);
+        model = tier.model;
         break;
       } catch (e) {
         if (!(e instanceof SpentError)) throw e;
@@ -123,9 +140,96 @@ export class Speaker {
     }
     if (!wav) throw new Error(ALL_SPENT);
     wav = tightenWav(wav);
+    // Cut off on its last syllable: asked once more with a full stop, which
+    // the model ends a sentence on. Once is all: the ledger is told, so the
+    // start-up repair (repairClipped) does not pay for a third take.
+    let repaired = false;
+    if (model && isClipped(wav)) {
+      const tier = CHAIN.find((t) => t.model === model)!;
+      try {
+        const again = tightenWav(await this.render(key, tier, `${text}.`, voice));
+        if (tailRatio(again) < tailRatio(wav)) wav = again;
+      } catch { /* the first take stands */ }
+      repaired = true;
+    }
     writeFileSync(this.fileFor(text, 2, voice), wav);
+    this.ledger?.made(this.fileFor(text, 2, voice), voice, text, model, wav.length);
+    if (repaired) this.ledger?.repaired?.(this.fileFor(text, 2, voice));
     return wav;
   }
+}
+
+/** The loudest sample of a sentence, and the loudest in its last 30 ms. */
+function peaks(wav: Buffer): { top: number; end: number } {
+  const parsed = pcmOfWav(wav);
+  if (!parsed) return { top: 1, end: 0 };
+  const { pcm, rate } = parsed;
+  const n = Math.floor(pcm.length / 2);
+  const tail = Math.min(n, Math.round(rate * 0.03));
+  let top = 1, end = 0;
+  for (let i = 0; i < n; i++) {
+    const v = Math.abs(pcm.readInt16LE(i * 2));
+    if (v > top) top = v;
+    if (i >= n - tail && v > end) end = v;
+  }
+  return { top, end };
+}
+
+/**
+ * How loud a sentence still is in its last 30 ms, against its loudest: a
+ * word that ends has faded to a few per cent; one cut off (the model
+ * stopping on a number, "제한 속도 50") is still sounding.
+ */
+export function tailRatio(wav: Buffer): number {
+  const { top, end } = peaks(wav);
+  return end / top;
+}
+export const CLIPPED_RATIO = 0.05;
+/** Still sounding at the end: louder than the ratio, and louder than what tighten() calls a pause — a quiet take's tail is silence, not a cut. */
+export function isClipped(wav: Buffer): boolean {
+  const { top, end } = peaks(wav);
+  return end > QUIET && end / top > CLIPPED_RATIO;
+}
+
+/**
+ * The kept sentences that end cut off: each taken out, and made again
+ * (with its full stop) when its words are known and still wanted; one
+ * whose words are not known is only taken out, to be made afresh the
+ * next time it is asked for. One already made again once is left as it
+ * is — the full stop was tried, and a third take would cost the same
+ * and end the same. Runs after the server is up, so the files are read
+ * one at a time with a turn of the loop between them.
+ */
+export async function repairClipped(
+  speaker: Speaker,
+  dir: string,
+  known: (file: string) => { text: string; voice: string; repaired?: boolean } | null,
+  wanted: (text: string) => boolean,
+  forget: (file: string) => void,
+): Promise<{ checked: number; clipped: number; remade: number; dropped: number; kept: number }> {
+  const out = { checked: 0, clipped: 0, remade: 0, dropped: 0, kept: 0 };
+  for (const f of (await readdir(dir)).filter((f) => f.endsWith(".wav"))) {
+    await setImmediate();
+    out.checked++;
+    const path = join(dir, f);
+    if (!isClipped(await readFile(path))) continue;
+    out.clipped++;
+    const row = known(f);
+    if (row?.repaired) { out.kept++; continue; }
+    await unlink(path);
+    forget(f);
+    if (row && wanted(row.text)) {
+      try { await speaker.say(row.text, row.voice); out.remade++; } catch { out.dropped++; }
+    } else out.dropped++;
+  }
+  return out;
+}
+
+export interface TtsLedger {
+  made(file: string, voice: string, text: string, model: string | null, bytes: number): void;
+  used(file: string, voice: string, text: string, bytes: number): void;
+  /** The sentence was asked again with its full stop, and what came is kept: not to be tried a third time. */
+  repaired?(file: string): void;
 }
 
 /** A WAV header round [pcm]: 16-bit mono at [rate]. */

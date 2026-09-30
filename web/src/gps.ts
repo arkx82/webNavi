@@ -1,3 +1,4 @@
+import { Kalman } from "./kalman";
 /**
  * The car's fix, one a second if the browser gives it: what came, when,
  * and how good. Week one is finding out what the Tesla browser actually
@@ -21,6 +22,8 @@ export interface Fix {
    * teslanav.com found the browser's heading unreliable; this keeps both.
    */
   course: number | null;
+  /** The browser's own place, before the Kalman filter smoothed it (the log keeps both). */
+  raw?: [number, number];
 }
 
 const MIN_MOVE_M = 3;
@@ -32,6 +35,7 @@ export class Gps {
   readonly samples: Fix[] = [];
   private watch: number | null = null;
   private listeners: FixListener[] = [];
+  private kalman = new Kalman();
   onError: (message: string) => void = () => {};
 
   start() {
@@ -39,17 +43,26 @@ export class Gps {
       this.onError("이 브라우저에는 Geolocation이 없음");
       return;
     }
+    // Started again (the pretend drive over): the watch before it is let go first, not left doubling every fix.
+    this.stop();
     this.watch = navigator.geolocation.watchPosition(
-      (p) =>
+      (p) => {
+        // Our own clock, not the fix's: the car's browser stamps fixes by time since it booted, not since 1970.
+        const t = Date.now();
+        // Smoothed (kalman.ts) before anything draws it; the browser's own speed and heading kept where it gives them.
+        const k = this.kalman.step([p.coords.longitude, p.coords.latitude], p.coords.accuracy, t);
+        const speed = p.coords.speed != null && !Number.isNaN(p.coords.speed) ? p.coords.speed : k.speed;
         this.feed({
-          t: p.timestamp,
-          lon: p.coords.longitude,
-          lat: p.coords.latitude,
+          t,
+          lon: k.at[0],
+          lat: k.at[1],
           accM: p.coords.accuracy,
-          speed: p.coords.speed,
-          heading: p.coords.heading,
+          speed,
+          heading: p.coords.heading != null && !Number.isNaN(p.coords.heading) ? p.coords.heading : k.course,
           course: null,
-        }),
+          raw: [p.coords.longitude, p.coords.latitude],
+        });
+      },
       (e) => this.onError(`${e.code}: ${e.message}`),
       { enableHighAccuracy: true, maximumAge: 0, timeout: 10_000 },
     );

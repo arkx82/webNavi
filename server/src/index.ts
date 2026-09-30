@@ -1,7 +1,7 @@
 import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
 import { existsSync, readdirSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Tmap } from "./route/tmap.js";
 import { Kakao } from "./route/kakao.js";
@@ -11,16 +11,27 @@ import { ProviderError, type LonLat, type Provider, type RouteProvider } from ".
 import { SafetyIndex } from "./safety/index.js";
 import { CAMERAS_MAX_AGE_MS, fetchCameras, keptCameras } from "./safety/cameras.js";
 import { Hotspots } from "./safety/hotspots.js";
+import { BUMPS, DATASET_MAX_AGE_MS, LIGHTS, SCHOOL_ZONES, SENIOR_ZONES, SEOUL_LIGHTS, kept, refresh, type Dataset, type KeptSet } from "./safety/datasets.js";
+import { Incidents } from "./road/incidents.js";
+import { RestAreas } from "./road/rest-areas.js";
+import { ColourGuides } from "./road/color-guides.js";
+import { AirKorea } from "./air.js";
+import { KmaAlerts } from "./alerts.js";
 import { KakaoSearch } from "./search.js";
 import { CATEGORIES, FUELS, Nearby, type Category, type Fuel } from "./nearby/index.js";
 import { NearbyError } from "./nearby/util.js";
-import { Speaker, isMadeVoice, prerender } from "./tts.js";
-import { MadeVoices, SYSTEM_VOICES } from "./voices.js";
+import { Speaker, isMadeVoice, prerender, repairClipped } from "./tts.js";
+import { fixedPhrases } from "./phrases.js";
+import { CLONED_MODEL, MadeVoices, SYSTEM_VOICES } from "./voices.js";
 import { KmaWeather } from "./weather.js";
 import { Readable } from "node:stream";
 import { Settings } from "./settings.js";
 import { registerAdmin } from "./admin.js";
 import { registerMusic } from "./music.js";
+import { Db } from "./db.js";
+import { registerUsers } from "./users.js";
+import { RefusedUrl, fetchPublic, registerGuard } from "./guard.js";
+import { registerHdmap } from "./hdmap.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "..");
@@ -32,6 +43,8 @@ const app = Fastify({ logger: { level: env.LOG_LEVEL ?? "info" } });
 // this server. They are read at every call, so a key typed on /admin is
 // in force at once; a provider without one is simply not offered.
 const settings = new Settings(env.CONFIG_DIR ?? join(root, "config"));
+// Users, what each keeps, and the voice's index: one SQLite file beside the settings.
+const db = new Db(env.CONFIG_DIR ?? join(root, "config"));
 const providers: Record<Provider, RouteProvider> = {
   tmap: new Tmap(settings.reader("tmapAppKey")),
   kakao: new Kakao(settings.reader("kakaoRestKey")),
@@ -56,15 +69,54 @@ const dataDir = env.DATA_DIR ?? join(root, "data");
 // and asked again weekly. The index is rebuilt whole when that comes.
 const configDir = env.CONFIG_DIR ?? join(root, "config");
 let cameras = keptCameras(configDir);
+// Speed bumps and school zones, the same way: the whole country, kept a week.
+const DATASETS: Dataset[] = [BUMPS, SCHOOL_ZONES, LIGHTS, SEOUL_LIGHTS, SENIOR_ZONES];
+const sets = new Map<Dataset["name"], KeptSet>();
+const setErrors = new Map<Dataset["name"], string>();
+for (const d of DATASETS) {
+  const k = kept(configDir, d.name);
+  if (k) sets.set(d.name, k);
+}
 let safety = buildSafety();
 function buildSafety(): SafetyIndex {
   const index = SafetyIndex.fromDirectory(dataDir);
-  if (cameras) index.add(cameras.features).build();
-  return index;
+  if (cameras) index.add(cameras.features);
+  for (const k of sets.values()) index.add(k.features);
+  return index.build();
 }
-app.log.info({ features: safety.features.length, cameras: cameras?.features.length ?? 0, dataDir }, "safety index built");
+app.log.info({ features: safety.features.length, cameras: cameras?.features.length ?? 0, bumps: sets.get("bumps")?.features.length ?? 0, schoolZones: sets.get("school-zones")?.features.length ?? 0, dataDir }, "safety index built");
 const hotspots = new Hotspots(settings.reader("dataGoKrKey"), (at) => nearby.ev.districtOf(at));
 let camerasError: string | null = null;
+/** One list at a time: the speed bumps alone are fourteen hundred pages. */
+let refreshingSets = false;
+async function refreshSets() {
+  if (refreshingSets) return;
+  refreshingSets = true;
+  // The index is built once at the end, whatever number of lists came in, not once per list.
+  let changed = false;
+  try {
+    for (const d of DATASETS) {
+      const key = settings.get(d.keyName ?? "dataGoKrKey");
+      if (!key) continue;
+      const have = sets.get(d.name);
+      app.log.debug({ set: d.name, have: have?.features.length ?? 0, ageH: have ? Math.round((Date.now() - have.at) / 3_600_000) : null }, "dataset check");
+      if (have && Date.now() - have.at < DATASET_MAX_AGE_MS) continue;
+      try {
+        const got = await refresh(d, key, configDir);
+        sets.set(d.name, got);
+        setErrors.delete(d.name);
+        changed = true;
+        app.log.info({ set: d.name, features: got.features.length }, "dataset fetched");
+      } catch (e) {
+        setErrors.set(d.name, (e as Error).message);
+        app.log.warn({ set: d.name, err: (e as Error).message }, "dataset: not fetched");
+      }
+    }
+    if (changed) safety = buildSafety();
+  } finally {
+    refreshingSets = false;
+  }
+}
 async function refreshCameras() {
   const key = settings.get("dataGoKrKey");
   if (!key || (cameras && Date.now() - cameras.at < CAMERAS_MAX_AGE_MS)) return;
@@ -87,6 +139,8 @@ app.get("/api/health", async () => ({
   tts: speaker.ready,
   nearby: nearby.sources(),
   map: { tmap: providers.tmap.ready, naver: !!settings.get("naverClientId") },
+  road: { incidents: incidents.ready, restAreas: restAreas.ready, alerts: alerts.ready },
+  hdmap: hdTiles.ready,
 }));
 
 /**
@@ -152,15 +206,74 @@ app.get<{ Querystring: { cat: string; at: string; r?: string; fuel?: string } }>
   }
 });
 
-// The weather where the car is (기상청 단기·중기예보, the data.go.kr key).
+// The weather where the car is (기상청 단기·중기예보, the data.go.kr key),
+// with 에어코리아's 미세먼지 beside it when the region can be named.
 const weather = new KmaWeather(settings.reader("dataGoKrKey"));
+const regionOf = (at: LonLat) => (nearby.kakao.ready ? nearby.kakao.regionNames(at) : Promise.resolve(null));
+const air = new AirKorea(settings.reader("dataGoKrKey"), regionOf);
+const alerts = new KmaAlerts(settings.reader("dataGoKrKey"), regionOf);
 app.get<{ Querystring: { at: string } }>("/api/weather", async (request, reply) => {
   const at = lonLat(request.query.at);
   if (!at) return reply.code(400).send({ error: "at is lon,lat" });
   if (!weather.ready) return reply.code(503).send({ error: "weather has no data.go.kr key on this server" });
   try {
-    return await weather.at(at);
+    const [w, a] = await Promise.all([
+      weather.at(at),
+      air.at(at).catch((e) => { request.log.warn({ err: (e as Error).message }, "air"); return null; }),
+    ]);
+    return { ...w, air: a };
   } catch (refused) {
+    return reply.code(502).send({ error: (refused as Error).message });
+  }
+});
+
+// 기상특보 in force where the car is.
+app.get<{ Querystring: { at: string } }>("/api/alerts", async (request, reply) => {
+  const at = lonLat(request.query.at);
+  if (!at) return reply.code(400).send({ error: "at is lon,lat" });
+  if (!alerts.ready) return reply.code(503).send({ error: "alerts have no data.go.kr key on this server" });
+  try {
+    return await alerts.at(at);
+  } catch (refused) {
+    return reply.code(502).send({ error: (refused as Error).message });
+  }
+});
+
+// ITS 돌발상황 round the car, kilometres out: the page places them on its route.
+const incidents = new Incidents(settings.reader("itsKey"));
+app.get<{ Querystring: { at: string; r?: string } }>("/api/road/incidents", async (request, reply) => {
+  const at = lonLat(request.query.at);
+  if (!at) return reply.code(400).send({ error: "at is lon,lat" });
+  if (!incidents.ready) return reply.code(503).send({ error: "incidents have no ITS key on this server" });
+  const r = Math.min(50_000, Math.max(500, Number(request.query.r ?? 15_000) || 15_000));
+  try {
+    return await incidents.near(at, r);
+  } catch (refused) {
+    return reply.code(502).send({ error: (refused as Error).message });
+  }
+});
+
+// 노면색깔유도선 at a motorway junction: which colour of line leads to each branch.
+const colourGuides = new ColourGuides(configDir, (town) => (search.ready ? search.find(town).then((p) => p[0]?.at ?? null) : Promise.resolve(null)));
+const refreshGuides = () => void colourGuides.refresh().catch((e) => app.log.warn({ err: (e as Error).message }, "color guides"));
+refreshGuides();
+setInterval(refreshGuides, 86_400_000);
+app.get<{ Querystring: { name?: string; at?: string; in?: string; roads?: string } }>("/api/road/color-guide", async (request, reply) => {
+  const at = lonLat(request.query.at);
+  const inDeg = Number(request.query.in);
+  if (!request.query.name || !at || !Number.isFinite(inDeg)) return reply.code(400).send({ error: "name, at, in" });
+  const roads = (request.query.roads ?? "").split(",").map((r) => r.trim()).filter(Boolean).slice(0, 4);
+  return (await colourGuides.at(request.query.name, at, inDeg, roads)) ?? {};
+});
+
+// Every motorway rest area with its prices now; two hundred, so all at once.
+const restAreas = new RestAreas(settings.reader("exKey"));
+app.get("/api/road/rest-areas", async (request, reply) => {
+  if (!restAreas.ready) return reply.code(503).send({ error: "rest areas have no 한국도로공사 key on this server" });
+  try {
+    return await restAreas.all();
+  } catch (refused) {
+    request.log.warn({ err: (refused as Error).message }, "rest areas");
     return reply.code(502).send({ error: (refused as Error).message });
   }
 });
@@ -210,6 +323,15 @@ interface RouteQuery {
   provider: Provider | "all";
   start: string;
   goal: string;
+  /** The car's heading and speed at the start, when moving. */
+  heading?: string;
+  speed?: string;
+}
+
+/** The heading asked with a route, if a sensible one was given. */
+function headingOf(q: RouteQuery): { heading?: number; speedKmh?: number } {
+  const h = Number(q.heading), v = Number(q.speed);
+  return q.heading != null && Number.isFinite(h) ? { heading: ((h % 360) + 360) % 360, speedKmh: Number.isFinite(v) ? v : undefined } : {};
 }
 
 app.get<{ Querystring: RouteQuery }>("/api/route", async (request, reply) => {
@@ -223,7 +345,7 @@ app.get<{ Querystring: RouteQuery }>("/api/route", async (request, reply) => {
     const keyed = Object.values(providers).filter((p) => p.ready && p.name !== "osrm");
     const ready = keyed.length ? keyed : [providers.osrm];
     if (ready.length === 0) return reply.code(503).send({ error: "no provider has a key on this server" });
-    const settled = await Promise.allSettled(ready.map((p) => p.route({ start: s, goal: g })));
+    const settled = await Promise.allSettled(ready.map((p) => p.route({ start: s, goal: g, ...headingOf(request.query) })));
     const routes = settled.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
     const errors = settled.flatMap((r, i) => (r.status === "rejected" ? [`${ready[i].name}: ${(r.reason as Error).message}`] : []));
     return { routes, errors };
@@ -235,7 +357,7 @@ app.get<{ Querystring: RouteQuery }>("/api/route", async (request, reply) => {
   const g = lonLat(goal);
   if (!s || !g) return reply.code(400).send({ error: "start and goal are lon,lat" });
   try {
-    return await provider.route({ start: s, goal: g });
+    return await provider.route({ start: s, goal: g, ...headingOf(request.query) });
   } catch (refused) {
     if (refused instanceof ProviderError) {
       request.log.warn({ provider: refused.provider, status: refused.status }, refused.message);
@@ -270,6 +392,12 @@ app.get<{ Querystring: NearQuery }>("/api/safety/near", async (request, reply) =
 // Words into sound, cached on disk under the phrase's hash.
 const ttsDir = env.TTS_DIR ?? join(root, "tts");
 const speaker = new Speaker(settings.reader("dashscopeApiKey"), ttsDir, settings.reader("ttsVoice"));
+speaker.ledger = {
+  made: (file, voice, text, model, bytes) => db.ttsMade(basename(file), voice, text, model, bytes),
+  // A file from before the index began is entered the first time it is served.
+  used: (file, voice, text, bytes) => (db.ttsKnown(basename(file)) ? db.ttsUsed(basename(file)) : db.ttsMade(basename(file), voice, text, null, bytes)),
+  repaired: (file) => db.ttsRepaired(basename(file)),
+};
 const madeVoices = new MadeVoices(settings.reader("dashscopeApiKey"));
 /** A voice a page may ask for: one of Qwen's, or one the owner made. Anything else is the default. */
 async function voiceAsked(asked: string | undefined): Promise<string> {
@@ -284,6 +412,8 @@ app.get("/api/tts/voices", async () => ({
   current: speaker.voice,
   system: SYSTEM_VOICES,
   mine: await madeVoices.list().catch(() => []),
+  // The cloning model's free allowance gone: a made voice speaks in the default one until it comes back.
+  mineSpent: speaker.spent.isSpent(CLONED_MODEL),
 }));
 
 // A voice just chosen: its fixed sentences made in the background, one at a
@@ -323,7 +453,14 @@ app.get<{ Querystring: { url: string } }>("/api/stream", async (request, reply) 
   } catch {
     return reply.code(400).send({ error: "url" });
   }
-  const upstream = await fetch(url, { headers: { "Icy-MetaData": "0", Range: request.headers.range ?? "" } });
+  // Only to public hosts: a user-given address must not reach into the house (guard.ts).
+  let upstream: Response;
+  try {
+    upstream = await fetchPublic(url, { headers: { "Icy-MetaData": "0", Range: request.headers.range ?? "" } });
+  } catch (e) {
+    if (e instanceof RefusedUrl) return reply.code(403).send({ error: e.message });
+    return reply.code(502).send({ error: (e as Error).message });
+  }
   if (!upstream.ok || !upstream.body) return reply.code(502).send({ error: `${upstream.status}` });
   reply.header("Access-Control-Allow-Origin", "*");
   reply.header("Content-Type", upstream.headers.get("content-type") ?? "audio/mpeg");
@@ -342,7 +479,14 @@ const admin = registerAdmin(app, settings, {
     "주유 가격": nearby.opinet.ready, 충전소: nearby.ev.ready ? true : nearby.kakao.ready ? "카카오 (빈 충전기 수 없음)" : false,
     시설물: safety.features.length,
     "단속 카메라": cameras ? `${cameras.features.length}대 (${new Date(cameras.at).toLocaleDateString("ko-KR")})` : camerasError ?? "아직 없음",
+    ...Object.fromEntries(DATASETS.map((d) => {
+      const k = sets.get(d.name);
+      return [d.label, k ? `${k.features.length}곳 (${new Date(k.at).toLocaleDateString("ko-KR")})` : setErrors.get(d.name) ?? (refreshingSets ? "받는 중…" : "아직 없음")];
+    })),
+    돌발상황: incidents.ready, 휴게소: restAreas.ready,
     "멘트 캐시": existsSync(ttsDir) ? readdirSync(ttsDir).filter((f) => f.endsWith(".wav")).length : 0,
+    "멘트 기록": (() => { const t = db.ttsStats(); return `${t.sentences}문장 · 재사용 ${Math.max(0, t.uses - t.sentences)}회 · ${(t.bytes / 1e6).toFixed(1)} MB`; })(),
+    사용자: db.users().length,
   }),
   test: async () => {
     const start: LonLat = [127.0276, 37.4979], goal: LonLat = [127.0363, 37.5006];
@@ -358,11 +502,19 @@ const admin = registerAdmin(app, settings, {
       "주유 가격": await word(nearby.opinet.ready, () => nearby.opinet.near(start, 2000, "B027")),
       충전소: await word(nearby.ev.ready, () => nearby.ev.near(start, 1000)),
       음성: await word(speaker.ready, () => speaker.say("안내를 시작합니다")),
+      돌발상황: await word(incidents.ready, () => incidents.everything()),
+      휴게소: await word(restAreas.ready, () => restAreas.all()),
+      미세먼지: await word(air.ready && nearby.kakao.ready, async () => { if (!(await air.at(start))) throw new Error("측정값 없음"); }),
+      기상특보: await word(alerts.ready, () => alerts.now()),
     };
   },
   prerender: () => prerender(speaker),
 }, join(root, "admin", "index.html"));
 registerMusic(app, settings, admin.guard);
+registerUsers(app, db, settings, admin.adminGuard, env.WORK_DIR ?? join(root, "work"));
+registerGuard(app);
+// 정밀도로지도 tiles, built into WORK_DIR by tools/hdmap/build.py.
+const hdTiles = registerHdmap(app, env.WORK_DIR ?? join(root, "work"));
 
 const webDir = env.WEB_DIR ?? resolve(root, "..", "web", "dist");
 if (existsSync(webDir)) {
@@ -388,11 +540,19 @@ await app.listen({ port, host: "0.0.0.0" });
 // the page's own 고정 멘트 렌더링 button, or the next start.
 // The cameras now, and again each hour: a week-old list is asked again,
 // and a refusal (the 활용신청 not yet through) is retried soon after.
-void refreshCameras();
-setInterval(() => void refreshCameras(), 3_600_000);
+void refreshCameras().then(() => refreshSets());
+setInterval(() => void refreshCameras().then(() => refreshSets()), 3_600_000);
 
+// Then the kept sentences that end cut off: taken out, and the ones still said made again.
+async function repairVoice() {
+  const fixed = new Set(fixedPhrases());
+  const weekAgo = Date.now() - 7 * 86_400_000;
+  const r = await repairClipped(speaker, ttsDir, (f) => db.ttsRow(f), (text) => fixed.has(text) || db.ttsUsedSince(text, weekAgo), (f) => db.ttsForget(f));
+  app.log.info(r, "clipped sentences repaired");
+}
 if (speaker.ready) {
   prerender(speaker)
     .then(({ made, had }) => app.log.info({ made, had }, "fixed phrases ready"))
+    .then(() => repairVoice())
     .catch((e) => app.log.warn({ err: (e as Error).message }, "fixed phrases: stopped"));
 }

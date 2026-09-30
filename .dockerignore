@@ -1,0 +1,10 @@
+# Built inside the image; a host copy (another OS's binaries) must not leak in.
+node_modules
+**/node_modules
+**/dist
+.env
+.git
+.vscode
+.codesight
+*.log
+.DS_Store

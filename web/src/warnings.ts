@@ -1,5 +1,6 @@
 import { CAMERA_KINDS, WARNING_RUNGS_M, cameraRungs, warningPhrase } from "../../server/src/phrases";
-import { Line, angleBetween } from "./geo";
+import { Line, angleBetween, bearing } from "./geo";
+import { findMerges } from "./highway";
 import type { LonLat, Route } from "./types";
 
 /**
@@ -11,7 +12,19 @@ import type { LonLat, Route } from "./types";
  * so a warning for it costs a driver nothing), plus bends worked out from
  * the route's own shape.
  */
-export type Kind = "speed" | "signal" | "speed-signal" | "section-start" | "section-end" | "bump" | "school" | "curve" | "curves" | "accident" | "bike-accident" | "other";
+export type Kind =
+  | "speed" | "signal" | "speed-signal" | "section-start" | "section-end" | "bump" | "school" | "curve" | "curves" | "accident" | "bike-accident"
+  | "school-zone" | "incident-crash" | "incident-work" | "incident-other" | "rest-area" | "merge" | "signal-light" | "senior-zone" | "other";
+
+/** A motorway rest area's station prices and what it has (server/src/road/rest-areas.ts). */
+export interface RestInfo {
+  route?: string;
+  gasoline?: number;
+  diesel?: number;
+  lpg?: number;
+  brand?: string;
+  amenities: string[];
+}
 
 export interface Feature {
   id: string;
@@ -20,26 +33,52 @@ export interface Feature {
   lat: number;
   limit?: number;
   name?: string;
-  /** An area (an accident hotspot): on the route if the route passes within this of its centre. */
+  /** An area (an accident hotspot, a school zone): on the route if the route passes within this of its centre. */
   radiusM?: number;
+  /** A line under the name for the screen: an incident's road and closed lanes, a school zone's facility. */
+  detail?: string;
+  rest?: RestInfo;
+  /** A traffic light's flashing hours: "00:00-05:00" (KST), or "always". */
+  flash?: string;
 }
 
 export interface Ahead {
   feature: Feature;
-  /** Metres along the route from the start. */
+  /** Metres along the route from the start: where an area begins, for an area. */
   alongM: number;
+  /** Where an area ends along the route; a point's is its alongM. */
+  endM?: number;
   /** Metres between the car and it, along the road. */
   inM: number;
 }
 
 /** Features more than this far from the route are on another road. */
 export const ON_ROUTE_M = 25;
+/**
+ * Kinds placed further off than a camera: a rest area sits beside the
+ * carriageway, and ITS puts an incident on its link's line, which can be
+ * the other side of a wide motorway.
+ */
+const REACH_M: Partial<Record<Kind, number>> = { "rest-area": 250, "incident-crash": 40, "incident-work": 40, "incident-other": 40 };
+/**
+ * A school zone as a strip of the route, not a circle round the school:
+ * the school within SCHOOL_SIDE_M to the side of the road, and the zone
+ * SCHOOL_HALF_M either way along it from the point beside the school. A
+ * circle caught a road that only passes by (a motorway behind the fence).
+ */
+export const SCHOOL_SIDE_M = 100;
+export const SCHOOL_HALF_M = 150;
+/** Kinds that are never on a motorway or car-only road, whatever lies beside one. */
+const NOT_ON_MOTORWAYS: Kind[] = ["school-zone", "senior-zone", "bump", "school"];
 /** The distances at which each kind is spoken (server/src/phrases.ts); a feature is spoken once per rung. */
 export const RUNGS_M: Record<Kind, number[]> = WARNING_RUNGS_M;
 
 /** What the driver asked for (guide-settings.ts): which kinds, and cameras from how far. */
 export interface WatchPrefs {
+  /** Said aloud. */
   wants(kind: Kind): boolean;
+  /** Shown on the screen (where the kind has a card or a sign); unset, everything is. */
+  shows?(kind: Kind): boolean;
   cameraFromM: number;
 }
 const ALL: WatchPrefs = { wants: () => true, cameraFromM: 600 };
@@ -47,7 +86,7 @@ const ALL: WatchPrefs = { wants: () => true, cameraFromM: 600 };
 export class RouteWatch {
   private line: Line;
   /** Every feature on the route, sorted by where it is along it. */
-  private onRoute: { feature: Feature; alongM: number }[] = [];
+  private onRoute: { feature: Feature; alongM: number; endM: number }[] = [];
   /**
    * @param spoken feature id → the rungs already spoken. Handed on from the
    *   last watch when the same trip is re-routed, so a camera said before the
@@ -56,6 +95,7 @@ export class RouteWatch {
   constructor(private route: Route, private prefs: () => WatchPrefs = () => ALL, private spoken = new Map<string, Set<number>>()) {
     this.line = new Line(route.path);
     for (const c of findCurves(route)) this.place(c);
+    for (const m of findMerges(route)) this.place(m);
   }
 
   /** Takes the server's radius answer; features already known are left alone. */
@@ -66,19 +106,45 @@ export class RouteWatch {
 
   private place(f: Feature) {
     const p = this.line.project([f.lon, f.lat], 0, this.line.path.length);
-    if (p.offM > Math.max(ON_ROUTE_M, f.radiusM ?? 0)) return;
-    this.onRoute.push({ feature: f, alongM: p.alongM });
+    if (NOT_ON_MOTORWAYS.includes(f.kind) && this.onMotorway(p.segment)) return;
+    if (f.kind === "school-zone" || f.kind === "senior-zone") {
+      if (p.offM > SCHOOL_SIDE_M) return;
+      this.onRoute.push({ feature: f, alongM: Math.max(0, p.alongM - SCHOOL_HALF_M), endM: p.alongM + SCHOOL_HALF_M });
+      this.onRoute.sort((a, b) => a.alongM - b.alongM);
+      return;
+    }
+    if (p.offM > Math.max(REACH_M[f.kind] ?? ON_ROUTE_M, f.radiusM ?? 0)) return;
+    // A rest area on the left is the other carriageway's (Korea drives on the right).
+    if (f.kind === "rest-area" && p.offM > 30 && sideOf(p.bearing, bearing(p.at[0], p.at[1], f.lon, f.lat)) < 0) return;
+    // An area begins where the route enters its circle, and ends where it leaves.
+    const half = f.radiusM ? Math.sqrt(Math.max(0, f.radiusM ** 2 - p.offM ** 2)) : 0;
+    this.onRoute.push({ feature: f, alongM: Math.max(0, p.alongM - half), endM: p.alongM + half });
     this.onRoute.sort((a, b) => a.alongM - b.alongM);
   }
 
-  /** Everything ahead of [alongM] within [horizonM], nearest first. */
+  /** Whether the route's segment [i] (from vertex i to i + 1) is on a motorway. */
+  private onMotorway(i: number): boolean {
+    return !!this.route.motorways?.some(([from, to]) => i >= from && i < to);
+  }
+
+  /** The protected zones on the route (school, senior), each as the stretch of it they cover. */
+  zones(): { feature: Feature; alongM: number; endM: number }[] {
+    return this.onRoute.filter((f) => f.feature.kind === "school-zone" || f.feature.kind === "senior-zone");
+  }
+
+  /** Forgets the features of [kinds] (an incident list asked again: the cleared ones go). */
+  drop(kinds: Kind[]) {
+    this.onRoute = this.onRoute.filter((f) => !kinds.includes(f.feature.kind));
+  }
+
+  /** Everything ahead of [alongM] within [horizonM], nearest first; an area stays while the car is in it. */
   ahead(alongM: number, horizonM = 1000): Ahead[] {
     const out: Ahead[] = [];
     for (const f of this.onRoute) {
       const inM = f.alongM - alongM;
-      if (inM < -10) continue;
+      if (inM < -10 && f.endM < alongM) continue;
       if (inM > horizonM) break;
-      out.push({ feature: f.feature, alongM: f.alongM, inM });
+      out.push({ feature: f.feature, alongM: f.alongM, endM: f.endM, inM });
     }
     return out;
   }
@@ -87,20 +153,26 @@ export class RouteWatch {
    * The warnings due now: features whose next rung the car has just
    * crossed. Each rung fires once; a re-route makes a new watch.
    */
-  due(alongM: number): (Ahead & { rungM: number })[] {
-    const out: (Ahead & { rungM: number })[] = [];
+  due(alongM: number): (Ahead & { rungM: number; voice: boolean })[] {
+    const out: (Ahead & { rungM: number; voice: boolean })[] = [];
     const prefs = this.prefs();
-    for (const a of this.ahead(alongM, 1100)) {
-      if (!prefs.wants(a.feature.kind)) continue;
+    for (const a of this.ahead(alongM, 2100)) {
+      // Said, or only shown (a card that comes at the same moment the sentence would have).
+      const voice = prefs.wants(a.feature.kind);
+      if (!voice && !(prefs.shows?.(a.feature.kind) ?? false)) continue;
+      // A traffic light is only a warning while it flashes; left unsaid, so a later pass at night still speaks.
+      if (a.feature.kind === "signal-light" && !flashingNow(a.feature)) continue;
       const rungs = this.rungsOf(a.feature.kind, prefs);
       const done = this.spoken.get(a.feature.id) ?? new Set<number>();
-      for (const rung of rungs) {
-        if (done.has(rung) || a.inM > rung) continue;
-        done.add(rung);
-        this.spoken.set(a.feature.id, done);
-        out.push({ ...a, rungM: rung });
-        break; // one rung per feature per call; the next comes on a later call
-      }
+      // Of the rungs the car is inside, the nearest not yet said — and saying it marks the further ones said
+      // too: a camera first learned of at 250 m (the server's answer came late) is "300미터 앞", not "600미터 앞"
+      // and then "300미터 앞" a second later. One rung per feature per call; the next comes on a later call.
+      const inside = rungs.filter((r) => a.inM <= r && !done.has(r));
+      if (inside.length === 0) continue;
+      const rung = Math.min(...inside);
+      for (const r of rungs) if (r >= rung) done.add(r);
+      this.spoken.set(a.feature.id, done);
+      out.push({ ...a, rungM: rung, voice });
     }
     return out;
   }
@@ -115,24 +187,31 @@ export class RouteWatch {
    * ahead within the distance its warning starts at — the stretches where
    * the car apps turn the speed red. Null where no camera says.
    */
-  limitAt(alongM: number): { limit: number; why: "section" | "camera"; inM?: number } | null {
+  limitAt(alongM: number): { limit: number; why: "section" | "camera" | "school"; inM?: number; id?: string } | null {
     let section: number | null = null;
+    let school: number | null = null;
+    const prefs = this.prefs();
     for (const f of this.onRoute) {
       if (f.alongM > alongM) break;
       if (f.feature.kind === "section-start" && f.feature.limit) section = f.feature.limit;
       if (f.feature.kind === "section-end") section = null;
+      // Inside a school zone the limit holds whatever a camera says.
+      if ((f.feature.kind === "school-zone" || f.feature.kind === "senior-zone") && f.feature.limit && f.endM >= alongM && (prefs.shows?.(f.feature.kind) ?? true)) {
+        school = Math.min(school ?? Infinity, f.feature.limit);
+      }
     }
+    if (school != null) return { limit: school, why: "school" };
     const from = this.prefs().cameraFromM;
-    let camera: { limit: number; inM: number } | null = null;
+    let camera: { limit: number; inM: number; id: string } | null = null;
     for (const a of this.ahead(alongM, from)) {
       const k = a.feature.kind;
       if (a.feature.limit && (k === "speed" || k === "speed-signal" || k === "school" || k === "section-start")) {
-        camera = { limit: a.feature.limit, inM: a.inM };
+        camera = { limit: a.feature.limit, inM: a.inM, id: a.feature.id };
         break;
       }
     }
     if (section != null && (!camera || section <= camera.limit)) return { limit: section, why: "section" };
-    return camera ? { limit: camera.limit, why: "camera", inM: camera.inM } : null;
+    return camera ? { limit: camera.limit, why: "camera", inM: camera.inM, id: camera.id } : null;
   }
 }
 
@@ -199,6 +278,23 @@ function segBearing(line: Line, i: number): number {
   const dx = line.xs[i + 1] - line.xs[i];
   const dy = line.ys[i + 1] - line.ys[i];
   return ((Math.atan2(dx, dy) * 180) / Math.PI + 360) % 360;
+}
+
+/** Whether a traffic light is flashing at [now] (Korean time): its night hours, which may run past midnight, or always. */
+export function flashingNow(f: Pick<Feature, "flash">, now = Date.now()): boolean {
+  if (!f.flash) return false;
+  if (f.flash === "always") return true;
+  const m = f.flash.match(/^(\d\d):(\d\d)-(\d\d):(\d\d)$/);
+  if (!m) return false;
+  const kst = new Date(now + 9 * 3600_000);
+  const t = kst.getUTCHours() * 60 + kst.getUTCMinutes();
+  const from = Number(m[1]) * 60 + Number(m[2]), to = Number(m[3]) * 60 + Number(m[4]);
+  return from < to ? t >= from && t < to : t >= from || t < to;
+}
+
+/** Which side of a road running [roadDeg] a point at [toDeg] from it is: + right, − left. */
+function sideOf(roadDeg: number, toDeg: number): number {
+  return Math.sin(((toDeg - roadDeg) * Math.PI) / 180);
 }
 
 /** What the voice says for one due warning: a fixed sentence (server/src/phrases.ts), rendered ahead of time. */

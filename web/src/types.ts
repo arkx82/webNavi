@@ -9,6 +9,8 @@ export interface Guide {
   text: string;
   distanceM: number;
   turnType: number | string;
+  /** The place the guide is at, where the provider names it apart from its text (Kakao: "신갈JC"). */
+  name?: string;
 }
 
 export interface Segment {
@@ -24,6 +26,8 @@ export interface Route {
   path: LonLat[];
   guides: Guide[];
   segments: Segment[];
+  /** Index ranges into [path] on a motorway or car-only road (server/src/route/types.ts). */
+  motorways?: [number, number][];
 }
 
 export interface Place {
@@ -42,6 +46,10 @@ export interface Health {
   tts: boolean;
   /** Which source answers fuel and chargers; null without any key. */
   nearby?: { gas: "opinet" | "kakao" | null; ev: "env" | "kakao" | null; places: boolean };
+  /** Which road sources have a key: ITS incidents, 한국도로공사 rest areas, 기상특보. */
+  road?: { incidents: boolean; restAreas: boolean; alerts: boolean };
+  /** 정밀도로지도 tiles built on the server. */
+  hdmap?: boolean;
 }
 
 // ---- nearby: mirrors server/src/nearby/types.ts ----

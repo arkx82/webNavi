@@ -18,8 +18,10 @@
     </script>
     <script src="/api/map/naver.js"></script>
   </head>
-  <body>
+  <body class="hud-min">
     <div id="ground" hidden></div>
+    <!-- 밤: dims the ground beneath the map's transparent canvas (style.css body.night). -->
+    <div id="night-shade"></div>
     <!-- OpenStreetMap's data asks to be credited on the map itself when it is the ground (TMAP and NAVER draw their own logos). -->
     <div id="osm-credit" hidden>© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors · OpenFreeMap</div>
     <div id="map"></div>
@@ -34,8 +36,16 @@
         </div>
       </div>
 
+      <!-- Whether the car is being tracked at all: an http page, a refused permission, no fix. -->
+      <div id="gps-warn" hidden></div>
+      <!-- The browser has put the sound to sleep: a tap anywhere wakes it (voice.ts). -->
+      <div id="audio-locked" hidden>화면을 한 번 누르면 음성이 나옵니다</div>
+      <!-- A drive taken up again after the page was closed (resume.ts). -->
+      <div id="resume" hidden><span id="resume-text"></span><button id="resume-cancel" type="button" class="narrow">취소</button></div>
+
       <!-- 1. Where to. -->
       <section id="s-search">
+        <header class="search-head"><b>목적지</b><button id="dest-close" class="icon" type="button" title="접기">✕</button></header>
         <form id="search-form" class="row" autocomplete="off">
           <input id="q" type="search" placeholder="어디로 갈까요?" enterkeyhint="search" />
           <button type="submit" class="narrow">검색</button>
@@ -82,7 +92,9 @@
         </div>
         <ul id="offers"></ul>
         <div class="hint" id="pv-msg"></div>
-        <div class="row go-row">
+        <!-- First the place on the map, to see it is the right one; then the ways there. -->
+        <button id="pv-find" class="primary" type="button" hidden>경로 찾기</button>
+        <div class="row go-row" id="go-row">
           <button id="go" class="primary" type="button">안내 시작</button>
           <button id="go-sim" type="button">모의 주행</button>
         </div>
@@ -97,8 +109,8 @@
             <div id="turn-text"></div>
           </div>
         </div>
-        <!-- The camera or section ahead, with its limit, the way the car apps show it. -->
-        <div id="cam" hidden><span class="limit-sign" id="cam-limit"></span><span id="cam-what"></span></div>
+        <!-- The next traffic light on the route, and the time to it at this speed. -->
+        <div id="next-light" hidden><span class="light-ic" aria-hidden="true"><i></i><i></i><i></i></span><span class="nl-words"><span>다음 신호등 <b id="next-light-in"></b></span><small id="next-light-sub"></small></span></div>
         <div id="then" hidden><span class="then-label">다음</span><span id="then-icon"></span><span id="then-text"></span></div>
         <div id="eta">
           <div><b id="eta-time">--:--</b><small> 도착</small></div>
@@ -170,6 +182,22 @@
         <small id="base-label">티맵</small>
       </button>
     </div>
+    <!-- The camera or section ahead, with its limit: a small card at the top middle, red when over it. -->
+    <div id="cam" hidden><span class="limit-sign" id="cam-limit"></span><span id="cam-what"></span></div>
+    <!-- Where to, and the ways there: rising from the 목적지 button like a start menu (the search, the
+         place, the routes and the diagnostics are moved in here at start; main.ts). -->
+    <aside id="dest-panel" hidden></aside>
+    <!-- Where to: the search, folded into this button until wanted (the panel keeps to the speed and the drive). -->
+    <button id="dest-open" type="button" title="목적지">
+      <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5"/></svg>
+      <span>목적지</span>
+    </button>
+    <!-- What is coming that is shown rather than said: the next rest area, an incident, a school zone, a 기상특보 (notes.ts). -->
+    <div id="notes" hidden></div>
+    <!-- The lanes at the junction ahead, the ones to be in lit (lanes-strip.ts). -->
+    <div id="lanes" hidden></div>
+    <!-- 분기점 확대: which junction the camera has closed on (closeup.ts). -->
+    <div id="closeup" hidden></div>
     <!-- Which map is the ground: a list, not a toggle, so the choice is seen. -->
     <div id="base-menu" hidden>
       <div class="menu-title">바탕 지도</div>
@@ -192,6 +220,7 @@
     <aside id="guide" class="sheet" hidden>
       <header class="nb-head"><b>안내 설정</b><button id="guide-close" class="icon" type="button">✕</button></header>
       <div id="guide-rows"></div>
+      <div class="row account"><span id="account-name"></span><button id="logout" type="button" class="narrow">로그아웃</button></div>
       <details id="licences">
         <summary>라이선스 · 출처</summary>
         <dl class="lic">
@@ -203,6 +232,13 @@
           <dt>단속 카메라</dt><dd>전국무인교통단속카메라표준데이터 (경찰청·각 지자체) — 공공데이터포털</dd>
           <dt>사고 다발 지역</dt><dd>한국도로교통공단 지자체별 교통사고 다발지역 · 자전거 교통사고 다발지역 — 공공데이터포털</dd>
           <dt>날씨</dt><dd>기상청 단기예보 조회서비스 · 중기예보 조회서비스 — 공공데이터포털</dd>
+          <dt>기상특보</dt><dd>기상청 기상특보 조회서비스 — 공공데이터포털</dd>
+          <dt>미세먼지</dt><dd>한국환경공단 에어코리아 대기오염정보 — 공공데이터포털 (실시간 자료는 확정되지 않은 값)</dd>
+          <dt>과속 방지턱</dt><dd>행정안전부 과속방지턱정보 조회서비스 — 공공데이터포털</dd>
+          <dt>어린이 보호구역</dt><dd>전국어린이보호구역표준데이터 (각 지자체) — 공공데이터포털</dd>
+          <dt>신호등</dt><dd>전국신호등표준데이터 (각 지자체) — 공공데이터포털</dd>
+          <dt>휴게소</dt><dd>한국도로공사 고속도로 공공데이터 포털 (휴게소 위치 · 주유소 가격 · 편의시설)</dd>
+          <dt>돌발상황</dt><dd>ITS 국가교통정보센터 돌발상황정보</dd>
           <dt>음성</dt><dd>Alibaba Cloud Model Studio Qwen3-TTS</dd>
           <dt>음악</dt><dd>TIDAL Player SDK — TIDAL 의 약관을 따름</dd>
         </dl>
@@ -280,6 +316,7 @@
         <ul id="music-lists" hidden></ul>
       </div>
     </aside>
-    <script type="module" src="./src/main.ts"></script>
+    <!-- The login first (users are made on /admin), then the app. -->
+    <script type="module" src="./src/boot.ts"></script>
   </body>
 </html>

@@ -1,4 +1,4 @@
-import { askJson, type LonLat, type Route, type RouteProvider, type RouteRequest, type Segment } from "./types.js";
+import { askJson, isMotorwayName, markMotorway, type LonLat, type Route, type RouteProvider, type RouteRequest, type Segment } from "./types.js";
 
 /**
  * TMAP car route (SK open API). The answer is a GeoJSON FeatureCollection:
@@ -17,6 +17,9 @@ interface TmapFeature {
     turnType?: number;
     distance?: number;
     traffic?: number[][];
+    /** The road's name, and its class: 0 고속국도, 1 도시고속화도로, 2 국도 … */
+    name?: string;
+    roadType?: number;
   };
 }
 
@@ -27,7 +30,7 @@ export class Tmap implements RouteProvider {
     return !!this.appKey();
   }
 
-  async route({ start, goal }: RouteRequest): Promise<Route> {
+  async route({ start, goal, heading, speedKmh }: RouteRequest): Promise<Route> {
     const answer = await askJson<{ features: TmapFeature[] }>(
       "https://apis.openapi.sk.com/tmap/routes?version=1",
       {
@@ -37,6 +40,7 @@ export class Tmap implements RouteProvider {
           startX: start[0], startY: start[1], endX: goal[0], endY: goal[1],
           reqCoordType: "WGS84GEO", resCoordType: "WGS84GEO",
           searchOption: "0", trafficInfo: "Y",
+          ...(heading != null ? { angle: Math.round(heading), speed: Math.round(speedKmh ?? 0) } : {}),
         }),
       },
       this.name,
@@ -56,6 +60,7 @@ export class Tmap implements RouteProvider {
       } else {
         const base = route.path.length;
         route.path.push(...feature.geometry.coordinates);
+        if (p.roadType === 0 || p.roadType === 1 || isMotorwayName(p.name)) markMotorway(route, base, route.path.length);
         const rows = feature.geometry.traffic ?? p.traffic ?? [];
         if (rows.length === 0) {
           route.segments.push({ from: base, to: route.path.length, congestion: 0 });

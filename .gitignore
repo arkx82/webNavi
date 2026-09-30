@@ -11,3 +11,4 @@ server/config/
 # This machine only: editor colours, a code-scan tool.
 .vscode/
 .codesight/
+__pycache__/

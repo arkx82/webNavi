@@ -23,8 +23,9 @@ test("a spent model is passed over for the next, remembered, and other refusals 
   const dir = mkdtempSync(join(tmpdir(), "tts-"));
   const asked: string[] = [];
   const real = globalThis.fetch;
-  const pcm = Buffer.alloc(24_000, 0).fill(40, 0, 24_000); // half a second of a quiet tone
-  for (let i = 0; i < 12_000; i++) pcm.writeInt16LE(i % 2 ? 6000 : -6000, i * 2);
+  // Half a second of a tone that fades and ends in silence, as a sentence does (a cut-off one is asked again).
+  const pcm = Buffer.alloc(24_000);
+  for (let i = 0; i < 10_000; i++) pcm.writeInt16LE(Math.round((i % 2 ? 6000 : -6000) * Math.min(1, (10_000 - i) / 2000)), i * 2);
   globalThis.fetch = (async (_url: string, init?: { body?: string }) => {
     const model = JSON.parse(init?.body ?? "{}").model as string;
     asked.push(model);

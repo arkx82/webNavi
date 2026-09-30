@@ -16,8 +16,9 @@ test("a made voice's id gives back the name it was made under", () => {
 test("a made voice is spoken by the cloning model, and in the default voice once its allowance is gone", async () => {
   const dir = mkdtempSync(join(tmpdir(), "tts-"));
   const asked: [string, string][] = [];
+  // A tone that fades into silence, as a sentence ends (a cut-off one would be asked again).
   const pcm = Buffer.alloc(24_000);
-  for (let i = 0; i < 12_000; i++) pcm.writeInt16LE(i % 2 ? 6000 : -6000, i * 2);
+  for (let i = 0; i < 10_000; i++) pcm.writeInt16LE(Math.round((i % 2 ? 6000 : -6000) * Math.min(1, (10_000 - i) / 2000)), i * 2);
   const real = globalThis.fetch;
   let clonedSpent = false;
   globalThis.fetch = (async (_url: string, init?: { body?: string }) => {

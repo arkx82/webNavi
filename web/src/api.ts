@@ -11,13 +11,21 @@ async function get<T>(path: string, params: Record<string, string | undefined>):
 
 const pair = (p: LonLat) => `${p[0]},${p[1]}`;
 
+/** The car's way and speed, for a route asked on the move (main.ts sets it); none when standing. */
+export let heading: () => { deg: number; kmh: number } | null = () => null;
+export function setHeading(f: typeof heading) { heading = f; }
+const moving = () => {
+  const h = heading();
+  return h ? { heading: String(Math.round(h.deg)), speed: String(Math.round(h.kmh)) } : {};
+};
+
 export const api = {
   health: () => get<Health>("/api/health", {}),
   search: (q: string, near?: LonLat) => get<Place[]>("/api/search", { q, near: near && pair(near) }),
   route: (provider: Provider, start: LonLat, goal: LonLat) =>
-    get<Route>("/api/route", { provider, start: pair(start), goal: pair(goal) }),
+    get<Route>("/api/route", { provider, start: pair(start), goal: pair(goal), ...moving() }),
   routes: (start: LonLat, goal: LonLat) =>
-    get<{ routes: Route[]; errors: string[] }>("/api/route", { provider: "all", start: pair(start), goal: pair(goal) }),
+    get<{ routes: Route[]; errors: string[] }>("/api/route", { provider: "all", start: pair(start), goal: pair(goal), ...moving() }),
   nearby: (category: Category, at: LonLat, radiusM: number, fuel?: Fuel) =>
     get<Poi[]>("/api/nearby", { cat: category, at: pair(at), r: String(Math.round(radiusM)), fuel }),
   here: (at: LonLat, radiusM: number, withAddress: boolean) =>

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Line, metres, offset } from "./geo";
-import { OFF_M, OFF_S, LOST_S, Tracker } from "./tracker";
+import { OFF_AGAIN_S, OFF_FAR_M, OFF_M, OFF_S, LOST_S, Tracker } from "./tracker";
 import type { Fix } from "./gps";
 import type { LonLat, Route } from "./types";
 
@@ -99,12 +99,76 @@ test("in a tunnel the marker keeps going along the route at the last speed", () 
   assert.equal(tracker.frame(later + 1600)!.mode, "gps");
 });
 
-test("without a route, fixes glide and reckoning goes straight on", () => {
+test("without a route, a lost signal holds the car where it was, not sent off in a straight line", () => {
   const tracker = new Tracker();
   tracker.feed(fix(start, 0, { speed: 10, course: 90 }), 0);
   tracker.frame(100);
   const shown = tracker.frame(4000)!;
-  assert.equal(shown.mode, "reckoning");
-  const expected = offset(start, 90, 40);
-  assert.ok(metres(shown.at[0], shown.at[1], expected[0], expected[1]) < 2);
+  assert.notEqual(shown.mode, "reckoning");
+  assert.ok(metres(shown.at[0], shown.at[1], start[0], start[1]) < 2);
+});
+
+test("parked with a vague signal (a garage), the wandering fixes do not move the car or make a speed", () => {
+  const tracker = new Tracker();
+  tracker.setRoute(route);
+  tracker.feed(fix(offset(start, 0, 300), 0, { speed: 0, accM: 12 }), 0);
+  // Fixes 30–60 m out in every direction, no speed from the browser, poor accuracy.
+  for (let i = 1; i <= 20; i++) {
+    tracker.feed(fix(offset(offset(start, 0, 300), (i * 77) % 360, 30 + (i % 3) * 15), i * 1000, { speed: null, heading: null, course: null, accM: 80 }), i * 1000);
+  }
+  const shown = tracker.frame(21_000)!;
+  assert.ok(metres(shown.at[0], shown.at[1], offset(start, 0, 300)[0], offset(start, 0, 300)[1]) < 5, "still where it parked");
+  assert.equal(shown.speedMps, 0);
+  assert.notEqual(shown.mode, "reckoning");
+});
+
+test("in a long tunnel the car goes on along the route at the traffic's pace, and stops only after a tunnel's length of time", () => {
+  const tracker = new Tracker();
+  // The first kilometre is jammed.
+  tracker.setRoute({ ...route, segments: [{ from: 0, to: 10, congestion: 3 }, { from: 10, to: 21, congestion: 1 }] });
+  tracker.feed(fix(offset(start, 0, 100), 0, { speed: 20 }), 0);
+  const in30s = tracker.frame(30_000)!;
+  assert.equal(in30s.mode, "reckoning");
+  // At the jam's 3 m/s, not the 20 it last went: about 90 m on, not 600.
+  assert.ok(in30s.alongM! > 150 && in30s.alongM! < 250, `${in30s.alongM}`);
+  assert.equal(tracker.frame(300_000)!.mode, "reckoning");
+  assert.notEqual(tracker.frame(700_000)!.mode, "reckoning");
+});
+
+test("well clear of the road on good fixes is off-route after a second", () => {
+  const tracker = new Tracker();
+  tracker.setRoute(route);
+  const calls: LonLat[] = [];
+  tracker.onOffRoute = (at) => calls.push(at);
+  tracker.feed(fix(offset(start, 0, 300), 0), 0);
+  const far = offset(offset(start, 0, 400), 90, OFF_FAR_M + 30);
+  tracker.feed(fix(far, 1000), 1000);
+  assert.equal(calls.length, 0);
+  tracker.feed(fix(far, 2000), 2000);
+  assert.equal(calls.length, 1);
+});
+
+test("a fix far out but vague waits the full three seconds", () => {
+  const tracker = new Tracker();
+  tracker.setRoute(route);
+  const calls: LonLat[] = [];
+  tracker.onOffRoute = (at) => calls.push(at);
+  const far = offset(offset(start, 0, 400), 90, OFF_FAR_M + 30);
+  tracker.feed(fix(far, 1000, { accM: 60 }), 1000);
+  tracker.feed(fix(far, 2000, { accM: 60 }), 2000);
+  assert.equal(calls.length, 0);
+  tracker.feed(fix(far, 1000 + OFF_S * 1000, { accM: 60 }), 1000 + OFF_S * 1000);
+  assert.equal(calls.length, 1);
+});
+
+test("still off after a re-route that did not come, it is asked again", () => {
+  const tracker = new Tracker();
+  tracker.setRoute(route);
+  const calls: number[] = [];
+  const wide = offset(offset(start, 0, 400), 90, OFF_M + 20);
+  for (let t = 0; t <= 20_000; t += 1000) {
+    tracker.onOffRoute = () => calls.push(t);
+    tracker.feed(fix(wide, t), t);
+  }
+  assert.deepEqual(calls, [OFF_S * 1000, (OFF_S + OFF_AGAIN_S) * 1000, (OFF_S + 2 * OFF_AGAIN_S) * 1000]);
 });

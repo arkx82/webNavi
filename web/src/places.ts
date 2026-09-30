@@ -1,11 +1,12 @@
 import type { Place } from "./types";
+import { push } from "./userdata";
 
 /**
  * 집, 회사 and 즐겨찾기 — the car apps' saved places. NAVER, Kakao and
  * TMAP keep theirs to themselves (no public API gives a user's saved
- * places), so they are set here, and kept in the car's browser: the car
- * page has no lock yet, and a home address on the server would be anyone's
- * to read. They move to the server with the access key.
+ * places), so they are set here — kept in the browser, and for the
+ * logged-in user on the server (userdata.ts), so the phone and the car
+ * share them.
  */
 export interface Saved {
   home: Place | null;
@@ -26,6 +27,7 @@ export function loadPlaces(): Saved {
 
 export function savePlaces(s: Saved) {
   try { localStorage.setItem(KEY, JSON.stringify(s)); } catch { /* private window */ }
+  push("places", s);
 }
 
 /** The same place, give or take a few metres and whatever name the search gave it. */

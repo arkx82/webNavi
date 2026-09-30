@@ -18,34 +18,38 @@ export class RouteLayer {
   private last: [Route | null, Route[]] = [null, []];
 
   constructor(private map: maplibregl.Map) {
-    // A new style (switching the ground, or the plain fallback) takes the
-    // sources with it; what was shown is drawn again on the new one.
-    map.on("style.load", () => {
-      if (!this.ready) return;
-      this.ready = false;
-      this.show(...this.last);
-    });
+    // A new style (switching the ground, or the plain fallback) takes the sources with it: what was shown
+    // is drawn again on the new one. Registering once("style.load") from inside a style.load handler
+    // would be lost (maplibre fires a copy of the listener list), so the next quiet moment tries instead —
+    // isStyleLoaded() stays false while the new style's tiles load.
+    map.on("style.load", () => { this.ready = false; this.tryInstall(); });
+    map.on("idle", () => { if (!this.ready) this.tryInstall(); });
+  }
+
+  /** Puts the sources and layers on the style, then what was last shown on them; a style not done yet throws, and the next idle tries again. */
+  private tryInstall() {
+    try { this.install(); } catch { return; }
+    if (this.last[0] || this.last[1].length) this.fill(...this.last);
   }
 
   private install() {
     if (this.ready) return;
     const empty = { type: "FeatureCollection", features: [] } as GeoJSON.FeatureCollection;
-    this.map.addSource("alts", { type: "geojson", data: empty });
-    this.map.addSource("route", { type: "geojson", data: empty });
-    this.map.addSource("guides", { type: "geojson", data: empty });
+    for (const id of ["alts", "route", "guides"]) if (!this.map.getSource(id)) this.map.addSource(id, { type: "geojson", data: empty });
+    const add = (layer: maplibregl.LayerSpecification) => { if (!this.map.getLayer(layer.id)) this.map.addLayer(layer); };
     // The other offers, grey and under the chosen one, the way a route
     // preview shows what was not picked.
-    this.map.addLayer({
+    add({
       id: "alts-line", type: "line", source: "alts",
       layout: { "line-cap": "round", "line-join": "round" },
       paint: { "line-color": "#8a8f99", "line-width": 6, "line-opacity": 0.7 },
     });
-    this.map.addLayer({
+    add({
       id: "route-casing", type: "line", source: "route",
       layout: { "line-cap": "round", "line-join": "round" },
       paint: { "line-color": "#0b1a33", "line-width": 12, "line-opacity": 0.9 },
     });
-    this.map.addLayer({
+    add({
       id: "route-line", type: "line", source: "route",
       layout: { "line-cap": "round", "line-join": "round" },
       paint: {
@@ -53,7 +57,7 @@ export class RouteLayer {
         "line-color": ["match", ["get", "congestion"], 1, COLOURS[1], 2, COLOURS[2], 3, COLOURS[3], COLOURS[0]],
       },
     });
-    this.map.addLayer({
+    add({
       id: "guides", type: "circle", source: "guides",
       paint: { "circle-radius": 5, "circle-color": "#fff", "circle-stroke-color": "#0b1a33", "circle-stroke-width": 2 },
     });
@@ -62,13 +66,13 @@ export class RouteLayer {
 
   show(route: Route | null, alternates: Route[] = []) {
     this.last = [route, alternates];
-    // A route can arrive before the style has: sources cannot be added
-    // until it is, so the drawing waits for it.
-    if (!this.map.isStyleLoaded()) {
-      this.map.once("style.load", () => this.show(route, alternates));
-      return;
-    }
-    this.install();
+    // A route can arrive before the style has: sources cannot be added until it is, so the drawing waits
+    // for the next idle, which finds it in [last].
+    if (!this.ready) { this.tryInstall(); return; }
+    this.fill(route, alternates);
+  }
+
+  private fill(route: Route | null, alternates: Route[]) {
     (this.map.getSource("alts") as maplibregl.GeoJSONSource).setData({
       type: "FeatureCollection",
       features: alternates.filter((a) => a !== route && a.path.length > 1).map((a) => ({
