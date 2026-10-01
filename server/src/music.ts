@@ -11,12 +11,17 @@ interface TokenAnswer {
   error_description?: string;
 }
 
+/** How long a TIDAL call may take; one that never answers must not hold the player. */
+const TIDAL_TIMEOUT_MS = 15_000;
+
 export function registerMusic(
   app: FastifyInstance,
   settings: Settings,
   adminOnly: (r: FastifyRequest, reply: FastifyReply) => Promise<unknown>,
 ) {
   const cached = new Map<string, { token: string; until: number }>();
+  /** One refresh at a time: two at once would each rotate the refresh token, and the later to finish keep a dead one. */
+  let refreshing: Promise<{ token: string; expiresIn: number; userId: string; countryCode: string }> | null = null;
 
   const getValidToken = async (): Promise<{ token: string; expiresIn: number; userId: string; countryCode: string }> => {
     const refresh = settings.get("tidalRefresh");
@@ -34,7 +39,11 @@ export function registerMusic(
         countryCode,
       };
     }
+    if (!refreshing) refreshing = refreshToken(refresh, userId, countryCode).finally(() => { refreshing = null; });
+    return refreshing;
+  };
 
+  const refreshToken = async (refresh: string, userId: string, countryCode: string) => {
     const clientId = settings.get("tidalClientId")!;
     const clientSecret = settings.get("tidalClientSecret");
 
@@ -50,6 +59,7 @@ export function registerMusic(
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: body.toString(),
+      signal: AbortSignal.timeout(TIDAL_TIMEOUT_MS),
     });
 
     const answer = (await resp.json().catch(() => ({}))) as TokenAnswer;
@@ -86,6 +96,7 @@ export function registerMusic(
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: body.toString(),
+      signal: AbortSignal.timeout(TIDAL_TIMEOUT_MS),
     });
 
     const data = (await resp.json().catch(() => ({}))) as {
@@ -115,12 +126,12 @@ export function registerMusic(
     };
   });
 
-  /** 2. Check Device Authorization Status (polling) */
-  app.get<{ Querystring: { deviceCode?: string } }>(
+  /** 2. Check Device Authorization Status (polling). A POST: it binds an account, which a link must not be able to do. */
+  app.post<{ Body: { deviceCode?: string } }>(
     "/admin/music/tidal/check",
     { preHandler: adminOnly },
     async (req, reply) => {
-      const deviceCode = req.query.deviceCode;
+      const deviceCode = typeof req.body?.deviceCode === "string" ? req.body.deviceCode : undefined;
       if (!deviceCode) return reply.code(400).send({ error: "deviceCode required" });
 
       const clientId = settings.get("tidalClientId")!;
@@ -138,6 +149,7 @@ export function registerMusic(
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: body.toString(),
+        signal: AbortSignal.timeout(TIDAL_TIMEOUT_MS),
       });
 
       const answer = (await resp.json().catch(() => ({}))) as TokenAnswer;
@@ -210,6 +222,7 @@ export function registerMusic(
       const streamEndpoint = `https://api.tidal.com/v1/tracks/${trackId}/playbackinfopostpaywall?playbackmode=STREAM&assetpresentation=FULL&audioquality=${encodeURIComponent(quality)}`;
       const resp = await fetch(streamEndpoint, {
         headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(TIDAL_TIMEOUT_MS),
       });
 
       if (!resp.ok) {
@@ -267,6 +280,7 @@ export function registerMusic(
       const streamEndpoint = `https://api.tidal.com/v1/tracks/${trackId}/playbackinfopostpaywall?playbackmode=STREAM&assetpresentation=FULL&audioquality=${encodeURIComponent(quality)}`;
       const resp = await fetch(streamEndpoint, {
         headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(TIDAL_TIMEOUT_MS),
       });
 
       if (!resp.ok) {
@@ -311,6 +325,7 @@ export function registerMusic(
 
     const upstream = await fetch(url.toString(), {
       headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(TIDAL_TIMEOUT_MS),
     });
 
     reply.code(upstream.status);

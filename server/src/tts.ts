@@ -25,6 +25,8 @@ export { fixedPhrases };
  * silence, which in a car sounds like the voice breaking up.
  */
 const BASE = "https://dashscope-intl.aliyuncs.com";
+/** How long one render may take before it is given up: a service that never answers must not hold /api/tts for ever. */
+const RENDER_TIMEOUT_MS = 30_000;
 
 export class Speaker {
   /** Which free allowances are gone (qwen-models.ts): a spent model is passed over for the next. */
@@ -70,6 +72,7 @@ export class Speaker {
       method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
       body: JSON.stringify({ model: tier.model, input: { text, voice, language_type: "Korean" } }),
+      signal: AbortSignal.timeout(RENDER_TIMEOUT_MS),
     });
     if (!answer.ok) {
       const said = (await answer.text()).slice(0, 300);
@@ -78,7 +81,7 @@ export class Speaker {
     }
     const body = (await answer.json()) as { output?: { audio?: { url?: string; data?: string } }; message?: string };
     if (body.output?.audio?.url) {
-      const sound = await fetch(body.output.audio.url);
+      const sound = await fetch(body.output.audio.url, { signal: AbortSignal.timeout(RENDER_TIMEOUT_MS) });
       if (!sound.ok) throw new Error(`audio url ${sound.status}`);
       return Buffer.from(await sound.arrayBuffer());
     }
@@ -99,6 +102,20 @@ export class Speaker {
       this.ledger?.used(this.fileFor(text, 2, voice), voice, text, had.length);
       return had;
     }
+    // One render a sentence at a time: the page, a warm-up and the prerender meeting the same new sentence
+    // together would each pay for it.
+    const inFlight = `${voice}|${text}`;
+    let making = this.making.get(inFlight);
+    if (!making) {
+      making = this.make(text, voice).finally(() => this.making.delete(inFlight));
+      this.making.set(inFlight, making);
+    }
+    return making;
+  }
+
+  private readonly making = new Map<string, Promise<Buffer>>();
+
+  private async make(text: string, voice: string): Promise<Buffer> {
     const key = this.key();
     if (!key) throw new Error("tts has no key on this server");
     if (isMadeVoice(voice)) {

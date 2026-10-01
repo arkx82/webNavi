@@ -255,7 +255,7 @@ if (btnTidal) {
           return;
         }
         try {
-          const check = await call(`/admin/music/tidal/check?deviceCode=${encodeURIComponent(res.deviceCode)}`);
+          const check = await call("/admin/music/tidal/check", { deviceCode: res.deviceCode });
           failCount = 0;
           if (check.status === "ok") {
             clearInterval(tidalPollTimer);

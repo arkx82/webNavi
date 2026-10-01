@@ -41,6 +41,8 @@ export function cellOf(p: LonLat): Cell | null {
   return `${lon},${lat}`;
 }
 
+/** The most quarter-cell steps one leg is walked in (Korea is under 40 cells across). */
+const MAX_STEPS = 10_000;
 /** The cells [points] pass through, the gaps between neighbours walked in quarter-cell steps. */
 export function cellsAlong(points: LonLat[]): Set<Cell> {
   const cells = new Set<Cell>();
@@ -49,7 +51,8 @@ export function cellsAlong(points: LonLat[]): Set<Cell> {
     add(points[i]);
     if (i === 0) continue;
     const [ax, ay] = points[i - 1], [bx, by] = points[i];
-    const steps = Math.ceil(Math.max(Math.abs(bx - ax), Math.abs(by - ay)) / (CELL_DEG / 4));
+    // Bounded: a leg that spans the globe (a bad coordinate) is walked coarsely, not for ever.
+    const steps = Math.min(MAX_STEPS, Math.ceil(Math.max(Math.abs(bx - ax), Math.abs(by - ay)) / (CELL_DEG / 4)));
     for (let s = 1; s < steps; s++) add([ax + ((bx - ax) * s) / steps, ay + ((by - ay) * s) / steps]);
   }
   return cells;
@@ -183,11 +186,13 @@ export class Traffic {
     if (this.running) return;
     this.running = true;
     try {
+      // Set first, whichever way this round ends: an early return with it unset had kick() due at once, a timer
+      // loop spinning every tick while a key waited for approval.
+      this.lastCycle = this.now();
       const cells = this.liveCells();
       if (!this.active || cells.length === 0) return;
       // A key still waiting for approval is tried again only every half hour, not every five minutes.
       if (this.approved === false && this.now() - this.refusedAt < REFUSED_RETRY_MS) return;
-      this.lastCycle = this.now();
       let heard = 0;
       for (const cell of cells) {
         try {

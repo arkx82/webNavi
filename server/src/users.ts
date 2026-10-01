@@ -20,11 +20,11 @@ const LOCK_MS = 60_000;
 /**
  * What needs no user: logging in, and the page's question whether it is;
  * and what /admin reads (its cookie is for /admin only) — whether a music
- * account is connected, a yes or no each, and the service's OAuth
- * callback, which proves itself by its signed state (music.ts).
+ * account is connected, a yes or no each. The music player's own calls
+ * (the token, the audio, the TIDAL proxy) are same-origin and carry the
+ * session cookie, so they are gated like everything else.
  */
 const OPEN = new Set(["/api/login", "/api/logout", "/api/me", "/api/music/state"]);
-const OPEN_PATTERN = /^\/api\/music\/[a-z]+(\/callback|\/track\/|\/token|\/v1\/)/;
 /** Loaded by <script> tags before any login: an empty script rather than a refusal. */
 const SCRIPTS = new Set(["/api/map/tmap.js", "/api/map/naver.js"]);
 
@@ -74,12 +74,16 @@ export function registerUsers(app: FastifyInstance, db: Db, settings: Settings, 
       if (Date.now() - last > 5 * 60_000) { seenAt.set(request.user.id, Date.now()); db.seen(request.user.id); }
       return;
     }
-    if (OPEN.has(path) || OPEN_PATTERN.test(path)) return;
+    if (OPEN.has(path)) return;
     if (SCRIPTS.has(path)) return reply.type("text/javascript; charset=utf-8").header("Cache-Control", "no-store").send("/* not logged in */");
     return reply.code(401).send({ error: "login" });
   });
 
   app.post<{ Body: { name?: string; password?: string } }>("/api/login", async (request, reply) => {
+    // A body of the wrong shape (a number for a name) is a bad request, not a crash in trim() or scrypt.
+    if (request.body != null && (typeof request.body !== "object" || Array.isArray(request.body))) return reply.code(400).send({ error: "body" });
+    const name = request.body?.name, password = request.body?.password;
+    if ((name != null && typeof name !== "string") || (password != null && typeof password !== "string")) return reply.code(400).send({ error: "body" });
     const who = clientIp(request);
     const keys = [`ip:${who}`, `name:${(request.body?.name ?? "").trim().toLowerCase()}`];
     const wait = lockout.wait(keys);

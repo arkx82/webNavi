@@ -120,9 +120,10 @@ export const WARNING_RUNGS_M: Record<Warning, number[]> = {
 /** Cameras (speed, signal, section) can be announced from further out; the driver picks where from. */
 export const CAMERA_KINDS: Warning[] = ["speed", "signal", "speed-signal", "section-start"];
 export const CAMERA_FIRST_M = [1000, 600, 300] as const;
-/** The rungs for a camera when the first warning comes at [firstM]: that, and 300 m. */
 export function cameraRungs(firstM: number): number[] {
-  return firstM > 300 ? [firstM, 300] : [300];
+  if (firstM >= 1000) return [1000, 600, 300];
+  if (firstM >= 600) return [600, 300];
+  return [300];
 }
 
 /** Posted limits a camera can come with. */

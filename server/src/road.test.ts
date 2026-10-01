@@ -195,3 +195,11 @@ test("a town the geocoder could not place is asked again after ten minutes, one 
   assert.equal((await g.at("안산JC", at, 20))?.towards, "서울");
   assert.deepEqual(asked, ["목포", "서울", "목포", "서울"], "placed towns are kept");
 });
+
+test("a leg that spans the globe is walked a bounded number of steps, not for ever", async () => {
+  const { cellsAlong } = await import("./road/traffic.js");
+  const began = Date.now();
+  const cells = cellsAlong([[127, 37], [1e300, 37]]);
+  assert.ok(Date.now() - began < 2000);
+  assert.ok(cells.size >= 1);
+});

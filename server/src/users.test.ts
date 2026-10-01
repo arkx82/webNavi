@@ -58,3 +58,17 @@ test("the page's log goes to a file a day, and is refused when the day's file is
   for (let i = 0; i < 6; i++) assert.equal((await app.inject({ method: "POST", url: "/api/me/log", payload: big, headers: { cookie } })).statusCode, 200, `post ${i}`);
   assert.equal((await app.inject({ method: "POST", url: "/api/me/log", payload: big, headers: { cookie } })).statusCode, 413);
 });
+
+test("the music player's calls are gated like the rest: no session, no TIDAL token, audio or proxy; the state alone is open", async () => {
+  const { app } = await site();
+  for (const url of ["/api/music/tidal/token", "/api/music/tidal/track/1/audio", "/api/music/tidal/v1/users/1/favorites/tracks"]) {
+    assert.equal((await app.inject({ method: "GET", url })).statusCode, 401, url);
+  }
+  assert.notEqual((await app.inject({ method: "GET", url: "/api/music/state" })).statusCode, 401);
+});
+
+test("a login body of the wrong shape is a 400, not a crash", async () => {
+  const { app } = await site();
+  const r = await app.inject({ method: "POST", url: "/api/login", payload: { name: 123, password: ["x"] }, remoteAddress: "127.0.0.1" });
+  assert.equal(r.statusCode, 400);
+});

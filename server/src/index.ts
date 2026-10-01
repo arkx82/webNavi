@@ -476,6 +476,8 @@ app.get<{ Querystring: { text: string; voice?: string } }>("/api/tts", async (re
   }
 });
 
+/** What a radio stream may be served as; anything else goes out as bytes, never as a page. */
+const STREAM_TYPES = /^(audio\/[\w.+-]+|application\/(ogg|octet-stream|vnd\.apple\.mpegurl|x-mpegurl))$/;
 // A music stream with CORS on it, so the page's audio graph may carry it.
 app.get<{ Querystring: { url: string } }>("/api/stream", async (request, reply) => {
   let url: URL;
@@ -488,14 +490,21 @@ app.get<{ Querystring: { url: string } }>("/api/stream", async (request, reply) 
   // Only to public hosts: a user-given address must not reach into the house (guard.ts).
   let upstream: Response;
   try {
-    upstream = await fetchPublic(url, { headers: { "Icy-MetaData": "0", Range: request.headers.range ?? "" } });
+    upstream = await fetchPublic(url, { headers: { "Icy-MetaData": "0", ...(request.headers.range ? { Range: request.headers.range } : {}) } });
   } catch (e) {
     if (e instanceof RefusedUrl) return reply.code(403).send({ error: e.message });
     return reply.code(502).send({ error: (e as Error).message });
   }
-  if (!upstream.ok || !upstream.body) return reply.code(502).send({ error: `${upstream.status}` });
+  if (!upstream.ok || !upstream.body) {
+    await upstream.body?.cancel().catch(() => undefined);
+    return reply.code(502).send({ error: `${upstream.status}` });
+  }
+  // Only sound is passed on as what it says it is: a user-given address answering text/html would otherwise run
+  // as this origin's own page. Anything else is served as a plain byte stream.
+  const type = (upstream.headers.get("content-type") ?? "audio/mpeg").split(";")[0].trim().toLowerCase();
   reply.header("Access-Control-Allow-Origin", "*");
-  reply.header("Content-Type", upstream.headers.get("content-type") ?? "audio/mpeg");
+  reply.header("X-Content-Type-Options", "nosniff");
+  reply.header("Content-Type", STREAM_TYPES.test(type) ? type : "application/octet-stream");
   for (const h of ["content-length", "accept-ranges", "content-range"]) {
     const v = upstream.headers.get(h);
     if (v) reply.header(h, v);
@@ -544,7 +553,7 @@ const admin = registerAdmin(app, settings, {
   },
   prerender: () => prerender(speaker),
 }, join(root, "admin", "index.html"));
-registerMusic(app, settings, admin.guard);
+registerMusic(app, settings, admin.adminGuard);
 registerUsers(app, db, settings, admin.adminGuard, workDir);
 registerGuard(app);
 // 정밀도로지도 tiles, built into WORK_DIR by tools/hdmap/build.py.
@@ -562,6 +571,8 @@ if (existsSync(webDir)) {
 function lonLat(text: string | undefined): LonLat | null {
   const parts = (text ?? "").split(",").map(Number);
   if (parts.length !== 2 || !parts.every(Number.isFinite)) return null;
+  // On the globe: a longitude of 1e300 would walk traffic.ts's cell grid for ever.
+  if (Math.abs(parts[0]) > 180 || Math.abs(parts[1]) > 90) return null;
   return [parts[0], parts[1]];
 }
 

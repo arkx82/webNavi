@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 /**
@@ -114,7 +114,10 @@ export class Settings {
       if (v === "") delete this.saved[k];
       else this.saved[k] = v;
     }
-    writeFileSync(this.file, this.encrypt(this.saved), { mode: 0o600 });
+    // Written beside and renamed over: a crash mid-write must not leave a half file the next start cannot decrypt.
+    const tmp = `${this.file}.${process.pid}.tmp`;
+    writeFileSync(tmp, this.encrypt(this.saved), { mode: 0o600 });
+    renameSync(tmp, this.file);
     chmodSync(this.file, 0o600);
   }
 

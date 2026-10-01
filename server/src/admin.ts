@@ -24,7 +24,7 @@ export interface AdminChecks {
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
 
-export function registerAdmin(app: FastifyInstance, settings: Settings, checks: AdminChecks, pageFile: string): { guard: Guard; adminGuard: Guard } {
+export function registerAdmin(app: FastifyInstance, settings: Settings, checks: AdminChecks, pageFile: string): { adminGuard: Guard } {
   // Wrong logins by address and, under one key, for the page as a whole: a forged address does not start afresh (guard.ts).
   const lockout = new Lockout(LOCK_AFTER, LOCK_MS);
 
@@ -115,10 +115,5 @@ export function registerAdmin(app: FastifyInstance, settings: Settings, checks: 
   app.post("/admin/api/test", { preHandler: guard }, async () => checks.test());
   app.post("/admin/api/prerender", { preHandler: guard }, async () => checks.prerender());
 
-  // A plain link from the page (no custom header) must still pass: the
-  // OAuth hops are GETs that leave the site, so only the cookie is asked.
-  const loggedOnly = async (request: FastifyRequest, reply: FastifyReply) => {
-    if (!loggedIn(request)) return reply.code(401).send({ error: "login" });
-  };
-  return { guard: loggedOnly, adminGuard: guard };
+  return { adminGuard: guard };
 }

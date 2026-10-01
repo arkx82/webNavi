@@ -108,6 +108,8 @@ export async function fetchPublic(url: URL, init: FetchInit, hops = 3): Promise<
     const to = answer.headers.get("location");
     // The same object at run time; only undici's typing of the header iterator differs from the global one.
     if (answer.status < 300 || answer.status >= 400 || !to) return answer as unknown as Response;
+    // A redirect's body is never read: let go of it, or its connection stays taken until the GC finds it.
+    await answer.body?.cancel().catch(() => undefined);
     if (i >= hops) throw new RefusedUrl("too many redirects");
     url = new URL(to, url);
   }
