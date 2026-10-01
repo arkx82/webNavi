@@ -175,10 +175,13 @@ export function korean(type: string, modifier?: string, exit?: number, road?: st
 /**
  * The route's time as a Korean road is actually driven, where OSRM knows
  * only the limit. Without live speeds OSRM drives a city street at its
- * limit and stops for no light; so a step is slowed (×1.45), given its
- * lights (12 s a 400 m, or 8 s an intersection the step lists) and its
- * turn (a left or U-turn 25 s, a right 12 s, a roundabout 10 s); a
- * motorway step only a little (×1.05). But where ITS's live speeds are
+ * limit and stops for no light; so a step is slowed (×1.2), given its
+ * lights (12 s a 400 m) and its turn (a left or U-turn 15 s, a right
+ * 8 s, a roundabout 10 s); a motorway step only a little (×1.05). The
+ * figures were set against the three providers on 2026-10-01 (강남→왕산로
+ * 33.7 min to their 35.8–47, 강남→판교 21.3 to their 22–29); counting 8 s
+ * for every intersection OSRM lists (most have no light) doubled a short
+ * city route. But where ITS's live speeds are
  * on the step already (the speed file: the link's real pace, lights and
  * all), that share of the step is left as it is — slowing it again made
  * the route read slower than the three providers'. The turn's own delay
@@ -200,13 +203,12 @@ export function calibrateDuration(route: OsrmAnswer["routes"][number]): number {
       totalS += stepS * (1 + 0.05 * blind);
       return;
     }
-    let out = stepS * (1 + 0.45 * blind);
-    const intersections = s.intersections?.length ?? 0;
-    out += Math.max(intersections * 8, (distM / 400) * 12) * blind;
+    let out = stepS * (1 + 0.2 * blind);
+    out += (distM / 400) * 12 * blind;
     const mType = s.maneuver?.type, mod = s.maneuver?.modifier;
     if (mType === "turn" || mType === "end of road") {
-      if (mod === "left" || mod === "sharp left" || mod === "uturn") out += 25;
-      else if (mod === "right" || mod === "sharp right") out += 12;
+      if (mod === "left" || mod === "sharp left" || mod === "uturn") out += 15;
+      else if (mod === "right" || mod === "sharp right") out += 8;
     } else if (mType === "roundabout" || mType === "rotary") out += 10;
     totalS += out;
   });
