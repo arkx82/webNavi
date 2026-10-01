@@ -163,10 +163,23 @@ export interface CardBox {
 /** What was drawn last, so a card redrawn every frame touches the page only when it changes; the distance apart, as it changes every few metres. */
 let drawn = "", drawnIn = "";
 
+function cardKey(card: LaneCard | null): string {
+  if (!card) return "";
+  const l = card.lines ? `${card.lines.left ?? ""}:${card.lines.right ?? ""}:${card.lines.go}` : "";
+  const j = card.junction ? `${card.junction.kind}:${card.junction.go}:${card.junction.name ?? ""}:${card.junction.toward ?? ""}` : "";
+  let lanesStr = "";
+  if (card.lanes?.lanes) {
+    for (const lane of card.lanes.lanes) {
+      lanesStr += `${lane.turns.join(",")}${lane.best ? "!" : ""}${lane.ok ? "?" : ""};`;
+    }
+  }
+  return `${card.what}\u0001${card.side ?? ""}\u0001${card.note ?? ""}\u0001${card.way ?? ""}\u0001${l}\u0001${j}\u0001${lanesStr}\u0001${card.arrow}`;
+}
+
 export function drawLaneCard(el: HTMLElement, card: LaneCard | null) {
   const box = el as unknown as CardBox;
-  const { inText = "", ...rest } = card ?? {};
-  const key = card ? JSON.stringify(rest) : "";
+  const inText = card?.inText ?? "";
+  const key = cardKey(card);
   if (key === drawn) {
     // Only the distance moved: the number changes, the arrows and lanes stay as they are.
     if (card && inText !== drawnIn) { drawnIn = inText; box.querySelector(".lc-in")!.textContent = inText; }

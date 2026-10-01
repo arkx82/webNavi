@@ -147,9 +147,17 @@ function log(text: string) {
   unsent.push(`${new Date().toISOString()} ${text}`);
   if (unsent.length > 2000) unsent.shift();
   if (lines.length > 200) lines.shift();
-  el("log").textContent = lines.join("\n");
-  el("log").scrollTop = el("log").scrollHeight;
+  // Written to the page only while the 진단 panel is open: two hundred lines re-set on every message otherwise cost a
+  // layout each, for a box no one was looking at. Opening the panel draws what came meanwhile.
+  const diag = el<HTMLDetailsElement>("diag");
+  if (diag && !diag.hidden && diag.open) drawLog();
 }
+function drawLog() {
+  const box = el("log");
+  box.textContent = lines.join("\n");
+  box.scrollTop = box.scrollHeight;
+}
+el<HTMLDetailsElement>("diag").addEventListener("toggle", () => { if (el<HTMLDetailsElement>("diag").open) drawLog(); });
 
 // ---- the car ---------------------------------------------------------------
 
@@ -381,7 +389,8 @@ function closeupFor(shown: Shown): Closeup | null {
 }
 function showCloseup(_c: Closeup | null) {
   // The junction's name and way are on the picture at the foot of the map now (junctionFor); no chip up top.
-  el("closeup").hidden = true;
+  const c = el("closeup");
+  if (!c.hidden) c.hidden = true;
 }
 
 /**
@@ -405,10 +414,15 @@ for (const id of ["hud", "dest-panel", "lanes", "map"]) measuring.observe(el(id)
 // Once now as well: the observer's first report comes after the first frame's layout, and a frame before it would
 // place the car by a canvas of no size.
 measure();
+let nearbyEl: HTMLElement | null = null, guideEl: HTMLElement | null = null, weatherEl: HTMLElement | null = null, musicDockEl: HTMLElement | null = null;
 function carSpot(carLow = 0) {
   // The free part of the map: right of the top-left card, and of the destination window when it is up.
   const left = Math.max(layout.hudRight, layout.destRight);
-  const side = !el("nearby").hidden || !el("guide").hidden || !el("weather").hidden || !el("music-dock").classList.contains("closed");
+  nearbyEl ??= el("nearby");
+  guideEl ??= el("guide");
+  weatherEl ??= el("weather");
+  musicDockEl ??= el("music-dock");
+  const side = !nearbyEl.hidden || !guideEl.hidden || !weatherEl.hidden || !musicDockEl.classList.contains("closed");
   const right = layout.width - (side ? 356 : 76);
   return { x: (left + right) / 2, y: (layout.height * (1 + carLow)) / 2 };
 }
@@ -433,7 +447,7 @@ function handsOn() {
   return hands.size > 0 || Date.now() < wheelUntil || map.isEasing();
 }
 const box = map.getCanvasContainer();
-box.addEventListener("pointerdown", (e) => { hands.add(e.pointerId); touchedAt = Date.now(); }, true);
+box.addEventListener("pointerdown", (e) => { hands.add(e.pointerId); touchedAt = Date.now(); }, { capture: true, passive: true });
 let wheelDone = 0;
 box.addEventListener("wheel", () => {
   wheelUntil = Date.now() + 400;
@@ -449,7 +463,7 @@ for (const kind of ["pointerup", "pointercancel"] as const) {
     // it may have slid away from.
     keepHandZoom();
     returning = true;
-  }, true);
+  }, { capture: true, passive: true });
 }
 // Dragging, turning or tilting by hand lets go of the car; a pinch or the
 // wheel only zooms, and the zoom it leaves is kept while following.

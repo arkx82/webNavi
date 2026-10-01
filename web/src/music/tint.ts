@@ -9,38 +9,46 @@
  * player keeps its own colour.
  */
 const kept = new Map<string, Promise<[number, number, number] | null>>();
+const MAX_KEPT = 40;
 
 export function tintOf(url: string): Promise<[number, number, number] | null> {
   let had = kept.get(url);
-  if (!had) {
-    had = new Promise((done) => {
-      const img = new Image();
-      img.crossOrigin = "anonymous";
-      img.onload = () => {
-        try {
-          const c = document.createElement("canvas");
-          c.width = c.height = 24;
-          const g = c.getContext("2d", { willReadFrequently: true })!;
-          g.drawImage(img, 0, 0, 24, 24);
-          const px = g.getImageData(0, 0, 24, 24).data;
-          let r = 0, gr = 0, b = 0, n = 0;
-          for (let i = 0; i < px.length; i += 4) {
-            const [pr, pg, pb] = [px[i], px[i + 1], px[i + 2]];
-            const max = Math.max(pr, pg, pb), min = Math.min(pr, pg, pb);
-            if (max < 28 || min > 235) continue;
-            // Colourful pixels count more than grey ones: the cover's colour, not its average.
-            const w = 1 + (max - min) / 40;
-            r += pr * w; gr += pg * w; b += pb * w; n += w;
-          }
-          done(n ? [Math.round(r / n), Math.round(gr / n), Math.round(b / n)] : null);
-        } catch {
-          done(null); // a tainted canvas: the host did not allow it
-        }
-      };
-      img.onerror = () => done(null);
-      img.src = url;
-    });
+  if (had) {
+    kept.delete(url);
     kept.set(url, had);
+    return had;
+  }
+  had = new Promise((done) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      try {
+        const c = document.createElement("canvas");
+        c.width = c.height = 24;
+        const g = c.getContext("2d", { willReadFrequently: true })!;
+        g.drawImage(img, 0, 0, 24, 24);
+        const px = g.getImageData(0, 0, 24, 24).data;
+        let r = 0, gr = 0, b = 0, n = 0;
+        for (let i = 0; i < px.length; i += 4) {
+          const [pr, pg, pb] = [px[i], px[i + 1], px[i + 2]];
+          const max = Math.max(pr, pg, pb), min = Math.min(pr, pg, pb);
+          if (max < 28 || min > 235) continue;
+          // Colourful pixels count more than grey ones: the cover's colour, not its average.
+          const w = 1 + (max - min) / 40;
+          r += pr * w; gr += pg * w; b += pb * w; n += w;
+        }
+        done(n ? [Math.round(r / n), Math.round(gr / n), Math.round(b / n)] : null);
+      } catch {
+        done(null); // a tainted canvas: the host did not allow it
+      }
+    };
+    img.onerror = () => done(null);
+    img.src = url;
+  });
+  kept.set(url, had);
+  if (kept.size > MAX_KEPT) {
+    const oldest = kept.keys().next().value;
+    if (oldest) kept.delete(oldest);
   }
   return had;
 }

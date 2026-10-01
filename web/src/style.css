@@ -118,14 +118,14 @@ details > * + * { margin-top: 8px; }
 /* Equaliser: three or four little bars that hop while playing, still otherwise. */
 .eq { display: flex; align-items: flex-end; gap: 3px; height: 16px; flex: 0 0 auto; opacity: 0; transition: opacity 0.3s; }
 .eq.big { height: 22px; gap: 4px; }
-.eq i { display: block; width: 4px; height: 30%; border-radius: 3px; background: var(--tint); }
+.eq i { display: block; width: 4px; height: 100%; transform-origin: bottom; transform: scaleY(0.3); border-radius: 3px; background: var(--tint); will-change: transform; }
 .eq.big i { width: 5px; }
 #music-dock.playing .eq { opacity: 1; }
 #music-dock.playing .eq i { animation: hop 0.9s ease-in-out infinite; }
 .eq i:nth-child(2) { animation-delay: -0.3s !important; }
 .eq i:nth-child(3) { animation-delay: -0.6s !important; }
 .eq i:nth-child(4) { animation-delay: -0.15s !important; }
-@keyframes hop { 0%, 100% { height: 25%; } 50% { height: 100%; } }
+@keyframes hop { 0%, 100% { transform: scaleY(0.25); } 50% { transform: scaleY(1); } }
 
 /* The seek bar: a soft rounded track in the cover's colour, a round thumb. */
 .seek { padding: 0 4px; }

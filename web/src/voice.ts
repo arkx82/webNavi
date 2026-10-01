@@ -25,7 +25,7 @@ const FADE_S = 0.03;
  * buffer is hundreds of KB, and the page is open for hours: the least
  * recently used go once there are this many.
  */
-const KEPT_BUFFERS = 80;
+const KEPT_BUFFERS = 30;
 
 export class Voice {
   readonly context: AudioContext;
