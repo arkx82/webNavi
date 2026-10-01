@@ -325,8 +325,19 @@ export async function prerender(speaker: Speaker, voice = speaker.voice): Promis
   let made = 0, had = 0;
   for (const text of fixedPhrases()) {
     if (speaker.cached(text, voice)) { had++; continue; }
-    await speaker.say(text, voice);
+    // Model Studio rations requests by the minute (429 Throttling.RateQuota): a burst of new sentences waits and
+    // tries again rather than giving the rest up; between sentences a short pause keeps under the rate.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await speaker.say(text, voice);
+        break;
+      } catch (e) {
+        if (attempt >= 3 || !/429|RateQuota|rate limit/i.test((e as Error).message)) throw e;
+        await new Promise((r) => setTimeout(r, 5_000 * (attempt + 1)));
+      }
+    }
     made++;
+    await new Promise((r) => setTimeout(r, 300));
   }
   return { made, had };
 }
