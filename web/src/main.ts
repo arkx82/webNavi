@@ -1189,7 +1189,7 @@ function offerFaster(best: Route, to: Place, savedS: number) {
   const min = Math.max(1, Math.round(savedS / 60));
   routeLayer.show(route, [best]);
   el("faster-title").textContent = `${NAMES[best.provider]} 경로 · ${min}분 단축`;
-  el("faster-sub").textContent = guide.fasterRoute === "auto" ? "20초 안에 고르지 않으면 바꿉니다" : "바꿀지 고르세요";
+  el("faster-sub").textContent = guide.fasterRoute === "auto" ? "20초 안에 고르지 않으면 바꿉니다" : "바꾸기를 누르면 이 길로, 아니면 지금 길 그대로";
   el("faster").hidden = false;
   voice.say(fasterPhrase(min), undefined, { key: `faster:${best.provider}:${min}` });
   faster = { best, to, timer: guide.fasterRoute === "auto" ? window.setTimeout(takeFaster, FASTER_AUTO_MS) : null };

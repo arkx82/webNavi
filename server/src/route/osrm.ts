@@ -21,6 +21,7 @@ interface OsrmAnswer {
         name: string;
         ref?: string;
         distance: number;
+        duration?: number;
         /** The step's own line (overview=full: the route's line is these joined, each first point the last of the one before). */
         geometry?: { coordinates: LonLat[] };
         /** Each intersection's road classes from the profile: "motorway" on a 고속국도 and its ramps. */
@@ -99,7 +100,7 @@ export class Osrm implements RouteProvider {
     const route: Route = {
       provider: this.name,
       distanceM: first.distance,
-      durationS: first.duration,
+      durationS: this.name === "korea" ? calibrateDuration(first) : first.duration,
       path: first.geometry.coordinates,
       guides,
       segments: this.segmentsOf(first),
@@ -169,4 +170,47 @@ export function korean(type: string, modifier?: string, exit?: number, road?: st
     case "continue": case "new name": return `${onto}직진`;
     default: return `${onto}${turn(modifier)}`;
   }
+}
+
+/**
+ * Calibrates OSRM duration for Korean road realities:
+ * - Local/city roads: OSRM assumes free-flow speed limit (50-60 km/h) with 0s signal delay.
+ *   Calibrated by 1.45x plus signal delays (~12s per 400m / intersections) and turn penalties
+ *   (left turn/U-turn ~25s, right turn ~12s).
+ * - Motorways/expressways: flow is closer to speed limit, minor 1.05x merge/traffic buffer.
+ */
+export function calibrateDuration(route: OsrmAnswer["routes"][number]): number {
+  const steps = route.legs.flatMap((l) => l.steps);
+  if (!steps.length) return route.duration;
+  let totalS = 0;
+  for (const s of steps) {
+    const distM = s.distance ?? 0;
+    let stepDurationS = s.duration ?? 0;
+    const classed = s.intersections?.some((i) => i.classes?.includes("motorway")) ?? false;
+    const isMotorway = classed || isMotorwayName(s.name) || isMotorwayName(s.ref);
+
+    if (isMotorway) {
+      totalS += stepDurationS * 1.05;
+    } else {
+      stepDurationS *= 1.45;
+      const intersectionsCount = s.intersections?.length ?? 0;
+      const signalDelayS = Math.max(intersectionsCount * 8, (distM / 400) * 12);
+      stepDurationS += signalDelayS;
+
+      const mType = s.maneuver?.type;
+      const mod = s.maneuver?.modifier;
+      if (mType === "turn" || mType === "end of road") {
+        if (mod === "left" || mod === "sharp left" || mod === "uturn") {
+          stepDurationS += 25;
+        } else if (mod === "right" || mod === "sharp right") {
+          stepDurationS += 12;
+        }
+      } else if (mType === "roundabout" || mType === "rotary") {
+        stepDurationS += 10;
+      }
+
+      totalS += stepDurationS;
+    }
+  }
+  return Math.max(route.duration, Math.round(totalS));
 }

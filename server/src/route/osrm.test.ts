@@ -33,3 +33,34 @@ test("the korea route's motorway stretches come from the profile's classes and t
   // 4 + 3 + 10 + 5 + 4 + 1 points, each step's first the last of the one before: 22 in the path.
   assert.deepEqual(motorwayRanges(steps, 22), [[3, 19]]);
 });
+
+test("calibrateDuration adds realistic signal delays and turn penalties on city roads", async () => {
+  const { calibrateDuration } = await import("./osrm.js");
+  const rawRoute = {
+    distance: 5000,
+    duration: 360, // 6 minutes (50km/h free flow for 5km)
+    geometry: { coordinates: [] },
+    legs: [
+      {
+        steps: [
+          {
+            maneuver: { location: [127, 37] as [number, number], type: "depart" },
+            name: "테헤란로",
+            distance: 2500,
+            duration: 180,
+            intersections: [{ classes: [] }, { classes: [] }, { classes: [] }],
+          },
+          {
+            maneuver: { location: [127, 37] as [number, number], type: "turn", modifier: "left" },
+            name: "언주로",
+            distance: 2500,
+            duration: 180,
+            intersections: [{ classes: [] }, { classes: [] }, { classes: [] }],
+          },
+        ],
+      },
+    ],
+  };
+  const calibrated = calibrateDuration(rawRoute);
+  assert.ok(calibrated > rawRoute.duration * 1.5, `Calibrated duration ${calibrated}s should be significantly higher than raw ${rawRoute.duration}s`);
+});
