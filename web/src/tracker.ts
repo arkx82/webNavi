@@ -33,8 +33,10 @@ export const LOST_ACC_M = 50;
 export const SNAP_S = 1.5;
 /** How far ahead of its last fix the car is carried by its speed before it waits for the next. */
 const PREDICT_S = 2.5;
-/** How quickly the drawn car closes on where the fixes say it is: most of the way in about a second. */
-const CATCH_UP_S = 0.5;
+/** How quickly the drawn car closes on where the fixes say it is: most of the way in a couple of seconds. */
+const CATCH_UP_S = 1.2;
+/** The closing never adds or takes more than this share of the car's speed: a fix's wander must not be felt as a surge. */
+const CATCH_UP_SHARE = 0.3;
 /** A fix this far from the drawn car (a leap) is taken at once, not slid to. */
 const LEAP_M = 40;
 /**
@@ -250,7 +252,9 @@ export class Tracker {
         along += this.speedMps * dt;
         // The error closed with a time constant: a small one melts away, a large one (a leap in the fixes) is taken.
         const gap = predicted - along;
-        along += Math.abs(gap) > LEAP_M ? gap : gap * (1 - Math.exp(-dt / CATCH_UP_S));
+        const close = gap * (1 - Math.exp(-dt / CATCH_UP_S));
+        const most = Math.max(0.5, this.speedMps * CATCH_UP_SHARE) * dt;
+        along += Math.abs(gap) > LEAP_M ? gap : Math.max(-most, Math.min(most, close));
         along = Math.max(0, Math.min(this.line.lengthM, along));
         const placed = this.line.place(along);
         this.shownAt = placed.at;

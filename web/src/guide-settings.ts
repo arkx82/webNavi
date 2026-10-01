@@ -40,6 +40,8 @@ export interface GuideSettings {
   nightCity: boolean;
   /** 도착하면 안내 종료: the drive ends by itself a few seconds after the arrival is announced. */
   endOnArrive: boolean;
+  /** 카메라 프레임: the map moved every frame, or an even thirty a second for a car computer that cannot keep sixty. */
+  followFps: "auto" | 30;
   /** 지도 해상도: as the screen is, or one pixel per CSS pixel for a slow car computer (main.ts, before the maps are made). */
   mapDpr: "auto" | "balanced" | "fast";
   /** 더 빠른 길: found by the recheck on the move — told and taken by itself after a moment, only asked, or not looked for. */
@@ -88,7 +90,7 @@ export interface GuideSettings {
 export type Mode = "voice" | "show" | "off";
 
 export const DEFAULTS: GuideSettings = {
-  voice: true, voiceName: null, volume: 1, turns: true, junctionNames: true, laneHints: true, merges: true, closeups: true, sendLogs: true, layout: "classic", hdLanes: true, hdLanesWhen: "turns", laneGuide: true, colorLines: true, theme: "auto", nightCity: false, endOnArrive: true, mapDpr: "auto", ducking: "soft", fasterRoute: "auto", uiScale: 1, lightsOnMap: "route", camerasOnMap: "route", nextLight: true, flashSignals: true,
+  voice: true, voiceName: null, volume: 1, turns: true, junctionNames: true, laneHints: true, merges: true, closeups: true, sendLogs: true, layout: "classic", hdLanes: true, hdLanesWhen: "turns", laneGuide: true, colorLines: true, theme: "auto", nightCity: false, endOnArrive: true, mapDpr: "auto", followFps: "auto", ducking: "soft", fasterRoute: "auto", uiScale: 1, lightsOnMap: "route", camerasOnMap: "route", nextLight: true, flashSignals: true,
   cameras: true, cameraFromM: 600, sections: true, schools: true,
   bumps: "show", curves: "show", accidents: "show", bikeAccidents: "show",
   overspeed: true, overspeedBy: 0,
@@ -199,6 +201,7 @@ const ROWS: Row[] = [
   { key: "fasterRoute", label: "더 빠른 길", kind: "choice", options: [["auto", "20초 뒤 자동"], ["ask", "물어보기"], ["off", "끔"]], sub: "안내 중 6분마다 티맵·카카오·네이버·자체 경로를 다시 비교해 3분 이상 빠른 길이 있으면 알립니다. 자동: 패널에 띄우고 20초 안에 '그대로'를 누르지 않으면 바꿈" },
   { key: "endOnArrive", label: "도착하면 안내 종료", kind: "toggle", sub: "도착 안내 뒤 10초 뒤에 자동으로 검색 화면으로. 끄면 종료 버튼을 누를 때까지 그대로" },
   { key: "uiScale", label: "화면 크기", kind: "choice", options: [[0.85, "작게"], [1, "보통"], [1.15, "크게"], [1.3, "더 크게"]], sub: "패널 · 카드 · 버튼의 크기 (지도는 그대로). 기기마다 화면 픽셀 크기가 달라 글씨가 크거나 작게 보일 때" },
+  { key: "followFps", label: "카메라 프레임", kind: "choice", options: [["auto", "최대"], [30, "30 고정"]], sub: "30 고정: 지도를 초당 30번만 움직임. 차 화면이 60을 못 채워 들쭉날쭉할 때 고른 30이 더 부드러움" },
   { key: "mapDpr", label: "지도 해상도", kind: "choice", options: [["auto", "선명하게"], ["balanced", "균형"], ["fast", "빠르게"]], sub: "선명하게: 화면 그대로 · 균형: 1.5배까지 · 빠르게: 1배로 그리고 창 뒤 흐림 효과도 끔. 바꾼 뒤 새로 고침" },
   { key: "theme", label: "화면 테마", kind: "choice", options: [["auto", "자동 (해 기준)"], ["light", "밝게"], ["dark", "어둡게"]], sub: "밤에는 바탕 지도도 어둡게" },
   { key: "nightCity", label: "야경 건물", kind: "toggle", sub: "밤에 3D 화면이면 티맵·네이버 바탕 위에 건물을 옅은 금빛으로 (OpenStreetMap 건물이라 도심 밖에는 드묾. 도로가 가려 보이면 끄세요)" },

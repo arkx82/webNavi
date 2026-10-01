@@ -281,6 +281,8 @@ function onFix(fix: Fix) {
 const MODES = { waiting: "대기", gps: "GPS", reckoning: "추측 항법", snapping: "복귀 중" };
 /** What the frame loop has already complained of, by message: once each, not sixty times a second. */
 const frameErrors = new Set<string>();
+/** When the camera last moved, for the 30 fps setting: a frame sooner than its share is drawn without moving the map. */
+let cameraMovedAt = 0;
 function frame() {
   try {
     const shown = tracker.frame();
@@ -292,7 +294,11 @@ function frame() {
       turnInM = route ? shown.nextGuide?.inM : undefined;
       closeup = closeupFor(shown);
       showCloseup(closeup);
-      if (follow && !handsOn()) followCar(shown.at);
+      // 카메라 프레임 30: the map moved every other frame — a car computer that cannot keep 60 draws an even 30 more
+      // smoothly than an uneven 40 — the car itself still drawn every frame.
+      const now = performance.now();
+      const due = guide.followFps !== 30 || now - cameraMovedAt >= 1000 / 30 - 2;
+      if (follow && !handsOn() && due) { followCar(shown.at); cameraMovedAt = now; }
       // The painted lanes only where they matter on the move — near a turn, or slow — unless asked for always; a map
       // moved by hand shows everything.
       hdLayer?.setAway(guide.hdLanesWhen === "turns" && follow && !handsOn() && lanesAway(shown));
@@ -359,6 +365,10 @@ function followCar(at: LonLat) {
     const eased: LonLat = [before.lng + (center[0] - before.lng) * k(0.15), before.lat + (center[1] - before.lat) * k(0.15)];
     if (metres(eased[0], eased[1], center[0], center[1]) < 1) returning = false;
     center = eased;
+  } else {
+    // A short cushion on the centre (about five frames): an uneven frame interval moves the car unevenly, and the
+    // map following it to the metre each frame showed every unevenness; eased, it glides.
+    center = [before.lng + (center[0] - before.lng) * k(0.35), before.lat + (center[1] - before.lat) * k(0.35)];
   }
   // Standing still with the camera settled: nothing to move, so no move (each one redraws two maps).
   if (metres(before.lng, before.lat, center[0], center[1]) < 0.05 && Math.abs(map.getZoom() - camera.zoom) < 0.0005
