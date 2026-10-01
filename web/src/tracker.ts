@@ -1,5 +1,5 @@
 import type { Fix } from "./gps";
-import { Line, angleBetween, lerpAngle, metres, offset, type Projection } from "./geo";
+import { Line, angleBetween, bearing, lerpAngle, metres, offset, type Projection } from "./geo";
 import type { Guide, LonLat, Route } from "./types";
 
 /**
@@ -293,8 +293,21 @@ export class Tracker {
     return shown;
   }
 
-  /** Smoothed bearing for the camera: turns toward the shown bearing. */
+  /** Smoothed bearing for the camera: looks slightly ahead along the route for fluid curve following, else turns toward shown bearing. */
   cameraBearing(current: number, share = 0.15): number {
-    return lerpAngle(current, this.shownBearing, share);
+    let target = this.shownBearing;
+    if (this.line && this.shownAlong != null && this.speedMps > 1.5) {
+      // Lookahead: look ahead along the route (14m in town to 35m at speed) so curves feel anticipated and fluid
+      const lookaheadM = Math.min(35, Math.max(14, this.speedMps * 1.0));
+      const targetAlong = Math.min(this.line.lengthM, this.shownAlong + lookaheadM);
+      if (targetAlong > this.shownAlong + 2) {
+        const ahead = this.line.place(targetAlong);
+        if (this.shownAt) {
+          const b = bearing(this.shownAt[0], this.shownAt[1], ahead.at[0], ahead.at[1]);
+          if (Number.isFinite(b)) target = b;
+        }
+      }
+    }
+    return lerpAngle(current, target, share);
   }
 }

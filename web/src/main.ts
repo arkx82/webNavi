@@ -290,7 +290,7 @@ function frame() {
       marker.setLngLat(shown.at);
       put("mode", MODES[shown.mode] + (shown.offM != null ? ` · ${Math.round(shown.offM)} m` : ""));
       marker.setRotation(shown.bearing);
-      zoomSpeed += (shown.speedMps * 3.6 - zoomSpeed) * 0.01;
+      zoomSpeed += (shown.speedMps * 3.6 - zoomSpeed) * 0.03;
       turnInM = route ? shown.nextGuide?.inM : undefined;
       closeup = closeupFor(shown);
       showCloseup(closeup);
@@ -298,7 +298,7 @@ function frame() {
       // smoothly than an uneven 40 — the car itself still drawn every frame.
       const now = performance.now();
       const due = guide.followFps !== 30 || now - cameraMovedAt >= 1000 / 30 - 2;
-      if (follow && !handsOn() && due) { followCar(shown.at); cameraMovedAt = now; }
+      if (follow && !handsOn() && due) { followCar(shown.at, shown.speedMps); cameraMovedAt = now; }
       // The painted lanes only where they matter on the move — near a turn, or slow — unless asked for always; a map
       // moved by hand shows everything.
       hdLayer?.setAway(guide.hdLanesWhen === "turns" && follow && !handsOn() && lanesAway(shown));
@@ -336,7 +336,7 @@ const LANES_SLOW_KMH = 30;
 let followedAt = 0;
 
 /** One frame of following: everything eases toward where it should be. */
-function followCar(at: LonLat) {
+function followCar(at: LonLat, speedMps = 0) {
   const v = VIEWS[view];
   // The easing shares below are per frame at 60 fps. A slower browser (the car's, a busy one) draws fewer
   // frames, and at the same shares took seconds to find the car after 안내 시작: scaled here to the time
@@ -355,10 +355,10 @@ function followCar(at: LonLat) {
   const before = map.getCenter();
   const zoomTo = close ? zoomToSee(Math.max(0, closeup!.inM), at[1], layout.height * (CLOSEUP_CAR_AT - 0.12)) : Math.max(10, Math.min(20, speedZoom() + zoomBias));
   const camera = {
-    bearing: tracker.cameraBearing(map.getBearing(), k(0.15)),
-    pitch: approach(map.getPitch(), close ? CLOSEUP_PITCH : v.pitch, k(close ? 0.06 : 0.12)),
-    // Quick when coming back to the car; slow as the speed changes, like a drive.
-    zoom: approach(map.getZoom(), zoomTo, k(returning ? 0.12 : close ? 0.05 : 0.03)),
+    bearing: tracker.cameraBearing(map.getBearing(), k(0.18)),
+    pitch: approach(map.getPitch(), close ? CLOSEUP_PITCH : v.pitch, k(close ? 0.08 : 0.12)),
+    // Quick when coming back to the car; smooth as the speed changes, like a drive.
+    zoom: approach(map.getZoom(), zoomTo, k(returning ? 0.14 : close ? 0.06 : 0.04)),
   };
   let center = centreFor(at, spot, camera);
   if (returning) {
@@ -366,12 +366,13 @@ function followCar(at: LonLat) {
     if (metres(eased[0], eased[1], center[0], center[1]) < 1) returning = false;
     center = eased;
   } else {
-    // A short cushion on the centre (about five frames): an uneven frame interval moves the car unevenly, and the
-    // map following it to the metre each frame showed every unevenness; eased, it glides.
-    center = [before.lng + (center[0] - before.lng) * k(0.35), before.lat + (center[1] - before.lat) * k(0.35)];
+    // Harmonized cushion on the centre: follows smoothly without letting the car swing off spot during turns.
+    center = [before.lng + (center[0] - before.lng) * k(0.28), before.lat + (center[1] - before.lat) * k(0.28)];
   }
-  // Standing still with the camera settled: nothing to move, so no move (each one redraws two maps).
-  if (metres(before.lng, before.lat, center[0], center[1]) < 0.05 && Math.abs(map.getZoom() - camera.zoom) < 0.0005
+  // Standing still with the camera settled: nothing to move, so no move.
+  // When moving (even crawling under 5 km/h in traffic), always update to keep the glide continuous without micro-stutters.
+  const moving = speedMps > 0.2 || returning;
+  if (!moving && metres(before.lng, before.lat, center[0], center[1]) < 0.01 && Math.abs(map.getZoom() - camera.zoom) < 0.0005
     && Math.abs(lerpAngle(map.getBearing(), camera.bearing, 1) - map.getBearing()) < 0.02 && Math.abs(map.getPitch() - camera.pitch) < 0.02) return;
   map.jumpTo({ center, ...camera });
 }
