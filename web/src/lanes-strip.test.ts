@@ -77,3 +77,11 @@ test("a card whose distance alone changed updates the number, not the whole card
   assert.equal(box.cleared, 1);
   assert.equal(box.sets, 2);
 });
+
+test("a lane that goes two ways is drawn as one arrow that forks; a plain lane as before", async () => {
+  const { laneGlyph } = await import("./lanes-strip.js");
+  const fork = laneGlyph(["straight", "right"]);
+  assert.equal((fork.match(/<path/g) ?? []).length, 4, "a stem, its head, a branch, its head");
+  assert.ok(laneGlyph(["left", "right"]).includes("M12 21v-8"), "a T for left or right");
+  assert.equal((laneGlyph(["straight"]).match(/<path/g) ?? []).length, 1);
+});

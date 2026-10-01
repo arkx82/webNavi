@@ -9,7 +9,7 @@
 import { escape } from "./html";
 
 export type Turn = "uturn" | "left" | "straight" | "right";
-export interface Lanes { lanes: { turns: Turn[]; best: boolean }[]; stopM?: number }
+export interface Lanes { lanes: { turns: Turn[]; best: boolean; /** Can take the way too, but a lane nearer the turn after is better (main.ts narrows best by it). */ ok?: boolean }[]; stopM?: number }
 
 /** An arrow a way, drawn on a 24 px square: a stem up the middle, bent where it turns. */
 const PATH: Record<Turn, string> = {
@@ -18,6 +18,32 @@ const PATH: Record<Turn, string> = {
   right: "M10 21v-8a3 3 0 0 1 3-3h6M15 6l4 4-4 4",
   uturn: "M16 21V9a4 4 0 0 0-8 0v6M5 12l3 3 3-3",
 };
+
+/**
+ * A lane's ways as one drawing: a stem up the middle, and where it may also
+ * turn, a branch off that stem with its own head — "straight or right" is
+ * one arrow that forks, not two arrows on top of each other.
+ */
+export function laneGlyph(turns: Turn[]): string {
+  const set = new Set(turns);
+  const has = (...t: Turn[]) => t.every((x) => set.has(x));
+  if (has("straight", "right") && !set.has("left") && !set.has("uturn")) {
+    return `<path d="M9 21V5"/><path d="M5 9l4-4 4 4"/><path d="M9 13h6"/><path d="M12 10l3 3-3 3"/>`;
+  }
+  if (has("straight", "left") && !set.has("right") && !set.has("uturn")) {
+    return `<path d="M15 21V5"/><path d="M11 9l4-4 4 4"/><path d="M15 13H9"/><path d="M12 10l-3 3 3 3"/>`;
+  }
+  if (has("left", "right") && !set.has("straight") && !set.has("uturn")) {
+    return `<path d="M12 21v-8"/><path d="M12 13H6"/><path d="M9 10l-3 3 3 3"/><path d="M12 13h6"/><path d="M15 10l3 3-3 3"/>`;
+  }
+  if (has("straight", "left", "right") && !set.has("uturn")) {
+    return `<path d="M12 21V5"/><path d="M8 9l4-4 4 4"/><path d="M12 14H6"/><path d="M9 11l-3 3 3 3"/><path d="M12 14h6"/><path d="M15 11l3 3-3 3"/>`;
+  }
+  if (has("uturn", "left") && set.size === 2) {
+    return `<path d="M17 21V9a4 4 0 0 0-8 0v5"/><path d="M6 11l3 3 3-3"/><path d="M17 15H11"/><path d="M14 12l-3 3 3 3"/>`;
+  }
+  return turns.map((t) => `<path d="${PATH[t]}"/>`).join("");
+}
 
 /** "2차로", "1·2차로", "3~5차로": the lanes to be in, numbered from the left. */
 export function laneWords(lanes: Lanes["lanes"]): string | null {
@@ -177,6 +203,6 @@ export function drawLaneCard(el: HTMLElement, card: LaneCard | null) {
   row.innerHTML = (card.lanes?.lanes ?? []).map((lane) => {
     // A lane that cannot go the route's way at the stop line: marked 전용, to be kept out of.
     const only = !!card.way && lane.turns.length > 0 && !lane.turns.includes(card.way);
-    return `<div class="lane${lane.best ? " best" : ""}${only ? " only" : ""}"><svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">${lane.turns.map((t) => `<path d="${PATH[t]}"/>`).join("")}</svg>${only ? `<i>전용</i>` : ""}</div>`;
+    return `<div class="lane${lane.best ? " best" : lane.ok ? " ok" : ""}${only ? " only" : ""}"><svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">${laneGlyph(lane.turns)}</svg>${only ? `<i>전용</i>` : ""}</div>`;
   }).join("");
 }

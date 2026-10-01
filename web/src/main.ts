@@ -1445,7 +1445,7 @@ function showLanes(shown: Shown) {
       log(info?.lanes.length ? `차로 ${info.lanes.map((l) => (l.best ? `[${l.turns.join("+")}]` : l.turns.join("+"))).join(" | ")} · ${g.text}` : `차로 정보 없음 · ${g.text} (${way ?? "-"})`);
     }).catch(() => {});
   }
-  const info = lanesAsked.get(g) ?? null;
+  const info = forNextTurn(lanesAsked.get(g) ?? null, shown);
   lanesShown = !!info;
   drawLaneCard(el("lanes"), {
     arrow: arrowSvg(m!, 40),
@@ -1456,6 +1456,28 @@ function showLanes(shown: Shown) {
     lines: linesFor(g, m!),
     junction: junctionFor(g, m!),
   });
+}
+
+/** A turn this soon after the junction decides which of the lanes that can go the route's way to be in. */
+const NEXT_TURN_M = 700;
+/**
+ * Of the lanes lit as able to go the route's way, when the turn after the
+ * junction comes within NEXT_TURN_M and goes to a side, only the lanes on
+ * that side stay lit (half of them, at least one); the others are shown as
+ * able but not best — every straight lane lit told the driver nothing
+ * about which one the next turn wants.
+ */
+function forNextTurn(info: Lanes | null, shown: Shown): Lanes | null {
+  if (!info || !shown.nextGuide || !shown.thenGuide) return info;
+  const gap = shown.thenGuide.inM - shown.nextGuide.inM;
+  if (gap > NEXT_TURN_M) return info;
+  const side = branchOf(maneuverFor(shown.thenGuide.guide));
+  if (!side) return info;
+  const best = info.lanes.map((l, i) => (l.best ? i : -1)).filter((i) => i >= 0);
+  if (best.length < 2) return info;
+  const keep = Math.max(1, Math.floor(best.length / 2));
+  const chosen = new Set(side === "right" ? best.slice(-keep) : best.slice(0, keep));
+  return { ...info, lanes: info.lanes.map((l, i) => (l.best && !chosen.has(i) ? { ...l, best: false, ok: true } : l)) };
 }
 
 /**
