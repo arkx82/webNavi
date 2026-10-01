@@ -344,8 +344,9 @@ function followCar(at: LonLat, speedMps = 0) {
   const now = performance.now();
   const gap = now - followedAt;
   followedAt = now;
-  const frames = gap > 1000 ? 1 : Math.min(gap, 250) / (1000 / 60);
-  const k = (share: number) => 1 - Math.pow(1 - share, frames);
+  // Cap frames and max easing per step to prevent jarring camera teleport snaps after any JS thread pause (e.g. song change, tile load)
+  const frames = gap > 1000 ? 1 : Math.min(gap, 100) / (1000 / 60);
+  const k = (share: number) => Math.min(0.55, 1 - Math.pow(1 - share, frames));
   // Close up on a junction: the car low on the screen, tilted, drawn back to see the fork (closeup.ts).
   const close = !!closeup;
   let want = close ? { x: carSpot(0).x, y: layout.height * CLOSEUP_CAR_AT } : carSpot(v.carLow);
@@ -445,14 +446,16 @@ for (const id of ["hud", "dest-panel", "lanes", "map"]) measuring.observe(el(id)
 measure();
 let nearbyEl: HTMLElement | null = null, guideEl: HTMLElement | null = null, weatherEl: HTMLElement | null = null, musicDockEl: HTMLElement | null = null;
 function carSpot(carLow = 0) {
-  // The free part of the map: right of the top-left card, and of the destination window when it is up.
-  const left = Math.max(layout.hudRight, layout.destRight);
+  // Center horizontally in the visible driving view.
+  // The HUD card floats on the top-left and does not obstruct the car at the bottom,
+  // but if the full destination search window is open, keep clear of it.
+  const left = layout.destRight > 0 ? layout.destRight : 0;
   nearbyEl ??= el("nearby");
   guideEl ??= el("guide");
   weatherEl ??= el("weather");
   musicDockEl ??= el("music-dock");
   const side = !nearbyEl.hidden || !guideEl.hidden || !weatherEl.hidden || !musicDockEl.classList.contains("closed");
-  const right = layout.width - (side ? 356 : 76);
+  const right = layout.width - (side ? 356 : 0);
   return { x: (left + right) / 2, y: (layout.height * (1 + carLow)) / 2 };
 }
 
@@ -1362,8 +1365,10 @@ function showTurn(shown: Shown) {
   // A guide said in its own words ("고속도로 출구") is made on the spot; if that fails, the fixed sentence for the road's bend.
   const bent = TURN_WORDS_OK.has(m) ? null : bendOf(g);
   const plain = bent ? turnPhrase(bent, due.rung) : undefined;
-  // Keyed by the junction and the rung: the next junction's "잠시 후 좌회전" is its own, however alike it reads.
   voice.say(named ?? due.text, named ? due.text : plain, { key: `turn:${key}:${due.rung}`, turn: true });
+  if (due.rung > TURN_NEAR_M && TURN_WORDS_OK.has(m)) {
+    voice.prefetch(turnPhrase(m as Turn, TURN_NEAR_M));
+  }
   // The first far rung (a kilometre out): the guide line's colour where it is painted, else which side to be on.
   const colour = due.rung > TURN_NEAR_M ? lineColour(g, m) : null;
   if (colour && guide.colorLines) {
@@ -2321,7 +2326,7 @@ function showNow(state: NowPlaying) {
   for (const id of ["mini-art", "now-art"]) {
     el(id).style.backgroundImage = state.art ? `url("${state.art}")` : "";
   }
-  wearTint(state.art);
+  setTimeout(() => wearTint(state.art), 400);
   const icon = state.playing ? ICONS.pause : ICONS.play;
   el("mini-toggle").innerHTML = icon;
   el("music-toggle").innerHTML = icon;

@@ -263,7 +263,7 @@ export class LaneIndex {
    * The route's line is moved onto it: on a road drawn with both ways'
    * lanes, the line then runs on the side the car is on.
    */
-  snap(points: LonLat[], headings: number[]): (LonLat | null)[] {
+  snap(points: LonLat[], headings: number[], biases?: number[]): (LonLat | null)[] {
     const db = this.open();
     if (!db) return points.map(() => null);
     // A link's line parsed once a call: neighbouring vertices see the same links, and the parse is most of the cost.
@@ -286,7 +286,24 @@ export class LaneIndex {
       const ours = found.filter((f) => f.year === newest);
       const least = Math.min(...ours.map((f) => f.off));
       const row = ours.filter((f) => f.off <= least + CARRIAGEWAY_M);
-      return [row.reduce((s, f) => s + f.at[0], 0) / row.length, row.reduce((s, f) => s + f.at[1], 0) / row.length];
+      if (row.length === 1) return row[0].at;
+
+      // Sort lanes from left to right across the travel direction
+      const hRad = (heading * Math.PI) / 180;
+      const cosH = Math.cos(hRad), sinH = Math.sin(hRad);
+      const withSide = row.map((f) => {
+        const [x, y] = toXY(f.at, p);
+        const lateral = x * cosH - y * sinH;
+        return { at: f.at, lateral };
+      }).sort((a, b) => a.lateral - b.lateral);
+
+      const bias = biases?.[i] ?? 0;
+      // bias: -1 (leftmost), +1 (rightmost), 0 (center through-lanes)
+      const targetIdx = Math.max(0, Math.min(withSide.length - 1, (bias + 1) * 0.5 * (withSide.length - 1)));
+      const lower = Math.floor(targetIdx), upper = Math.ceil(targetIdx);
+      const frac = targetIdx - lower;
+      const p1 = withSide[lower].at, p2 = withSide[upper].at;
+      return [p1[0] + (p2[0] - p1[0]) * frac, p1[1] + (p2[1] - p1[1]) * frac];
     });
   }
 

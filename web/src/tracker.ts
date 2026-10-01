@@ -239,6 +239,7 @@ export class Tracker {
       const ahead = this.reckonAlong + this.reckonSpeed() * ((now - this.lastFixAt) / 1000);
       reckoned = this.line.place(ahead);
       this.shownAt = reckoned.at;
+      this.shownAlong = reckoned.alongM;
       this.shownBearing = reckoned.bearing;
     } else {
       const t = Math.min(1, (now - this.glideStart) / (this.glideS * 1000));
@@ -293,19 +294,15 @@ export class Tracker {
     return shown;
   }
 
-  /** Smoothed bearing for the camera: looks slightly ahead along the route for fluid curve following, else turns toward shown bearing. */
   cameraBearing(current: number, share = 0.15): number {
     let target = this.shownBearing;
     if (this.line && this.shownAlong != null && this.speedMps > 1.5) {
       // Lookahead: look ahead along the route (14m in town to 35m at speed) so curves feel anticipated and fluid
       const lookaheadM = Math.min(35, Math.max(14, this.speedMps * 1.0));
       const targetAlong = Math.min(this.line.lengthM, this.shownAlong + lookaheadM);
-      if (targetAlong > this.shownAlong + 2) {
+      if (targetAlong > this.shownAlong + 1) {
         const ahead = this.line.place(targetAlong);
-        if (this.shownAt) {
-          const b = bearing(this.shownAt[0], this.shownAt[1], ahead.at[0], ahead.at[1]);
-          if (Number.isFinite(b)) target = b;
-        }
+        if (Number.isFinite(ahead.bearing)) target = ahead.bearing;
       }
     }
     return lerpAngle(current, target, share);

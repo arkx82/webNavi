@@ -1,5 +1,6 @@
 import { Line, bearing, metres } from "./geo";
 import type { LonLat, Route } from "./types";
+import { maneuverOf } from "./maneuver";
 
 /**
  * A route's corners as the lanes are painted. The providers' lines cut
@@ -226,6 +227,41 @@ export function applySnap(path: LonLat[], snapped: (LonLat | null)[], fixed: boo
   return path;
 }
 
+/** Computes lane bias (-1 leftmost, +1 rightmost, 0 center) for approaching turns so the line leads into optimal lanes. */
+function computeBiases(route: Route): number[] {
+  const n = route.path.length;
+  const biases = new Array<number>(n).fill(0);
+  if (!route.guides || route.guides.length === 0 || n < 2) return biases;
+
+  const line = new Line(route.path);
+  const turns: { alongM: number; bias: number }[] = [];
+  for (const g of route.guides) {
+    const m = maneuverOf(route.provider, g);
+    let bias = 0;
+    if (m === "left" || m === "sharp-left" || m === "slight-left" || m === "uturn") bias = -1;
+    else if (m === "right" || m === "sharp-right" || m === "slight-right" || m === "ramp-right") bias = 1;
+    if (bias !== 0) {
+      const p = line.project(g.at);
+      turns.push({ alongM: p.alongM, bias });
+    }
+  }
+  if (turns.length === 0) return biases;
+
+  let along = 0;
+  for (let i = 0; i < n; i++) {
+    if (i > 0) along += metres(route.path[i - 1][0], route.path[i - 1][1], route.path[i][0], route.path[i][1]);
+    for (const t of turns) {
+      const inM = t.alongM - along;
+      if (inM >= 0 && inM <= 250) {
+        const share = Math.min(1, Math.max(0, (250 - inM) / 190));
+        biases[i] = t.bias * share;
+        break;
+      }
+    }
+  }
+  return biases;
+}
+
 /** [route] with its line on the travel-direction lanes wherever 정밀도로지도 has them; as it came elsewhere. */
 export async function snapRoute(route: Route): Promise<Route> {
   try {
@@ -233,9 +269,18 @@ export async function snapRoute(route: Route): Promise<Route> {
     for (const [a, b] of route.threaded ?? []) for (let i = a; i < b; i++) fixed[i] = true;
     // A threaded corner is on its lane already: not asked about (a NaN heading comes back null).
     const headings = headingsOf(route.path).map((h, i) => (fixed[i] ? NaN : h));
+    const biases = computeBiases(route);
     const snapped: (LonLat | null)[] = [];
     for (let i = 0; i < route.path.length; i += SNAP_BATCH) {
-      const a = await fetch("/api/hdmap/snap", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ points: route.path.slice(i, i + SNAP_BATCH), headings: headings.slice(i, i + SNAP_BATCH) }) });
+      const a = await fetch("/api/hdmap/snap", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          points: route.path.slice(i, i + SNAP_BATCH),
+          headings: headings.slice(i, i + SNAP_BATCH),
+          biases: biases.slice(i, i + SNAP_BATCH),
+        }),
+      });
       if (!a.ok) return route;
       snapped.push(...((await a.json()) as { at: (LonLat | null)[] }).at);
     }

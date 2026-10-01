@@ -72,13 +72,14 @@ export function registerHdmap(app: FastifyInstance, workDir: string) {
   // The lanes at the junction ahead: at=lon,lat of the guide, in=heading into it, way=the provider's turn,
   // after=the route's next 150 m or so as lon,lat;lon,lat…
   // The travel-direction lanes at each vertex of a route (lanes.snap): the line is drawn on the car's side of the road.
-  app.post<{ Body: { points?: LonLat[]; headings?: number[] } }>("/api/hdmap/snap", async (request, reply) => {
+  app.post<{ Body: { points?: LonLat[]; headings?: number[]; biases?: number[] } }>("/api/hdmap/snap", async (request, reply) => {
     const points = Array.isArray(request.body?.points) ? request.body.points.slice(0, SNAP_BATCH) : null;
     const headings = Array.isArray(request.body?.headings) ? request.body.headings : null;
+    const biases = Array.isArray(request.body?.biases) ? request.body.biases : undefined;
     const ok = (p: unknown): p is LonLat => Array.isArray(p) && p.length === 2 && p.every(Number.isFinite);
     if (!points || !headings || headings.length !== points.length || !points.every(ok)) return reply.code(400).send({ error: "points, headings" });
     if (!lanes.ready) return { at: points.map(() => null) };
-    const at = lanes.snap(points, headings.map(Number));
+    const at = lanes.snap(points, headings.map(Number), biases?.map(Number));
     request.log.debug({ asked: points.length, snapped: at.filter(Boolean).length }, "route snapped to lanes");
     return { at };
   });

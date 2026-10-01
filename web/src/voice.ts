@@ -16,8 +16,8 @@ const REPEAT_MS = 20_000;
  */
 const LEAD_S = 0.15;
 /** How long a queued sentence stays true: a turn's "잠시 후" a few seconds, a warning a little longer. */
-const TURN_WITHIN_S = 10;
-const WITHIN_S = 15;
+const TURN_WITHIN_S = 25;
+const WITHIN_S = 20;
 const TAIL_S = 0.35;
 const FADE_S = 0.03;
 /**

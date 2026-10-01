@@ -25,7 +25,7 @@ export function turnRungs(speedKmh: number): number[] {
 /**
  * The set a junction's turn is said from is settled by its first sentence,
  * read back from what was said: a car doing 75 that dips to 65 and back
- * would otherwise hear 1 km, 500 m, then 300 m — each set's own unsaid rung.
+ * sticks with the fast road rungs without adding an extra 300m.
  */
 function rungsFor(speedKmh: number, said: Set<number>): number[] {
   if (said.has(300)) return [...TOWN_RUNGS];
