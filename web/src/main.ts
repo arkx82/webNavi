@@ -975,6 +975,12 @@ function relined(r: Route) {
   sim?.follow(r, true);
   routeLine = new Line(r.path);
   bends = new WeakMap();
+  // The road watch measures along the line too: made again on the new one (what was said is kept), its features
+  // asked for again at once, so the bands — 구간 단속, the school zones — are drawn along the line as it is now.
+  if (watch && route === r) {
+    watch = new RouteWatch(r, () => ({ wants: (k) => wants(guide, k), shows: (k) => shows(guide, k), cameraFromM: guide.cameraFromM }), warningsSaid);
+    watchedAt = null;
+  }
 }
 /** Routes whose line has been put onto the lanes (or asked to be): once each. */
 const laned = new WeakSet<Route>();

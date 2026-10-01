@@ -17,6 +17,8 @@ export class ZoneLayer {
   private ready = false;
   private data: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [] };
   private key = "";
+  /** The line the bands were last drawn along: a new line (the route moved onto the lanes) draws them again. */
+  private line: Line | null = null;
 
   constructor(private map: maplibregl.Map) {
     map.on("style.load", () => { this.ready = false; this.tryInstall(); });
@@ -27,8 +29,9 @@ export class ZoneLayer {
   /** The zones on the route, drawn along [line] (the route's own shape, so a bend is a bent band). */
   set(zones: Zone[], line: Line | null) {
     const key = line ? zones.map((z) => `${z.id}:${Math.round(z.alongM)}`).join("|") : "";
-    if (key === this.key) return;
+    if (key === this.key && line === this.line) return;
     this.key = key;
+    this.line = line;
     const features: GeoJSON.Feature[] = [];
     for (const z of line ? zones : []) {
       const left: LonLat[] = [], right: LonLat[] = [];
