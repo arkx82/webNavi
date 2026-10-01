@@ -15,6 +15,8 @@ export interface DriveState {
   /** Last written while driving; an old one is a drive long over. */
   at: number;
 }
+/** A drive ended, with when: so a device that ended it later wins over one still writing it (userdata.ts). */
+export interface DriveEnded { endedAt: number }
 
 const DRIVE_KEY = "nav-drive";
 const LAST_KEY = "nav-last-at";
@@ -26,14 +28,15 @@ const read = <T>(k: string): T | null => { try { return JSON.parse(localStorage.
 const write = (k: string, v: unknown) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private window */ } };
 
 export function saveDrive(state: DriveState | null) {
-  write(DRIVE_KEY, state);
-  push("drive", state);
+  const kept: DriveState | DriveEnded = state ?? { endedAt: Date.now() };
+  write(DRIVE_KEY, kept);
+  push("drive", kept);
 }
 
 /** The drive to take up again, if one was going on lately. */
 export function loadDrive(now = Date.now()): DriveState | null {
-  const s = read<DriveState>(DRIVE_KEY);
-  if (!s?.to?.at || !s.provider || !(now - s.at < RESUME_WITHIN_MS)) return null;
+  const s = read<DriveState | DriveEnded>(DRIVE_KEY);
+  if (!s || !("to" in s) || !s.to?.at || !s.provider || !(now - s.at < RESUME_WITHIN_MS)) return null;
   return s;
 }
 

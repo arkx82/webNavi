@@ -24,3 +24,15 @@ test("a failed send is tried again after 2 s, then 4, 8 … and at most a minute
   assert.equal(retryAfterMs(20), 60_000);
   assert.equal(retryAfterMs(0), 2000);
 });
+
+test("the drive in progress is merged by time: the latest copy wins, a stale ending never buries a drive still going", async () => {
+  const { pickDrive } = await import("./userdata.js");
+  const going = { to: { name: "집", at: [127, 37] }, provider: "kakao", at: 2_000 };
+  const endedEarlier = { endedAt: 1_000 }, endedLater = { endedAt: 3_000 };
+  assert.equal(pickDrive(going, endedEarlier, true), "server", "the other device is still driving: take its drive");
+  assert.equal(pickDrive(going, endedLater, true), "push", "ended here after the server's last word: tell the server");
+  assert.equal(pickDrive(endedEarlier, going, true), "push", "going here, ended elsewhere before: ours stands");
+  assert.equal(pickDrive(undefined, going, true), "push");
+  assert.equal(pickDrive(going, undefined, true), "server");
+  assert.equal(pickDrive(going, { ...going, at: 1_500 }, false), "server", "may not upload: the server's copy comes down");
+});

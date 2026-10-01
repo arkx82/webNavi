@@ -40,6 +40,21 @@ export type Merge = "server" | "push" | "keep";
  * goes up (the server's copy is older); else the server's comes down; else
  * what this device had before logins is uploaded, when it is this user's.
  */
+/**
+ * The drive in progress is merged by time, not by who changed it last: the
+ * copy written latest (a drive still going, or an ending) wins, whether it
+ * sits on the server or here. A device that ended its drive but could not
+ * tell the server (a 502 while it was redeployed) must not, on its next
+ * start, push that stale ending over a drive another device is still on.
+ */
+export function pickDrive(server: unknown, local: unknown, mayUpload: boolean): Merge {
+  const at = (v: unknown) => (v && typeof v === "object" ? Number((v as { at?: number }).at ?? (v as { endedAt?: number }).endedAt ?? 0) : 0);
+  const s = at(server), l = at(local);
+  if (server !== undefined && s >= l) return "server";
+  if (local !== undefined && mayUpload) return "push";
+  return server !== undefined ? "server" : "keep";
+}
+
 export function merge(s: { server: boolean; local: boolean; dirty: boolean; mayUpload: boolean }): Merge {
   if (s.local && s.dirty && s.mayUpload) return "push";
   if (s.server) return "server";
@@ -61,7 +76,8 @@ export async function pull(user: Me) {
   const kept = (await a.json()) as Partial<Record<UserKey, { value: unknown }>>;
   for (const key of Object.keys(STORAGE) as UserKey[]) {
     const server = kept[key], mine = local(key);
-    switch (merge({ server: !!server, local: mine !== undefined, dirty: read(dirtyKey(key)) != null, mayUpload })) {
+    const choice = key === "drive" ? pickDrive(server ? server.value : undefined, mine, mayUpload) : merge({ server: !!server, local: mine !== undefined, dirty: read(dirtyKey(key)) != null, mayUpload });
+    switch (choice) {
       case "server": write(STORAGE[key], JSON.stringify(server!.value)); write(dirtyKey(key), null); break;
       case "push": push(key, mine); break;
     }
