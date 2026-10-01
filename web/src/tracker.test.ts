@@ -365,3 +365,55 @@ test("out of P the fixes are followed again at once", () => {
   const at = tracker.frame(14_000)!.at;
   assert.ok(Math.abs(metres(start[0], start[1], at[0], at[1]) - 15) < 0.5);
 });
+
+test("on the route, the fixes gone and no reckoning (too slow): carried PREDICT_S on, then held, not crept on", () => {
+  const tracker = new Tracker();
+  tracker.setRoute(route);
+  tracker.feed(fix(offset(start, 0, 300), 0, { speed: 2 }), 0);
+  for (let t = 0; t <= 60_000; t += 16) tracker.frame(t);
+  const shown = tracker.frame(60_016)!;
+  assert.notEqual(shown.mode, "reckoning");
+  // 2 m/s for 2.5 s: 5 m on, no more.
+  assert.ok(shown.alongM! < 306 && metres(start[0], start[1], shown.at[0], shown.at[1]) < 306, `${metres(start[0], start[1], shown.at[0], shown.at[1])}`);
+});
+
+test("on the route, parked with the fixes gone: the speed it came in at is not carried on", () => {
+  const tracker = new Tracker();
+  tracker.setRoute(route);
+  const car = new CarTrack();
+  tracker.car = car;
+  tracker.feed(fix(offset(start, 0, 300), 0, { speed: 12 }), 0);
+  for (let t = 0; t <= 60_000; t += 16) {
+    if (t % 3000 === 0) car.add({ t, speedMps: null, gear: "P" }, t + 300);
+    tracker.frame(t);
+  }
+  const at = tracker.frame(60_016)!.at;
+  assert.ok(metres(start[0], start[1], at[0], at[1]) < 301, `${metres(start[0], start[1], at[0], at[1])}`);
+});
+
+test("reckoned into a car park and put in P there: it stays where it was reckoned to, not back at the entrance", () => {
+  const tracker = new Tracker();
+  tracker.setRoute(route);
+  const car = new CarTrack();
+  tracker.car = car;
+  tracker.feed(fix(offset(start, 0, 300), 0, { speed: 10 }), 0);
+  // 10 m/s for 5 s into the dark, then standing in P.
+  for (let t = 0; t <= 5000; t += 1000) car.add({ t, speedMps: 10 }, t + 300);
+  for (let t = 0; t <= 5000; t += 16) tracker.frame(t);
+  const reckoned = tracker.frame(5000)!.alongM!;
+  assert.ok(reckoned > 340, `${reckoned}`);
+  let most = 0, was = reckoned;
+  for (let t = 5016; t <= 30_000; t += 16) {
+    if (t % 3000 < 16) car.add({ t, speedMps: null, gear: "P" }, t + 300);
+    const at = tracker.frame(t)!.at;
+    const along = metres(start[0], start[1], at[0], at[1]);
+    most = Math.max(most, Math.abs(along - was));
+    was = along;
+  }
+  assert.ok(most < 2, `largest step a frame ${most} m`);
+  assert.ok(Math.abs(was - reckoned) < 15, `${was} vs ${reckoned}`);
+  // A vague fix from the car park does not take it back either.
+  tracker.feed(fix(offset(start, 0, 300), 31_000, { speed: 0, accM: 20 }), 31_000);
+  const at = tracker.frame(33_000)!.at;
+  assert.ok(Math.abs(metres(start[0], start[1], at[0], at[1]) - was) < 1);
+});

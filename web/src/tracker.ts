@@ -132,6 +132,8 @@ export class Tracker {
   car: Pick<CarTrack, "between" | "lastSpeed" | "freePath" | "lastAt" | "parked"> | null = null;
   /** The reckoning now is off the road (car-track.ts freePath). */
   private reckonFree = false;
+  /** Parked as of the last frame: the place it was drawn at then is where it stays. */
+  private wasParked = false;
   private offSince: number | null = null;
   /** Since when the car has been well clear of the road, on good fixes. */
   private farSince: number | null = null;
@@ -283,8 +285,18 @@ export class Tracker {
     // The car's own word on the way it went since the last fix, while it streams: then a car that went in slowly,
     // or stands in a jam inside, is placed by what it did.
     const wallNow = this.fixWall + (now - this.fixPerf);
-    // Parked: nothing to reckon, the fixes' silence or not.
+    // Parked: nothing to reckon, the fixes' silence or not, and the last fix's speed is not carried on.
     const parked = !!this.car?.parked(wallNow);
+    if (parked) this.speedMps = 0;
+    // Put in P where it was drawn — reckoned into a car park, say — it stays there: not taken back to the last fix
+    // (its entrance). A sharper fix still moves it (feed), from here.
+    if (parked && !this.wasParked && this.shownAt) {
+      this.glideFrom = this.glideTo = this.shownAt;
+      if (this.shownAlong != null) { this.glideFromAlong = this.glideToAlong = this.shownAlong; this.reckonAlong = this.shownAlong; }
+      this.reckonSince = 0;
+      this.reckonFree = false;
+    }
+    this.wasParked = parked;
     const byCar = lost && !parked && this.line && this.car ? this.car.between(this.fixWall, wallNow) : null;
     // Only a car really moving (or that says how it moves), on a route, and for a tunnel's length: past that it waits for a fix.
     const reckon = lost && !parked && lostForS <= (byCar ? RECKON_CAR_MAX_S : RECKON_MAX_S) && (byCar != null || this.speedMps >= RECKON_MIN_MPS);
@@ -332,7 +344,9 @@ export class Tracker {
         const dt = this.lastFrameAt ? Math.min(0.25, (now - this.lastFrameAt) / 1000) : 0;
         const predicted = this.glideToAlong + this.speedMps * Math.min(PREDICT_S, (now - this.lastFixAt) / 1000);
         let along = this.shownAlong ?? predicted;
-        along += this.speedMps * dt;
+        // Past PREDICT_S the place it is steered to stands: the car is carried no further than that, not crept on
+        // for as long as the fixes stay away (a car park, a car too slow to reckon on).
+        along = (now - this.lastFixAt) / 1000 > PREDICT_S ? Math.max(along, Math.min(predicted, along + this.speedMps * dt)) : along + this.speedMps * dt;
         if (this.glideS === SNAP_S && t < 1 && this.glideFromAlong != null) {
           // Out of a tunnel: from where the reckoning had the car to where the fix says, eased over SNAP_S — however
           // far the two were apart, a slide, not the leap a jump in the fixes is taken with.

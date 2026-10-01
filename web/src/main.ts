@@ -336,7 +336,7 @@ function frame() {
     const shown = tracker.frame();
     if (shown) {
       marker.setLngLat(shown.at);
-      put("mode", MODES[shown.mode] + (shown.reckonBy === "car" ? " (차량 속도)" : "") + (shown.offM != null ? ` · ${Math.round(shown.offM)} m` : ""));
+      put("mode", MODES[shown.mode] + (shown.reckonBy === "car" ? " (차량 속도)" : "") + (tracker.car?.parked() ? " (주차)" : "") + (shown.offM != null ? ` · ${Math.round(shown.offM)} m` : ""));
       // No fixes in the tunnel to say the speed: the car's own, while it is what moves the marker.
       if (shown.reckonBy === "car") put("speed", Math.round(shown.speedMps * 3.6).toString());
       markerBearing = markerBearing == null ? shown.bearing : lerpAngle(markerBearing, shown.bearing, MARKER_TURN_SHARE);
@@ -2749,6 +2749,8 @@ function simEnded() {
   // Back to where the car really is, at once: the drawn car forgets the pretend place, and the map goes to the last real fix.
   tracker.forget();
   tracker.car = carLink.track;
+  // The pretend speed is not left on the speedometer until a real fix comes.
+  put("speed", "--");
   if (realFix) {
     marker.setLngLat(realFix);
     map.jumpTo({ center: realFix });
