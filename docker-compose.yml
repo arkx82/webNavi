@@ -12,10 +12,12 @@ services:
       KOREA_OSRM_URL: http://osrm:5000
     volumes:
       - ./server/data:/data:ro
-      # Keys typed on /admin, encrypted; the master key sits beside them.
-      - nav_config:/config
-      # Phrases rendered once, kept across rebuilds.
-      - nav_tts:/tts
+      # Keys typed on /admin (encrypted, the master key beside them), the users' SQLite, the public-data caches:
+      # on the host under /mnt/data/webnavi so they can be seen and backed up with the rest (moved from a named
+      # volume 2026-10-01).
+      - /mnt/data/webnavi/config:/config
+      # Every sentence the voice has ever said, as WAV by (voice, text): rendered once, kept for good.
+      - /mnt/data/webnavi/tts:/tts
       # What tools/hdmap/build.py builds from 정밀도로지도 (it runs on the host, against the raw zips there).
       - /mnt/data/webnavi:/work
     expose: ["8080"]
@@ -49,8 +51,6 @@ services:
   #     - caddy_data:/data
   #     - caddy_config:/config
 
-volumes:
-  nav_config:
-  nav_tts:
-  # caddy_data:
-  # caddy_config:
+# volumes:
+#   caddy_data:
+#   caddy_config:
