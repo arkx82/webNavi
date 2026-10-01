@@ -327,15 +327,18 @@ export async function prerender(speaker: Speaker, voice = speaker.voice): Promis
     if (speaker.cached(text, voice)) { had++; continue; }
     // Model Studio rations requests by the minute (429 Throttling.RateQuota): a burst of new sentences waits and
     // tries again rather than giving the rest up; between sentences a short pause keeps under the rate.
-    for (let attempt = 0; ; attempt++) {
+    let done = false;
+    for (let attempt = 0; attempt < 4 && !done; attempt++) {
       try {
         await speaker.say(text, voice);
-        break;
+        done = true;
       } catch (e) {
-        if (attempt >= 3 || !/429|RateQuota|rate limit/i.test((e as Error).message)) throw e;
-        await new Promise((r) => setTimeout(r, 5_000 * (attempt + 1)));
+        if (!/429|RateQuota|rate limit/i.test((e as Error).message)) throw e;
+        // 10 s, 30 s, 60 s: a minute's ration refills; still throttled after that, this one is left for next time.
+        if (attempt < 3) await new Promise((r) => setTimeout(r, [10_000, 30_000, 60_000][attempt]));
       }
     }
+    if (!done) continue;
     made++;
     await new Promise((r) => setTimeout(r, 300));
   }
