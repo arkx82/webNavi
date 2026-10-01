@@ -40,7 +40,8 @@ export function laneGlyph(turns: Turn[]): string {
     return `<path d="M12 21V4"/><path d="M8 8l4-4 4 4"/><path d="M12 15H4"/><path d="M7 12l-3 3 3 3"/><path d="M12 15h8"/><path d="M17 12l3 3-3 3"/>`;
   }
   if (has("uturn", "left") && set.size === 2) {
-    return `<path d="M17 21V9a4 4 0 0 0-8 0v5"/><path d="M6 11l3 3 3-3"/><path d="M17 15H11"/><path d="M14 12l-3 3 3 3"/>`;
+    // A stem up the right that bends over and comes down (the U-turn), with a branch off the stem to the left.
+    return `<path d="M17 21V8a4 4 0 0 0-8 0v4"/><path d="M5 9l4 3 4-3"/><path d="M17 18H8"/><path d="M11 15l-3 3 3 3"/>`;
   }
   return turns.map((t) => `<path d="${PATH[t]}"/>`).join("");
 }

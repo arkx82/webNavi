@@ -142,6 +142,13 @@ function drawArrow(m: Maneuver, size: number): string {
     case "other": case "depart":
       body = `<circle cx="12" cy="12" r="4" fill="#fff"/>`;
       break;
+    case "left": case "right": {
+      // A turn as the car apps draw it: up the stem, then round the corner, the head pointing the way — not a
+      // straight arrow laid on its side.
+      const turn = `<path d="M14 22v-9a4 4 0 0 0-4-4H4" fill="none" stroke="#fff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M9 4 4 9l5 5" fill="none" stroke="#fff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>`;
+      body = m === "left" ? turn : `<g transform="translate(24 0) scale(-1 1)">${turn}</g>`;
+      break;
+    }
     default:
       body = `<path d="${head}" fill="#fff" transform="rotate(${rot[m] ?? 0} 12 12)"/>`;
   }
