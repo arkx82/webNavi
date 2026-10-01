@@ -129,7 +129,7 @@ export class Tracker {
   private fixWall = 0;
   private fixPerf = 0;
   /** The car's own speed and odometer (car-track.ts), when the car streams them; without, the last fix's speed is held. */
-  car: Pick<CarTrack, "between" | "lastSpeed" | "freePath" | "lastAt"> | null = null;
+  car: Pick<CarTrack, "between" | "lastSpeed" | "freePath" | "lastAt" | "parked"> | null = null;
   /** The reckoning now is off the road (car-track.ts freePath). */
   private reckonFree = false;
   private offSince: number | null = null;
@@ -178,6 +178,16 @@ export class Tracker {
     // The car itself says it is moving (its own speed, of late): the vague fix is not believed to hold it — no fix
     // at all, as far as the drawing goes, so the reckoning on the car's word takes over.
     const carLast = this.car?.lastAt;
+    // Parked, by the car's own gear: it is where it was, facing the way it was. A fix only refines the place when it
+    // is clearly sharper than the one that put it there; the wander of the rest (10–20 m in a car park) moves nothing.
+    const parked = !saysMoving && !!this.car?.parked(fix.t);
+    if (this.lastFix && parked && !(fix.accM < this.lastFix.accM * 0.7)) {
+      this.lastFixAt = now;
+      this.speedMps = 0;
+      this.reckonSince = 0;
+      this.reckonFree = false;
+      return;
+    }
     if (this.lastFix && fix.accM > VAGUE_ACC_M && !saysMoving && carLast != null && fix.t - carLast < 10_000 && (this.car!.lastSpeed() ?? 0) > 1.5) return;
     if (this.lastFix && fix.accM > VAGUE_ACC_M && !saysMoving) {
       this.lastFixAt = now;
@@ -196,6 +206,7 @@ export class Tracker {
       const raw = Math.max(0, moved - Math.max(fix.accM, previous.accM) * 0.5) / this.periodS;
       this.speedMps = this.speedMps * 0.6 + Math.min(raw, 70) * 0.4;
     } else this.speedMps = 0;
+    if (parked) this.speedMps = 0;
 
     let target: LonLat = [fix.lon, fix.lat];
     // Standing or creeping (under 5 km/h), the way the car points is kept: GPS wander would spin the map.
@@ -272,12 +283,14 @@ export class Tracker {
     // The car's own word on the way it went since the last fix, while it streams: then a car that went in slowly,
     // or stands in a jam inside, is placed by what it did.
     const wallNow = this.fixWall + (now - this.fixPerf);
-    const byCar = lost && this.line && this.car ? this.car.between(this.fixWall, wallNow) : null;
+    // Parked: nothing to reckon, the fixes' silence or not.
+    const parked = !!this.car?.parked(wallNow);
+    const byCar = lost && !parked && this.line && this.car ? this.car.between(this.fixWall, wallNow) : null;
     // Only a car really moving (or that says how it moves), on a route, and for a tunnel's length: past that it waits for a fix.
-    const reckon = lost && lostForS <= (byCar ? RECKON_CAR_MAX_S : RECKON_MAX_S) && (byCar != null || this.speedMps >= RECKON_MIN_MPS);
+    const reckon = lost && !parked && lostForS <= (byCar ? RECKON_CAR_MAX_S : RECKON_MAX_S) && (byCar != null || this.speedMps >= RECKON_MIN_MPS);
     // Off the road (no route, or declared off it) — a terminal, a car park — only on the car's word, and only where
     // its heading or its own idea of its place is seen to live on without the fixes (car-track.ts freePath).
-    const free = lost && this.car && (!this.line || this.declaredOff) && lostForS <= RECKON_CAR_MAX_S ? this.car.freePath(this.fixWall, wallNow) : null;
+    const free = lost && !parked && this.car && (!this.line || this.declaredOff) && lostForS <= RECKON_CAR_MAX_S ? this.car.freePath(this.fixWall, wallNow) : null;
     /** Where reckoning put the car this frame: its own along, not a projection back onto the line each frame. */
     let reckoned: Projection | null = null;
 

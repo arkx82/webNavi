@@ -16,13 +16,18 @@ test("an owner streaming frame: mph and miles into metres, the car's own place k
   assert.ok(Math.abs(s.odoM! - 12345.678 * MILE_M) < 1e-6);
   assert.ok(Math.abs(s.odoResM! - MILE_M / 1000) < 1e-9);
   assert.deepEqual(s.est, { lon: 127.0391, lat: 37.5012, heading: 182 });
-  assert.equal(s.shift, "D");
+  assert.equal(s.gear, "D");
 });
 
 test("parked, the speed is empty: standing, not unknown", () => {
   const s = parseFrame("1790000000123,,12345.6,80,35,,,,0,P,250,230,")!;
   assert.equal(s.speedMps, null);
   assert.equal(s.est, null);
+  assert.equal(s.gear, "P");
+  // Blank, as it often is parked: no gear said, and standing.
+  const blank = parseFrame("1790000000123,,12345.6,80,35,,,,0,,250,230,")!;
+  assert.equal(blank.gear, null);
+  assert.equal(blank.speedMps, null);
   // In gear with no speed figure: 0.
   assert.equal(parseFrame("1790000000123,,12345.6,80,35,,,,0,D,250,230,")!.speedMps, 0);
   assert.equal(parseFrame("garbage"), null);
@@ -61,6 +66,10 @@ test("a Fleet Telemetry record, typed or as strings", () => {
   // Parked.
   const parked = parseTelemetry(JSON.stringify({ data: [{ key: "Gear", value: { shiftStateValue: "ShiftStateP" } }], createdAt: "2026-10-01T12:00:02Z", vin: "V" }))!;
   assert.equal(parked.sample.speedMps, null);
+  assert.equal(parked.sample.gear, "P");
+  const driving = parseTelemetry(JSON.stringify({ data: [{ key: "Gear", value: { shiftStateValue: "ShiftStateD" } }], createdAt: "2026-10-01T12:00:03Z", vin: "V" }))!;
+  assert.equal(driving.sample.gear, "D");
+  assert.equal("speedMps" in driving.sample, false);
   assert.equal(parseTelemetry("{"), null);
   assert.equal(parseTelemetry(JSON.stringify({ data: [], vin: "V" })), null);
 });

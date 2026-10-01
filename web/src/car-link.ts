@@ -16,6 +16,9 @@ export class CarLink {
   samples = 0;
   onState: (state: string) => void = () => {};
   onFirst: (s: CarSample) => void = () => {};
+  /** The gear as the car said it, each time it changes (null: left blank). */
+  onGear: (gear: CarSample["gear"]) => void = () => {};
+  private gear: CarSample["gear"];
   private source: EventSource | null = null;
   private retry: number | null = null;
   /** The car's own time between samples since the last report, ms: how often the stream really sends. */
@@ -45,6 +48,7 @@ export class CarLink {
       if (this.lastT && s.t > this.lastT) this.gaps.push(s.t - this.lastT);
       this.lastT = Math.max(this.lastT, s.t);
       this.track.add(s);
+      if (s.gear !== undefined && s.gear !== this.gear) { this.gear = s.gear; this.onGear(s.gear); }
     };
     es.onerror = () => {
       // Closed for good (a 204, or refused): no car for this user.

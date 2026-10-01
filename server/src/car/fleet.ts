@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import type { Settings } from "../settings.js";
 import { RedisSubscriber } from "./redis.js";
-import { MILE_M, MPH_MPS, OdoResolution, type CarSample } from "./sample.js";
+import { MILE_M, MPH_MPS, OdoResolution, gearOf, type CarSample } from "./sample.js";
 import { signForFleet, type FleetKey } from "./schnorr.js";
 import type { CarSource } from "./hub.js";
 
@@ -216,8 +216,9 @@ export function parseTelemetry(json: string, odo = new OdoResolution()): { vin: 
         if (v.num != null) { sample.odoM = v.num * MILE_M; sample.odoResM = odo.feed(v.raw ?? String(v.num)); }
         break;
       case "Gear":
+        sample.gear = gearOf(v.text);
         // Parked: standing, whatever the speed last said.
-        if (v.text && /P$/.test(v.text) && sample.speedMps === undefined) sample.speedMps = null;
+        if (sample.gear === "P" && sample.speedMps === undefined) sample.speedMps = null;
         break;
       case "Location": place = v.loc; break;
       case "GpsHeading": heading = v.num; break;

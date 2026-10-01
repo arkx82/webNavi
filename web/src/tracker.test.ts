@@ -325,3 +325,43 @@ test("vague fixes while the car says it moves are not taken to hold it: the reck
   assert.equal(shown.mode, "reckoning");
   assert.ok(Math.abs(shown.alongM! - 500) < 15, `${shown.alongM}`);
 });
+
+test("parked by the car's own gear: the fixes' wander neither moves the marker nor turns it", () => {
+  const tracker = new Tracker();
+  const car = new CarTrack();
+  // The owner streaming parked: every 3 s, the gear blank or P, no speed, its heading wandering with the GPS.
+  for (let t = 0; t <= 60_000; t += 3000) car.add({ t, speedMps: null, gear: t % 6000 ? "P" : null, est: { lon: start[0], lat: start[1], heading: (t / 100) % 360 } }, t + 300);
+  tracker.car = car;
+  tracker.feed(fix(start, 0, { speed: 0, course: null, accM: 12 }), 0);
+  const first = tracker.frame(100)!;
+  // Fixes every 8 s, 15 m about in every direction, with a jittered speed and course of their own.
+  for (let t = 8000; t <= 56_000; t += 8000) {
+    tracker.feed(fix(offset(start, (t / 40) % 360, 15), t, { speed: 1.8, course: (t / 30) % 360, accM: 13 }), t);
+    for (let f = t; f < t + 8000; f += 500) {
+      const shown = tracker.frame(f)!;
+      assert.notEqual(shown.mode, "reckoning");
+      assert.ok(metres(start[0], start[1], shown.at[0], shown.at[1]) < 0.5, `moved at ${f}`);
+      assert.equal(shown.bearing, first.bearing, `turned at ${f}`);
+    }
+  }
+  // A sharper fix refines the place, still without turning it.
+  tracker.feed(fix(offset(start, 90, 4), 58_000, { speed: 1.8, course: 200, accM: 4 }), 58_000);
+  const refined = tracker.frame(62_000)!;
+  assert.ok(Math.abs(metres(start[0], start[1], refined.at[0], refined.at[1]) - 4) < 0.5);
+  assert.equal(refined.bearing, first.bearing);
+});
+
+test("out of P the fixes are followed again at once", () => {
+  const tracker = new Tracker();
+  const car = new CarTrack();
+  for (let t = 0; t <= 9000; t += 3000) car.add({ t, speedMps: null, gear: "P" }, t + 300);
+  tracker.car = car;
+  tracker.feed(fix(start, 0, { speed: 0, accM: 12 }), 0);
+  tracker.feed(fix(offset(start, 0, 15), 8000, { speed: 0, accM: 12 }), 8000);
+  const held = tracker.frame(9000)!.at;
+  assert.ok(metres(start[0], start[1], held[0], held[1]) < 0.5);
+  car.add({ t: 10_000, speedMps: 0, gear: "D" }, 10_300);
+  tracker.feed(fix(offset(start, 0, 15), 11_000, { speed: 0, accM: 12 }), 11_000);
+  const at = tracker.frame(14_000)!.at;
+  assert.ok(Math.abs(metres(start[0], start[1], at[0], at[1]) - 15) < 0.5);
+});

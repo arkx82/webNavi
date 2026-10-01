@@ -220,6 +220,8 @@ const tracker = new Tracker();
 const carLink = new CarLink();
 tracker.car = carLink.track;
 carLink.onState = (state) => log(`차량 스트리밍: ${state}${carLink.name ? ` (${carLink.name})` : ""}`);
+// Parked (P, or blank with no speed), the marker holds still whatever the fixes do (tracker.ts): the record of when.
+carLink.onGear = (g) => log(`차량 기어 ${g ?? "빈칸"}${carLink.track.parked() ? " · 주차로 봄" : ""}`);
 carLink.onFirst = (s) => log(`차량 첫 샘플: 속도 ${s.speedMps == null ? "없음" : Math.round(s.speedMps * 3.6) + " km/h"} · 오도미터 ${s.odoResM == null ? "없음" : `${s.odoResM.toFixed(1)} m 단위`} · 차 자체 위치 ${s.est ? "있음" : "없음"}`);
 // Without a route the car's stream is asked for only while the fixes are gone or vague (a car park, a terminal: the
 // reckoning off the road, tracker.ts), and let go once they have been good for a minute. With one, startDrive opens it.

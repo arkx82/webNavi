@@ -21,6 +21,8 @@ export interface CarSample {
   odoResM?: number | null;
   /** The car's own estimate of where it is, when it gives one: kept for the record. */
   est?: { lon: number; lat: number; heading: number | null } | null;
+  /** "P", "R", "N", "D"; null when the car leaves it blank (parked, asleep); undefined when this sample does not carry it. */
+  gear?: "P" | "R" | "N" | "D" | null;
 }
 
 /** Past the last sample the speed is held this long; beyond it the answer stops, and the caller goes on its own way. */
@@ -31,6 +33,8 @@ export const ODO_FINE_M = 10;
 const KEEP_MS = 40 * 60_000;
 /** The car's clock and ours this far apart is a clock gone wrong, not a delay: put right. */
 const SKEW_MS = 5_000;
+/** "Parked" is believed this long after the car last said anything; past it the link may be gone, and the car with it. */
+export const PARKED_FRESH_MS = 60_000;
 
 interface Point { t: number; v: number }
 /** The car's own idea of where it is, and which way it points (degrees from north; null when it does not say). */
@@ -63,6 +67,9 @@ export class CarTrack {
   private ests: Est[] = [];
   lastEst: CarSample["est"] = null;
   lastEstAt = 0;
+  /** In P (or the gear blank with no speed, as the owner streaming has it parked), as of [parkT] by the car's clock. */
+  private park = false;
+  private parkT = -Infinity;
 
   /** A sample in, as it came; [arrivedAt] our clock when it did. Out of order and repeated (a resend) is fine. */
   add(s: CarSample, arrivedAt = Date.now()) {
@@ -76,6 +83,11 @@ export class CarTrack {
       if (prev && this.odos[i].v - prev.v < -1) this.oddSteps++;
     }
     if (s.odoResM != null && Number.isFinite(s.odoResM)) this.resM = s.odoResM;
+    if (s.t >= this.parkT) {
+      if (s.gear !== undefined) { this.park = s.gear === "P" || (s.gear === null && s.speedMps === null); this.parkT = s.t; }
+      // Whatever the gear last said, a car that goes is not parked.
+      if (s.speedMps != null && s.speedMps > 0.5) { this.park = false; this.parkT = s.t; }
+    }
     if (s.est && Number.isFinite(s.est.lon) && Number.isFinite(s.est.lat)) {
       this.lastEst = s.est;
       this.lastEstAt = s.t;
@@ -100,6 +112,14 @@ export class CarTrack {
     this.skewMs = null;
     this.ests = [];
     this.lastEst = null;
+    this.park = false;
+    this.parkT = -Infinity;
+  }
+
+  /** The car says it is parked, and said so lately (by [now], our clock): it is not going anywhere, whatever the fixes say. */
+  parked(now = Date.now()): boolean {
+    const at = this.lastAt;
+    return this.park && at != null && now - at < PARKED_FRESH_MS;
   }
 
   /** Our clock in the car's: the same unless the two are seconds apart. */

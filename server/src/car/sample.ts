@@ -12,6 +12,16 @@ export interface CarSample {
   odoM?: number | null;
   odoResM?: number | null;
   est?: { lon: number; lat: number; heading: number | null } | null;
+  /** The gear: "P", "R", "N", "D"; null when the car leaves it blank (as it does parked and asleep). Absent when this sample does not say. */
+  gear?: Gear | null;
+}
+
+export type Gear = "P" | "R" | "N" | "D";
+
+/** "P", "ShiftStateP" (Fleet Telemetry) and the like as a gear; anything else (blank, "ShiftStateInvalid") null. */
+export function gearOf(raw: string | null | undefined): Gear | null {
+  const m = (raw ?? "").trim().match(/^(?:ShiftState)?([PRND])$/);
+  return m ? (m[1] as Gear) : null;
 }
 
 export const MILE_M = 1609.344;

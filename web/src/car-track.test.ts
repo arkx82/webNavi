@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { CarTrack, HOLD_MS, type CarSample } from "./car-track";
+import { CarTrack, HOLD_MS, PARKED_FRESH_MS, type CarSample } from "./car-track";
 
 const T0 = 1_800_000_000_000;
 
@@ -117,4 +117,25 @@ test("standing: nowhere, whatever the rest", () => {
   const p = car.freePath(T0, T0 + 10_000)!;
   assert.equal(p.dE, 0);
   assert.equal(p.dN, 0);
+});
+
+test("parked: P, or the gear blank with no speed; not once it goes, nor when the car has long been silent", () => {
+  const car = new CarTrack();
+  assert.equal(car.parked(0), false);
+  car.add({ t: 0, speedMps: null, gear: "P" }, 300);
+  assert.equal(car.parked(1000), true);
+  car.add({ t: 3000, speedMps: null, gear: null }, 3300);
+  assert.equal(car.parked(4000), true);
+  // Stale: the link may be gone, and the car with it.
+  assert.equal(car.parked(3000 + PARKED_FRESH_MS + 1), false);
+  // A sample late, from before: does not undo what is newer.
+  car.add({ t: 6000, speedMps: 0, gear: "D" }, 6300);
+  car.add({ t: 5000, speedMps: null, gear: "P" }, 6400);
+  assert.equal(car.parked(7000), false);
+  // Fleet Telemetry: the gear only when it changes; a speed alone after P says it goes.
+  car.add({ t: 8000, gear: "P" }, 8300);
+  car.add({ t: 9000, odoM: 1 }, 9300);
+  assert.equal(car.parked(9500), true);
+  car.add({ t: 10_000, speedMps: 3 }, 10_300);
+  assert.equal(car.parked(10_500), false);
 });

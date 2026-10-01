@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { connect as http2 } from "node:http2";
 import type { Settings } from "../settings.js";
-import { MPH_MPS, MILE_M, OdoResolution, type CarSample } from "./sample.js";
+import { MPH_MPS, MILE_M, OdoResolution, gearOf, type CarSample } from "./sample.js";
 
 /**
  * The car through Tesla's owner API and its streaming, the way TeslaMate
@@ -177,24 +177,24 @@ export function postH2(url: string, body: string, type: string): Promise<{ statu
 }
 
 /** One "time,speed,odometer,…" frame, in COLUMNS' order, as a sample; [odo] reads the odometer's fineness as it goes. */
-export function parseFrame(value: string, odo = new OdoResolution()): (CarSample & { shift: string | null }) | null {
+export function parseFrame(value: string, odo = new OdoResolution()): CarSample | null {
   const cells = value.split(",");
   const t = Number(cells[0]);
   if (!Number.isFinite(t) || t <= 0) return null;
   const cell = (name: (typeof COLUMNS)[number]) => cells[COLUMNS.indexOf(name) + 1] ?? "";
   const num = (name: (typeof COLUMNS)[number]) => { const c = cell(name); if (c === "") return null; const n = Number(c); return Number.isFinite(n) ? n : null; };
-  const shift = cell("shift_state") || null;
+  const gear = gearOf(cell("shift_state"));
   const mph = num("speed");
   const miles = num("odometer");
   const lat = num("est_lat"), lon = num("est_lng");
   return {
     t,
     // Empty in P (and as it wakes): standing.
-    speedMps: mph == null ? (shift == null || shift === "P" ? null : 0) : mph * MPH_MPS,
+    speedMps: mph == null ? (gear == null || gear === "P" ? null : 0) : mph * MPH_MPS,
     odoM: miles == null ? null : miles * MILE_M,
     odoResM: miles == null ? odo.metres() : odo.feed(cell("odometer")),
     est: lat != null && lon != null && (lat !== 0 || lon !== 0) ? { lon, lat, heading: num("est_heading") } : null,
-    shift,
+    gear,
   };
 }
 
@@ -308,12 +308,11 @@ export class OwnerStream {
       if (!s) return;
       this.attempts = 0;
       this.disconnects = 0;
-      this.lastShift = s.shift;
+      this.lastShift = s.gear ?? null;
       this.lastSampleAt = Date.now();
       this.lastError = null;
       this.set("streaming");
-      const { shift: _shift, ...sample } = s;
-      this.onSample(sample);
+      this.onSample(s);
       return;
     }
     if (msg.msg_type !== "data:error") return;
