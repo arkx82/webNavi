@@ -371,10 +371,11 @@ app.get<{ Querystring: RouteQuery }>("/api/route", async (request, reply) => {
     // Our own route only with live speeds on it: without them it runs at the limit and reads quicker than it is
     // (the first lookup in an area comes before that area's speeds are in; the recheck on the move brings it back).
     const routes = came.filter((r) => r.provider !== "korea" || r.segments.some((s) => s.congestion > 0));
-    if (routes.length < came.length) request.log.info("korea route left out: no live speeds on it yet");
+    const pending: Provider[] = routes.length < came.length ? ["korea"] : [];
+    if (pending.length) request.log.info("korea route held back: no live speeds on it yet (the page asks again in a moment)");
     const errors = settled.flatMap((r, i) => (r.status === "rejected" ? [`${ready[i].name}: ${(r.reason as Error).message}`] : []));
-    traffic.touch([s, g, ...routes.flatMap((r) => r.path.filter((_, i) => i % 20 === 0))]);
-    return { routes, errors };
+    traffic.touch([s, g, ...came.flatMap((r) => r.path.filter((_, i) => i % 20 === 0))]);
+    return { routes, errors, pending };
   }
   const provider = providers[name];
   if (!provider) return reply.code(400).send({ error: `unknown provider ${name}` });

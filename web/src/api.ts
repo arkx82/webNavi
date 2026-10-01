@@ -30,7 +30,7 @@ export const api = {
   route: (provider: Provider, start: LonLat, goal: LonLat) =>
     get<Route>("/api/route", { provider, start: pair(start), goal: pair(goal), ...moving() }).then(onLanes),
   routes: async (start: LonLat, goal: LonLat) => {
-    const a = await get<{ routes: Route[]; errors: string[] }>("/api/route", { provider: "all", start: pair(start), goal: pair(goal), ...moving() });
+    const a = await get<{ routes: Route[]; errors: string[]; pending?: Provider[] }>("/api/route", { provider: "all", start: pair(start), goal: pair(goal), ...moving() });
     await Promise.all(a.routes.map(onLanes));
     return a;
   },

@@ -871,11 +871,35 @@ async function fetchOffers(): Promise<boolean> {
     setFollow(false);
     routeLayer.fit(...offers);
     log(`경로 ${offers.map((r) => `${r.provider} ${minutes(r.durationS)}`).join(", ")}`);
+    // Our own route held back until this area's live speeds are in the router (half a minute): asked again then.
+    if (answer.pending?.includes("korea")) koreaLater(goal);
     return true;
   } catch (e) {
     el("pv-msg").textContent = `경로 실패: ${(e as Error).message}`;
     return false;
   }
+}
+
+/** How long the area's speeds take to reach the router after a lookup: a fetch, the file, osrm-customize. */
+const KOREA_LATER_MS = 35_000;
+/**
+ * Our own route for [to], asked once the live speeds have had time to land, and slipped in among the cards
+ * if they are still open for the same place and the route carries live speeds now.
+ */
+function koreaLater(to: Place) {
+  setTimeout(async () => {
+    if (el("s-preview").hidden || goal !== to || offers.some((r) => r.provider === "korea")) return;
+    try {
+      const r = await api.route("korea", here(), to.at);
+      if (el("s-preview").hidden || goal !== to || !r.segments.some((s) => s.congestion > 0)) return;
+      offers = [...offers, r].sort((a, b) => a.durationS - b.durationS);
+      drawOffers();
+      routeLayer.show(chosen, offers);
+      log(`자체 경로 추가: ${minutes(r.durationS)}`);
+    } catch (e) {
+      log(`자체 경로 실패 ${(e as Error).message}`);
+    }
+  }, KOREA_LATER_MS);
 }
 
 function drawOffers() {
