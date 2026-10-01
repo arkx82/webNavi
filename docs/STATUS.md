@@ -138,4 +138,4 @@ npm test    # 서버 20개 + 웹 22개
 ## 저장소
 
 GitHub `arkx82/webNavi` (공개, Apache-2.0). 키·비밀번호는 저장소에 없다 — `/admin` 에 넣은 값은 서버의
-`CONFIG_DIR`(도커 볼륨 `nav_config`)에 암호화되어 있고, `.env`·`server/config/`·`server/tts/` 는 제외된다.
+`CONFIG_DIR`(호스트 `/mnt/data/webnavi/config`)에 암호화되어 있고, `.env`·`server/config/`·`server/tts/` 는 제외된다.

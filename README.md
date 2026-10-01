@@ -48,8 +48,9 @@ docker compose up -d --build   # NUC: nav + caddy. DOMAIN 이 .env 에 있어야
 - 환경변수(`.env`)는 페이지에서 비워 둔 필드의 대체값. 페이지에서 `-` 를 넣으면
   저장값이 지워지고 환경변수로 돌아간다.
 
-도커에서는 `nav_config` 볼륨이 `/config`, `nav_tts` 가 `/tts` 라 이미지를 다시
-빌드해도 남는다.
+도커에서는 호스트의 `/mnt/data/webnavi/config` 가 `/config`, `/mnt/data/webnavi/tts` 가 `/tts` 로 마운트되어(2026-10-01 까지는
+이름 있는 볼륨) 이미지를 다시 빌드해도 남고, 호스트에서 바로 보이고 백업된다. `/tts` 에는 음성이 한 번이라도 말한 문장이 전부
+(목소리, 문장) 해시 이름의 WAV 로 남고, 어느 문장이 어느 파일인지·언제 몇 번 쓰였는지는 `/config/webnavi.db` 의 `tts` 표에 있다.
 
 ## NUC 에 올리기
 
