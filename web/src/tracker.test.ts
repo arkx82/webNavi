@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Line, metres, offset } from "./geo";
-import { OFF_AGAIN_S, OFF_FAR_M, OFF_M, OFF_S, LOST_S, Tracker } from "./tracker";
+import { OFF_AGAIN_S, OFF_FAR_M, OFF_M, OFF_S, LOST_S, Tracker, type ReckonEnd } from "./tracker";
+import { CarTrack } from "./car-track";
 import type { Fix } from "./gps";
 import type { LonLat, Route } from "./types";
 
@@ -205,4 +206,122 @@ test("the camera looks 2.5 s ahead along the chord, so a bend is turned into as 
   tracker.frame(now + 1000);
   const straight = tracker.cameraBearing(90, 1);
   assert.ok(straight < 1 || straight > 359, `straight ${straight}`);
+});
+
+// ---- the car's own speed (car-track.ts) in a tunnel ----
+
+/** A car that streams: [speedAt] its speed through time, a sample a second from [from] to [to], 300 ms on the way. */
+function carFeed(speedAt: (t: number) => number, from: number, to: number): CarTrack {
+  const car = new CarTrack();
+  for (let t = from; t <= to; t += 1000) car.add({ t, speedMps: speedAt(t) }, t + 300);
+  return car;
+}
+
+test("a jam in the tunnel: the car's own speed stands the marker still, not carried on at the speed it went in at", () => {
+  const tracker = new Tracker();
+  tracker.setRoute(route);
+  // In at 20 m/s, down to standing in five seconds, standing two minutes.
+  tracker.car = carFeed((t) => (t < 5000 ? 20 - 4 * (t / 1000) : 0), 0, 130_000);
+  tracker.feed(fix(offset(start, 0, 300), 0, { speed: 20 }), 0);
+  const in60 = tracker.frame(60_000)!;
+  assert.equal(in60.mode, "reckoning");
+  assert.equal(in60.reckonBy, "car");
+  // 20 → 0 over five seconds is about 60 m (the held steps a little more): not the 1200 the last speed would make.
+  assert.ok(in60.alongM! > 340 && in60.alongM! < 380, `${in60.alongM}`);
+  assert.equal(in60.speedMps, 0);
+  const in120 = tracker.frame(120_000)!;
+  assert.ok(Math.abs(in120.alongM! - in60.alongM!) < 0.01, "still standing");
+});
+
+test("a car that went into the tunnel slowly is still reckoned, on its own speed", () => {
+  const tracker = new Tracker();
+  tracker.setRoute(route);
+  // In at 2 m/s (below the floor a fix's speed needs), then away at 15.
+  tracker.car = carFeed((t) => (t < 10_000 ? 2 : 15), 0, 40_000);
+  tracker.feed(fix(offset(start, 0, 300), 0, { speed: 2 }), 0);
+  const shown = tracker.frame(30_000)!;
+  assert.equal(shown.mode, "reckoning");
+  assert.ok(Math.abs(shown.alongM! - (300 + 2 * 10 + 15 * 20)) < 20, `${shown.alongM}`);
+});
+
+test("the link gone too, mid-tunnel: from where the car last said, at the speed it last said", () => {
+  const tracker = new Tracker();
+  tracker.setRoute(route);
+  // 10 m/s, the samples stopping at 20 s.
+  tracker.car = carFeed(() => 10, 0, 20_000);
+  tracker.feed(fix(offset(start, 0, 100), 0, { speed: 25 }), 0);
+  const shown = tracker.frame(40_000)!;
+  assert.equal(shown.mode, "reckoning");
+  // 10 m/s throughout (the car's, not the fix's 25): 400 m on.
+  assert.ok(Math.abs(shown.alongM! - 500) < 5, `${shown.alongM}`);
+});
+
+test("out of the tunnel the marker slides to the fix, never leaps, and the miss is told", () => {
+  const tracker = new Tracker();
+  tracker.setRoute(route);
+  const ends: ReckonEnd[] = [];
+  tracker.onReckonEnd = (r) => ends.push(r);
+  tracker.feed(fix(offset(start, 0, 300), 0, { speed: 20 }), 0);
+  for (let t = 0; t <= 20_000; t += 16) tracker.frame(t);
+  // Reckoned at 20 m/s to about 700 m; the car had slowed and is at 550.
+  tracker.feed(fix(offset(start, 0, 550), 20_000, { speed: 10 }), 20_000);
+  assert.equal(ends.length, 1);
+  assert.equal(ends[0].by, "speed");
+  assert.ok(Math.abs(ends[0].errorM! - -150) < 5, `${ends[0].errorM}`);
+  // Where the car is drawn, metres up the (straight, northward) road.
+  const drawn = (t: number) => { const at = tracker.frame(t)!.at; return metres(start[0], start[1], at[0], at[1]); };
+  let was = drawn(20_000);
+  assert.ok(Math.abs(was - 700) < 5, `${was}`);
+  let most = 0;
+  for (let t = 20_016; t <= 22_000; t += 16) {
+    const along = drawn(t);
+    most = Math.max(most, Math.abs(along - was));
+    was = along;
+  }
+  assert.ok(most < 5, `largest step a frame ${most} m`);
+  assert.ok(Math.abs(was - (550 + 10 * 2)) < 5, `${was}`);
+});
+
+// ---- off the road, on the car's heading ----
+
+test("no route, the fixes gone (a car park): the car goes the way its own estimate goes, and slides back to the fix", () => {
+  const tracker = new Tracker();
+  const ends: ReckonEnd[] = [];
+  tracker.onReckonEnd = (r) => ends.push(r);
+  const car = new CarTrack();
+  // 5 m/s due north, the car's estimate keeping up.
+  for (let t = 0; t <= 30_000; t += 1000) car.add({ t, speedMps: 5, est: { lon: start[0], lat: offset(start, 0, 5 * (t / 1000))[1], heading: 0 } }, t + 300);
+  tracker.car = car;
+  tracker.feed(fix(start, 0, { speed: 5 }), 0);
+  const shown = tracker.frame(20_000)!;
+  assert.equal(shown.mode, "reckoning");
+  assert.equal(shown.reckonBy, "car");
+  assert.ok(Math.abs(metres(start[0], start[1], shown.at[0], shown.at[1]) - 100) < 3, `${metres(start[0], start[1], shown.at[0], shown.at[1])}`);
+  tracker.feed(fix(offset(start, 0, 110), 22_000, { speed: 5 }), 22_000);
+  assert.equal(ends.length, 1);
+  assert.equal(ends[0].free, true);
+  assert.ok(ends[0].errorM! < 15, `${ends[0].errorM}`);
+});
+
+test("no route, the car's heading and estimate both frozen: held where it was, not sent straight on", () => {
+  const tracker = new Tracker();
+  const car = new CarTrack();
+  for (let t = 0; t <= 30_000; t += 1000) car.add({ t, speedMps: 5, est: { lon: start[0], lat: start[1], heading: 0 } }, t + 300);
+  tracker.car = car;
+  tracker.feed(fix(start, 0, { speed: 5 }), 0);
+  const shown = tracker.frame(20_000)!;
+  assert.notEqual(shown.mode, "reckoning");
+  assert.ok(metres(start[0], start[1], shown.at[0], shown.at[1]) < 2);
+});
+
+test("vague fixes while the car says it moves are not taken to hold it: the reckoning on the car's word goes on", () => {
+  const tracker = new Tracker();
+  tracker.setRoute(route);
+  tracker.car = carFeed(() => 10, 0, 40_000);
+  tracker.feed(fix(offset(start, 0, 300), 0, { speed: 10 }), 0);
+  // A garage's wandering fixes, no speed said.
+  for (let t = 1000; t <= 20_000; t += 1000) tracker.feed(fix(offset(start, 90, 60), t, { speed: null, heading: null, course: null, accM: 80 }), t);
+  const shown = tracker.frame(20_000)!;
+  assert.equal(shown.mode, "reckoning");
+  assert.ok(Math.abs(shown.alongM! - 500) < 15, `${shown.alongM}`);
 });

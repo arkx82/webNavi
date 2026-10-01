@@ -610,10 +610,7 @@ body.day #lanes .lane.only, body.day #lanes .lane.only i { color: #c2410c; }
   pointer-events: none;
 }
 #section-hud[hidden] { display: none !important; }
-/* Under the junction pill or the lanes strip when either shows at the same spot; under both when both do. */
-#closeup:not([hidden]) ~ #section-hud { top: 64px; }
-#lanes:not([hidden]) ~ #section-hud { top: 96px; }
-#lanes:not([hidden]) ~ #closeup:not([hidden]) ~ #section-hud { top: 144px; }
+/* Under the lane card and the junction pill when they show: stacked by their real heights (main.ts measure). */
 body.side-open #section-hud { left: calc(var(--hud-right) + (100% - var(--hud-right) - 440px) / 2); }
 @media (max-width: 800px) {
   #section-hud { left: 50%; max-width: calc(100% - 32px); }

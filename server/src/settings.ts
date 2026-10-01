@@ -36,6 +36,18 @@ export interface Secrets {
   tidalRefresh?: string;
   tidalUserId?: string;
   tidalCountryCode?: string;
+  /**
+   * Tesla (car/): where the car's speed comes from ("owner" streaming or "fleet" telemetry), the owner login's
+   * refresh token, the cars linked (JSON, car/hub.ts LinkedCar[]); the Fleet API app's client and its login, and
+   * the host:port of our fleet-telemetry server as the car is to reach it.
+   */
+  teslaSource?: string;
+  teslaRefresh?: string;
+  teslaCars?: string;
+  teslaClientId?: string;
+  teslaClientSecret?: string;
+  teslaFleetRefresh?: string;
+  teslaTelemetryHost?: string;
 }
 
 export type SecretName = keyof Secrets;
@@ -62,6 +74,13 @@ const ENV: Record<SecretName, string | undefined> = {
   tidalRefresh: undefined,
   tidalUserId: undefined,
   tidalCountryCode: undefined,
+  teslaSource: undefined,
+  teslaRefresh: undefined,
+  teslaCars: undefined,
+  teslaClientId: "TESLA_CLIENT_ID",
+  teslaClientSecret: "TESLA_CLIENT_SECRET",
+  teslaFleetRefresh: undefined,
+  teslaTelemetryHost: "TESLA_TELEMETRY_HOST",
 };
 
 /** The fields the page edits, in the order it shows them. */
@@ -70,6 +89,7 @@ export const EDITABLE: SecretName[] = [
   "opinetKey", "dataGoKrKey", "evTariffs",
   "exKey", "itsKey", "seoulKey",
   "tidalClientId", "tidalClientSecret",
+  "teslaClientId", "teslaClientSecret", "teslaTelemetryHost",
 ];
 
 export class Settings {
@@ -133,7 +153,7 @@ export class Settings {
       out[name] = {
         set: !!value,
         from: saved ? "saved" : envVal ? "env" : isDefault ? "default" : null,
-        hint: isDefault ? "기본 내장 키 (…" + value!.slice(-4) + ")" : value ? (name === "ttsVoice" || name === "evTariffs" ? value : "…" + value.slice(-4)) : "",
+        hint: isDefault ? "기본 내장 키 (…" + value!.slice(-4) + ")" : value ? (name === "ttsVoice" || name === "evTariffs" || name === "teslaTelemetryHost" ? value : "…" + value.slice(-4)) : "",
       };
     }
     return out;

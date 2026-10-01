@@ -1,3 +1,4 @@
+import type { CarTrack } from "./car-track";
 import { Line, offset } from "./geo";
 import type { Fix, Gps } from "./gps";
 import type { Route } from "./types";
@@ -7,7 +8,9 @@ import type { Route } from "./types";
  * the chosen speed, a few metres of jitter to the side the way a real
  * receiver wobbles. Two faults on demand — a tunnel (no fixes for a
  * while) and a wrong turn (60 m off to the side) — so the reckoning and
- * the re-route can be watched at a desk.
+ * the re-route can be watched at a desk. And the car's own speed and
+ * odometer, as the car streams them (car-track.ts), all the while: a
+ * jam in the tunnel shows the marker standing with the car.
  */
 export class Simulator {
   private line: Line;
@@ -18,6 +21,13 @@ export class Simulator {
   speedMps = 50 / 3.6;
   private tunnelUntil = 0;
   private strayUntil = 0;
+  /** A jam in the tunnel: from when, and the speed it went in at. */
+  private jamFrom = 0;
+  private jamFromMps = 0;
+  /** The pretend odometer, metres. */
+  private odoM = 50_000_000;
+  /** Where the pretend car's own speed goes, as the car's streaming would bring it. */
+  car: CarTrack | null = null;
   onEnd: () => void = () => {};
 
   constructor(private gps: Gps, route: Route) {
@@ -46,6 +56,27 @@ export class Simulator {
     this.tunnelUntil = performance.now() + seconds * 1000;
   }
 
+  /**
+   * A tunnel with a jam in it, for [seconds]: down to standing in five
+   * seconds, standing for half the time, creeping at 10 km/h, and the
+   * last stretch at the speed it went in at.
+   */
+  tunnelJam(seconds = 60) {
+    this.tunnel(seconds);
+    this.jamFrom = performance.now();
+    this.jamFromMps = this.speedMps;
+  }
+
+  /** The speed the pretend car goes at now: the chosen one, unless it is in the jam. */
+  private speedNow(now: number): number {
+    if (!this.jamFrom || now >= this.tunnelUntil) { this.jamFrom = 0; return this.speedMps; }
+    const s = (now - this.jamFrom) / 1000, total = (this.tunnelUntil - this.jamFrom) / 1000;
+    if (s < 5) return this.jamFromMps * (1 - s / 5);
+    if (s < total * 0.5) return 0;
+    if (s < total * 0.8) return 10 / 3.6;
+    return this.jamFromMps;
+  }
+
   /** Off the route to the right for [seconds]; the app should re-route. */
   stray(seconds = 8) {
     this.strayUntil = performance.now() + seconds * 1000;
@@ -63,7 +94,11 @@ export class Simulator {
     const now = performance.now();
     const dt = (now - this.lastTick) / 1000;
     this.lastTick = now;
-    this.alongM += this.speedMps * dt;
+    const speed = this.speedNow(now);
+    this.alongM += speed * dt;
+    this.odoM += speed * dt;
+    // The car's streaming, through the tunnel too (the LTE holds where the GPS does not); its odometer to the metre.
+    this.car?.add({ t: Date.now(), speedMps: speed, odoM: this.odoM, odoResM: 1.6 });
     if (this.alongM >= this.line.lengthM) {
       this.alongM = this.line.lengthM;
       this.stop();
@@ -79,7 +114,7 @@ export class Simulator {
       lon: at[0],
       lat: at[1],
       accM: 5 + Math.random() * 4,
-      speed: this.speedMps,
+      speed,
       heading: p.bearing,
       course: null,
     };

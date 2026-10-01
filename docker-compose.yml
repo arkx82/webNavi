@@ -38,6 +38,29 @@ services:
       - ./tools/nodelink/serve.sh:/serve.sh:ro
     expose: ["5000"]
 
+  # Tesla Fleet Telemetry (server car/fleet.ts): the car streams its speed and odometer here, over mTLS that must
+  # end in this container — so on a port of its own, forwarded on the router and with a DNS-only (grey cloud) name,
+  # not through the Cloudflare Tunnel. Off unless asked for: `docker compose --profile fleet up -d`.
+  # /mnt/data/webnavi/telemetry holds tls.crt / tls.key (readable by uid 65532) and ca.pem, the chain the car is
+  # told to trust; fleet/README.md has the steps.
+  fleet-telemetry:
+    image: tesla/fleet-telemetry:v0.9.5
+    profiles: ["fleet"]
+    restart: unless-stopped
+    volumes:
+      - ./fleet/telemetry.json:/etc/fleet-telemetry/config.json:ro
+      - /mnt/data/webnavi/telemetry:/etc/certs/server:ro
+    ports: ["${TELEMETRY_PORT:-8443}:443"]
+    depends_on: [fleet-redis]
+
+  # What fleet-telemetry publishes to and nav listens on; nothing kept (each record is for now or never).
+  fleet-redis:
+    image: redis:7-alpine
+    profiles: ["fleet"]
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    expose: ["6379"]
+
   # Not used while a Cloudflare Tunnel ends HTTPS; uncomment to go back to Caddy.
   # # TLS in front: the browser only hands out geolocation and wake lock on
   # # https, so the car must reach this through a real certificate.

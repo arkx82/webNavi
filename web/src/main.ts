@@ -4,6 +4,8 @@ import { Gps, type Fix } from "./gps";
 import { chime, keepAwake } from "./probes";
 import { Replay } from "./replay";
 import { Simulator } from "./simulate";
+import { CarLink } from "./car-link";
+import { CarTrack } from "./car-track";
 import { RouteLayer } from "./route-layer";
 import { OFF_M, Tracker, type Shown } from "./tracker";
 import { Line, bearing, lerpAngle, metres } from "./geo";
@@ -214,6 +216,41 @@ let spot: { x: number; y: number } | null = null;
 let placed = false;
 const gps = new Gps();
 const tracker = new Tracker();
+// The car's own speed and odometer (server car/ → car-link.ts): in a tunnel, the marker goes as the car really went.
+const carLink = new CarLink();
+tracker.car = carLink.track;
+carLink.onState = (state) => log(`차량 스트리밍: ${state}${carLink.name ? ` (${carLink.name})` : ""}`);
+carLink.onFirst = (s) => log(`차량 첫 샘플: 속도 ${s.speedMps == null ? "없음" : Math.round(s.speedMps * 3.6) + " km/h"} · 오도미터 ${s.odoResM == null ? "없음" : `${s.odoResM.toFixed(1)} m 단위`} · 차 자체 위치 ${s.est ? "있음" : "없음"}`);
+// Without a route the car's stream is asked for only while the fixes are gone or vague (a car park, a terminal: the
+// reckoning off the road, tracker.ts), and let go once they have been good for a minute. With one, startDrive opens it.
+let gpsGoodSince = 0;
+setInterval(() => {
+  if (route || sim?.running) return;
+  const f = gps.last;
+  if (!f) return;
+  if (Date.now() - f.t > 3_000 || f.accM > 40) {
+    gpsGoodSince = 0;
+    carLink.start();
+  } else {
+    gpsGoodSince ||= Date.now();
+    if (Date.now() - gpsGoodSince > 60_000 && carLink.state !== "off") carLink.stop();
+  }
+}, 1000);
+// How often the car's stream really sends, a line a minute while it does: the record that says what the reckoning
+// can lean on (parked it was every 3 s; on the move it is to be seen).
+setInterval(() => {
+  const i = carLink.intervals();
+  if (i) log(`차량 샘플 ${i.n}개 · 간격 중앙값 ${i.medianMs} ms · 최대 ${i.maxMs} ms`);
+}, 60_000);
+tracker.onReckonEnd = (r) => {
+  // How far off the reckoning was when the fix came back, and how far the car's own idea of its place was from that fix:
+  // the record that says whether the car's estimate (est_lat/est_lng, Location) is worth steering by in a tunnel.
+  const fix = gps.last, est = tracker.car === carLink.track ? carLink.track.lastEst : null;
+  const estOff = est && fix && Date.now() - carLink.track.lastEstAt < 10_000 ? ` · 차 자체 위치와 GPS ${Math.round(metres(est.lon, est.lat, fix.lon, fix.lat))} m` : "";
+  const how = r.free ? "경로 밖 · 차량 방위·위치" : r.by === "car" ? "차량 속도" : "마지막 속도 유지";
+  const miss = r.errorM == null ? "?" : r.free ? `${Math.round(r.errorM)} m 떨어짐` : `${r.errorM > 0 ? "+" : ""}${Math.round(r.errorM)} m`;
+  log(`추측 항법 끝 ${Math.round(r.seconds)}초 · ${how} · GPS와 ${miss}${estOff}`);
+};
 const voice = new Voice();
 voice.onSaid = (text, playedS, lengthS, waitedS) => {
   // Short of its length means the browser stopped it (another app took the audio, the page went to the back).
@@ -263,7 +300,8 @@ function onFix(fix: Fix) {
   stillness.feed([fix.lon, fix.lat], fix.speed);
   if (!sim?.running) saveLast([fix.lon, fix.lat]);
   void watchRoad(fix);
-  el("speed").textContent = fix.speed == null ? "--" : Math.round(fix.speed * 3.6).toString();
+  // Through put(), as the frame loop writes it in a tunnel: the two keep one record of what is shown.
+  put("speed", fix.speed == null ? "--" : Math.round(fix.speed * 3.6).toString());
   el("pos").textContent = `${fix.lat.toFixed(5)}, ${fix.lon.toFixed(5)}`;
   el("acc").textContent = `${Math.round(fix.accM)} m`;
   el("heading").textContent = `${fix.heading == null ? "없음" : Math.round(fix.heading) + "°"} / 계산 ${fix.course == null ? "--" : Math.round(fix.course) + "°"}`;
@@ -289,7 +327,9 @@ function frame() {
     const shown = tracker.frame();
     if (shown) {
       marker.setLngLat(shown.at);
-      put("mode", MODES[shown.mode] + (shown.offM != null ? ` · ${Math.round(shown.offM)} m` : ""));
+      put("mode", MODES[shown.mode] + (shown.reckonBy === "car" ? " (차량 속도)" : "") + (shown.offM != null ? ` · ${Math.round(shown.offM)} m` : ""));
+      // No fixes in the tunnel to say the speed: the car's own, while it is what moves the marker.
+      if (shown.reckonBy === "car") put("speed", Math.round(shown.speedMps * 3.6).toString());
       markerBearing = markerBearing == null ? shown.bearing : lerpAngle(markerBearing, shown.bearing, MARKER_TURN_SHARE);
       marker.setRotation(markerBearing);
       zoomSpeed += (shown.speedMps * 3.6 - zoomSpeed) * 0.03;
@@ -446,11 +486,25 @@ function measure() {
   layout.hudRight = el("hud").getBoundingClientRect().right;
   const dest = el("dest-panel");
   layout.destRight = dest.hidden ? 0 : dest.getBoundingClientRect().right;
-  const card = el("lanes");
-  layout.lanesBottom = card.hidden ? 0 : card.getBoundingClientRect().bottom - canvas.top;
+  // The top middle of the map holds the lane card, the junction pill and the 구간단속 box: each put under the one
+  // before it that shows, by its real height (a lane card with a fork and a note runs to twice a plain one's, and a
+  // fixed offset left the 구간단속 box on top of it). The car is kept clear of the lot.
+  let top = TOP_STACK_PX, bottom = 0;
+  for (const id of TOP_STACK) {
+    const box = el(id);
+    if (box.hidden) continue;
+    box.style.top = `${top}px`;
+    top += box.offsetHeight + TOP_STACK_GAP_PX;
+    bottom = box.getBoundingClientRect().bottom - canvas.top;
+  }
+  layout.lanesBottom = bottom;
 }
+/** What sits at the top middle of the map, from the top down. */
+const TOP_STACK = ["lanes", "closeup", "section-hud"];
+const TOP_STACK_PX = 16;
+const TOP_STACK_GAP_PX = 8;
 const measuring = new ResizeObserver(measure);
-for (const id of ["hud", "dest-panel", "lanes", "map"]) measuring.observe(el(id));
+for (const id of ["hud", "dest-panel", "map", ...TOP_STACK]) measuring.observe(el(id));
 // Once now as well: the observer's first report comes after the first frame's layout, and a frame before it would
 // place the car by a canvas of no size.
 measure();
@@ -1075,6 +1129,8 @@ function startDrive(r: Route) {
   routeLayer.show(route);
   tracker.setRoute(route);
   sim?.follow(route);
+  // The car's own speed, for the tunnels on the way: asked for only while a route is driven.
+  carLink.start();
   // What was said is kept across a re-route or a faster way to the same
   // place (the same camera, the same junction, once); a new place starts afresh.
   if (fresh || elsewhere) {
@@ -1161,6 +1217,7 @@ function endDrive() {
   chosen = null;
   routeLayer.show(null);
   tracker.setRoute(null);
+  carLink.stop();
   destPin?.remove();
   destPin = null;
   watch = null;
@@ -2661,6 +2718,8 @@ function startSim() {
   sim?.stop();
   realFix = gps.last ? [gps.last.lon, gps.last.lat] : null;
   sim = new Simulator(gps, route);
+  // The pretend car's own speed, not the real car's: the two never mixed.
+  sim.car = tracker.car = new CarTrack();
   sim.speedMps = simSpeed();
   sim.onEnd = () => { simEnded(); log("모의 주행 끝"); };
   sim.start();
@@ -2680,6 +2739,7 @@ function simEnded() {
   gps.start();
   // Back to where the car really is, at once: the drawn car forgets the pretend place, and the map goes to the last real fix.
   tracker.forget();
+  tracker.car = carLink.track;
   if (realFix) {
     marker.setLngLat(realFix);
     map.jumpTo({ center: realFix });
@@ -2707,6 +2767,7 @@ for (const [id, by] of [["sim-slower", -1], ["sim-faster", 1]] as const) {
 }
 el("sim-toggle").addEventListener("click", () => (sim?.running ? stopSim() : startSim()));
 el("sim-tunnel").addEventListener("click", () => { sim?.tunnel(10); log("터널: 10초간 GPS 없음"); });
+el("sim-jam").addEventListener("click", () => { sim?.tunnelJam(60); log("터널 정체: 60초간 GPS 없음, 안에서 멈췄다 기어감"); });
 el("sim-stray").addEventListener("click", () => { sim?.stray(8); log("이탈: 60 m 옆으로 8초"); });
 
 // ---- probes and replay -----------------------------------------------------

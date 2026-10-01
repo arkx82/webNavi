@@ -1,0 +1,28 @@
+{
+  "host": "0.0.0.0",
+  "port": 443,
+  "log_level": "info",
+  "json_log_enable": true,
+  "namespace": "tesla_telemetry",
+  "reliable_ack": false,
+  "transmit_decoded_records": true,
+  "rate_limit": {
+    "enabled": true,
+    "message_interval_time": 30,
+    "message_limit": 1000
+  },
+  "records": {
+    "V": ["redis"],
+    "connectivity": ["redis"],
+    "alerts": ["logger"],
+    "errors": ["logger"]
+  },
+  "redis": {
+    "addrs": ["fleet-redis:6379"],
+    "publish_vin_topics": true
+  },
+  "tls": {
+    "server_cert": "/etc/certs/server/tls.crt",
+    "server_key": "/etc/certs/server/tls.key"
+  }
+}
