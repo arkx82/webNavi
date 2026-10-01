@@ -24,6 +24,8 @@ export interface GuideSettings {
   closeups: boolean;
   /** 정밀도로지도's lane lines and road markings on the map, close in (hdmap-layer.ts). */
   hdLanes: boolean;
+  /** When, while driving: near a turn or slow (the lanes are the heaviest thing drawn in a city), or always. */
+  hdLanesWhen: "turns" | "always";
   /** The lanes at the junction ahead, the ones to be in lit (lanes-strip.ts). */
   laneGuide: boolean;
   /** "분홍색 유도선을 따라가세요": 한국도로공사's painted guide lines at motorway junctions. */
@@ -86,7 +88,7 @@ export interface GuideSettings {
 export type Mode = "voice" | "show" | "off";
 
 export const DEFAULTS: GuideSettings = {
-  voice: true, voiceName: null, volume: 1, turns: true, junctionNames: true, laneHints: true, merges: true, closeups: true, sendLogs: true, layout: "classic", hdLanes: true, laneGuide: true, colorLines: true, theme: "auto", nightCity: false, endOnArrive: true, mapDpr: "auto", ducking: "soft", fasterRoute: "auto", uiScale: 1, lightsOnMap: "route", camerasOnMap: "route", nextLight: true, flashSignals: true,
+  voice: true, voiceName: null, volume: 1, turns: true, junctionNames: true, laneHints: true, merges: true, closeups: true, sendLogs: true, layout: "classic", hdLanes: true, hdLanesWhen: "turns", laneGuide: true, colorLines: true, theme: "auto", nightCity: false, endOnArrive: true, mapDpr: "auto", ducking: "soft", fasterRoute: "auto", uiScale: 1, lightsOnMap: "route", camerasOnMap: "route", nextLight: true, flashSignals: true,
   cameras: true, cameraFromM: 600, sections: true, schools: true,
   bumps: "show", curves: "show", accidents: "show", bikeAccidents: "show",
   overspeed: true, overspeedBy: 0,
@@ -191,6 +193,7 @@ const ROWS: Row[] = [
   { key: "colorLines", label: "색깔 유도선", kind: "toggle", sub: "고속도로 분기점 · 나들목에서 \"분홍색 유도선을 따라가세요\" 와 갈림길 그림 (한국도로공사)" },
   { key: "laneGuide", label: "차로 안내", kind: "toggle", sub: "회전 800m 앞(고속도로 2km)부터 지날 때까지, 그리고 직진 중 앞 차로가 좌·우회전 전용이 되는 곳에서 탈 차로를 아래쪽에 (정밀도로지도가 있는 곳)" },
   { key: "hdLanes", label: "정밀 차선 그리기", kind: "toggle", sub: "정밀도로지도가 있는 곳에서 크게 확대하면 실제 차선 · 화살표 · 횡단보도 (느린 차량이면 끄세요)" },
+  { key: "hdLanesWhen", label: "주행 중 정밀 차선", kind: "choice", options: [["turns", "회전 근처 · 저속만"], ["always", "항상"]], sub: "회전 400 m 안이거나 30 km/h 아래일 때만 그리고, 그 밖에서는 숨겨 시내 주행을 가볍게. 지도를 손으로 움직이면 다 나옴" },
   { key: "layout", label: "화면 배치", kind: "choice", options: [["classic", "기본"], ["mini", "미니"]], sub: "미니: 왼쪽 창을 좁게, 시계 · 다음 신호등 · 그다음 안내는 숨김" },
   { key: "sendLogs", label: "진단 기록 보내기", kind: "toggle", sub: "주행 중 진단 기록(음성, 재탐색, 차로 판정 …)을 서버에 남겨 문제를 나중에 확인" },
   { key: "fasterRoute", label: "더 빠른 길", kind: "choice", options: [["auto", "20초 뒤 자동"], ["ask", "물어보기"], ["off", "끔"]], sub: "안내 중 6분마다 티맵·카카오·네이버·자체 경로를 다시 비교해 3분 이상 빠른 길이 있으면 알립니다. 자동: 패널에 띄우고 20초 안에 '그대로'를 누르지 않으면 바꿈" },

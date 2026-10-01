@@ -290,6 +290,9 @@ function frame() {
       closeup = closeupFor(shown);
       showCloseup(closeup);
       if (follow && !handsOn()) followCar(shown.at);
+      // The painted lanes only where they matter on the move — near a turn, or slow — unless asked for always; a map
+      // moved by hand shows everything.
+      hdLayer?.setAway(guide.hdLanesWhen === "turns" && follow && !handsOn() && lanesAway(shown));
       showTurn(shown);
       showLanes(shown);
       backoff.seen(!shown.offRoute && (shown.offM == null || shown.offM <= OFF_M));
@@ -307,6 +310,18 @@ function frame() {
 requestAnimationFrame(frame);
 
 const approach = (from: number, to: number, k: number) => (Math.abs(to - from) < 0.005 ? to : from + (to - from) * k);
+
+/** Whether the painted lanes can be put away for now: driving on at speed with no turn within reach (with a little play, so they do not flicker). */
+let lanesWereAway = false;
+function lanesAway(shown: Shown): boolean {
+  const kmh = shown.speedMps * 3.6;
+  const turnNear = shown.nextGuide != null && shown.nextGuide.inM < LANES_TURN_M;
+  const fast = kmh > (lanesWereAway ? LANES_SLOW_KMH - 5 : LANES_SLOW_KMH + 5);
+  lanesWereAway = fast && !turnNear;
+  return lanesWereAway;
+}
+const LANES_TURN_M = 400;
+const LANES_SLOW_KMH = 30;
 
 /** When the camera last followed, so its easing goes by time, not by frames. */
 let followedAt = 0;

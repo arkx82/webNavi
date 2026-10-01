@@ -55,10 +55,21 @@ export class HdLayer {
     this.map.setPaintProperty("hd-marks", "fill-color", day ? "#aeb4bd" : "#eeeeee");
   }
 
-  /** The driver's switch (안내 설정 → 정밀 차선). */
+  /** Put away for the moment (driving on at speed with no turn near): the lanes are the heaviest thing drawn in a city. */
+  private away = false;
+
+  /** The driver's switch (안내 설정 → 정밀 차선), and whether they are put away for now. */
   refresh() {
     if (!this.ready) return;
-    for (const id of LAYERS) this.map.setLayoutProperty(id, "visibility", this.enabled() ? "visible" : "none");
+    const on = this.enabled() && !this.away;
+    for (const id of LAYERS) this.map.setLayoutProperty(id, "visibility", on ? "visible" : "none");
+  }
+
+  /** [away]: not drawn for now, whatever the switch; changes only when it differs (a style change each frame would cost more than the lanes). */
+  setAway(away: boolean) {
+    if (away === this.away) return;
+    this.away = away;
+    this.refresh();
   }
 
   private install() {
