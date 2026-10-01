@@ -212,9 +212,14 @@ export function applySnap(path: LonLat[], snapped: (LonLat | null)[], fixed: boo
       }
       return [p[0] + sx, p[1] + sy] as LonLat;
     });
-    // A bend the snapping made where the line as drawn had none: that snap goes, and the line is laid again.
+    // A bend the snapping made where the line as drawn had none or was gentle: that snap goes, and the line is laid again.
     const kinks: number[] = [];
-    for (let i = 1; i + 1 < n; i++) if (keep[i] && bendAt(moved, i) >= KINK_DEG && bendAt(path, i) < KINK_DEG / 2) kinks.push(i);
+    for (let i = 1; i + 1 < n; i++) {
+      if (keep[i]) {
+        const bm = bendAt(moved, i), bp = bendAt(path, i);
+        if ((bm >= KINK_DEG && bp < KINK_DEG / 2) || (bm >= 45 && bm - bp >= 20)) kinks.push(i);
+      }
+    }
     if (kinks.length === 0 || round === KINK_ROUNDS) return moved;
     for (const i of kinks) keep[i] = null;
   }

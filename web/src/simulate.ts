@@ -29,7 +29,7 @@ export class Simulator {
     this.alongM = fromM;
     this.lastTick = performance.now();
     this.tick();
-    this.timer = window.setInterval(() => this.tick(), 1000);
+    this.timer = window.setInterval(() => this.tick(), 250);
   }
 
   stop() {

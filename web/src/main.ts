@@ -2576,10 +2576,14 @@ el("go-sim").addEventListener("click", () => {
   startDrive(chosen);
   startSim();
 });
-for (const [id, by] of [["sim-slower", -10], ["sim-faster", 10]] as const) {
+for (const [id, by] of [["sim-slower", -1], ["sim-faster", 1]] as const) {
   el(id).addEventListener("click", () => {
     const input = el<HTMLInputElement>("sim-speed");
-    input.value = String(Math.max(10, Math.min(120, Number(input.value) + by)));
+    const current = Number(input.value);
+    const next = by > 0
+      ? (current < 100 ? current + 10 : current < 200 ? current + 20 : Math.min(300, current + 50))
+      : (current > 200 ? current - 50 : current > 100 ? current - 20 : Math.max(10, current - 10));
+    input.value = String(next);
     input.dispatchEvent(new Event("input"));
     el("sim-kmh").textContent = input.value;
   });

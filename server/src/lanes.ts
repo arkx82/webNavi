@@ -92,8 +92,8 @@ const THREAD_OFF_M = 6;
 /** A lane's end this close to the next link's start is the same point, surveyed twice. */
 const TRAIL_JOIN_M = 3;
 /** A lane within this of a route vertex, running within SNAP_DEG of the route's way, is the road's; lanes within CARRIAGEWAY_M of the nearest are one carriageway. */
-const SNAP_M = 20;
-const SNAP_DEG = 30;
+const SNAP_M = 15;
+const SNAP_DEG = 25;
 const CARRIAGEWAY_M = 12;
 
 /** The nearest point of [line] to [p], how far it is, and the line's bearing there. */
