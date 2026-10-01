@@ -29,7 +29,7 @@ import { junctionOf, laneHint, motorwayAt, namedTurnPhrase } from "./highway";
 import { CLOSEUP_CAR_AT, CLOSEUP_PITCH, CloseupHold, zoomToSee, type Closeup } from "./closeup";
 import { RerouteBackoff } from "./reroute-backoff";
 import { Stillness } from "./still";
-import { TURN_NEAR_M, turnPhrase, warningPhrase, type Turn } from "../../server/src/phrases";
+import { TURN_NEAR_M, fasterPhrase, turnPhrase, warningPhrase, type Turn } from "../../server/src/phrases";
 import { drawGuide, loadGuide, shows, wants, type VoiceList } from "./guide-settings";
 import { currentUser, logout, push as pushUserData } from "./userdata";
 import { WeatherPanel } from "./weather";
@@ -952,6 +952,9 @@ const laned = new WeakSet<Route>();
 function startDrive(r: Route) {
   const fresh = route == null;
   const elsewhere = !fresh && goal !== drivingTo;
+  // A new route or a new place: the offer, and the way declined, are of the old one.
+  clearFaster();
+  if (fresh || elsewhere || r !== faster?.best) declinedS = null;
   route = r;
   // The line onto the travel-direction lanes where 정밀도로지도 has them — only the route driven, and in the background
   // (a long route takes seconds): the drive starts on the provider's line and is set up again on the lanes' when they come.
@@ -1039,6 +1042,8 @@ async function resumeDrive() {
 el("resume-cancel").addEventListener("click", () => { el("resume").hidden = true; endDrive(); });
 
 function endDrive() {
+  clearFaster();
+  declinedS = null;
   if (sim?.running) stopSim();
   saveDrive(null);
   route = null;
@@ -1084,8 +1089,48 @@ el("routes").addEventListener("click", async () => {
 });
 
 /** Every few minutes on the way: a much quicker route from any provider wins. */
+/**
+ * 더 빠른 길: the quicker way the recheck found, drawn faint beside the route
+ * and offered in the panel — taken by itself after FASTER_AUTO_MS unless the
+ * driver says 그대로 (안내 설정: 자동), or only on a tap (물어보기).
+ */
+const FASTER_AUTO_MS = 20_000;
+let faster: { best: Route; to: Place; timer: number | null } | null = null;
+/** The duration of the way declined with 그대로: nothing slower than it by less than BETTER_BY_S is offered again this drive. */
+let declinedS: number | null = null;
+function offerFaster(best: Route, to: Place, savedS: number) {
+  clearFaster();
+  const min = Math.max(1, Math.round(savedS / 60));
+  routeLayer.show(route, [best]);
+  el("faster-title").textContent = `${NAMES[best.provider]} 경로 · ${min}분 단축`;
+  el("faster-sub").textContent = guide.fasterRoute === "auto" ? "20초 안에 고르지 않으면 바꿉니다" : "바꿀지 고르세요";
+  el("faster").hidden = false;
+  voice.say(fasterPhrase(min), undefined, { key: `faster:${best.provider}:${min}` });
+  faster = { best, to, timer: guide.fasterRoute === "auto" ? window.setTimeout(takeFaster, FASTER_AUTO_MS) : null };
+}
+function takeFaster() {
+  const f = faster;
+  clearFaster();
+  if (!f || !route || drivingTo !== f.to) return;
+  voice.say(EVENTS.faster);
+  goal = f.to;
+  startDrive(f.best);
+}
+function keepRoute() {
+  if (faster) declinedS = faster.best.durationS;
+  clearFaster();
+  if (route) routeLayer.show(route);
+}
+function clearFaster() {
+  if (faster?.timer != null) clearTimeout(faster.timer);
+  faster = null;
+  el("faster").hidden = true;
+}
+el("faster-go").addEventListener("click", takeFaster);
+el("faster-keep").addEventListener("click", keepRoute);
+
 async function recheckRoute() {
-  if (!drivingTo || !route || !gps.last || rerouting) return;
+  if (!drivingTo || !route || !gps.last || rerouting || guide.fasterRoute === "off" || faster) return;
   if (!el("s-preview").hidden) return; // the cards are open; the driver is choosing
   if (stillness.still()) return; // parked a long while: the road has not changed for a car that does not move
   const asked = route, to = drivingTo;
@@ -1095,12 +1140,11 @@ async function recheckRoute() {
     // An off-route re-route, a new place or the drive's end came while the answer did: it is for a route no longer driven.
     if (route !== asked || drivingTo !== to || rerouting) return;
     const best = answer.routes.sort((a, b) => a.durationS - b.durationS)[0];
-    if (best && best.durationS < current - BETTER_BY_S) {
+    // Quicker by enough — and, after a "그대로", by enough more than the way declined.
+    if (best && best.durationS < current - BETTER_BY_S && best.durationS < (declinedS ?? Infinity) - BETTER_BY_S) {
       offers = answer.routes;
       log(`더 빠른 길: ${best.provider} ${minutes(best.durationS)} (지금 ${minutes(current)})`);
-      voice.say(EVENTS.faster);
-      goal = to;
-      startDrive(best);
+      offerFaster(best, to, current - best.durationS);
     }
   } catch (e) {
     log(`재확인 실패 ${(e as Error).message}`);

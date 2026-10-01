@@ -20,7 +20,8 @@ test("the fixed phrases are the car apps' sentences, a closed set", () => {
   assert.ok(phrases.includes("삼백미터 앞에서 좌회전입니다"));
   assert.ok(phrases.includes("잠시 후 오른쪽 방향입니다"));
   assert.ok(phrases.includes("일킬로미터 앞에서 오른쪽 출구입니다"));
-  assert.ok(phrases.length > 90 && phrases.length < 200, `${phrases.length}`);
+  assert.ok(phrases.includes("사분 빠른 길이 있습니다"));
+  assert.ok(phrases.length > 90 && phrases.length < 260, `${phrases.length}`);
 });
 
 /** 24 kHz samples: [ms of tone, ms of silence, …]. */

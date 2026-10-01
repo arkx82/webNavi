@@ -109,6 +109,12 @@
         </div>
         <!-- The camera or section ahead, with its limit: in the panel under the arrival, red when over it. -->
         <div id="cam" hidden><span class="limit-sign" id="cam-limit"></span><span id="cam-what"></span></div>
+        <!-- A quicker way found on the move: which, how much, and the choice (the new line is drawn faint on the map meanwhile). -->
+        <div id="faster" hidden>
+          <div class="fr-words"><b id="faster-title"></b><small id="faster-sub"></small></div>
+          <button id="faster-go" type="button" class="narrow primary">바꾸기</button>
+          <button id="faster-keep" type="button" class="narrow">그대로</button>
+        </div>
         <!-- A pretend drive along this route: its speed, and a way out. -->
         <div id="sim-bar" hidden>
           <span class="sim-name">모의 주행</span>

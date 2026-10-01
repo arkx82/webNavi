@@ -174,6 +174,13 @@ export const EVENTS = {
   resumed: "이전 안내를 이어서 시작합니다",
 } as const;
 
+/** "사분 빠른 길이 있습니다": the periodic recheck found a quicker way; the driver takes it or keeps the road. */
+export const FASTER_MINUTES = Array.from({ length: 28 }, (_, i) => i + 3);
+export function fasterPhrase(minutes: number): string {
+  const m = Math.max(FASTER_MINUTES[0], Math.min(FASTER_MINUTES[FASTER_MINUTES.length - 1], Math.round(minutes)));
+  return `${sino(m)}분 빠른 길이 있습니다`;
+}
+
 export const MERGE_PHRASE = "잠시 후 합류 구간입니다, 주의하세요";
 export const FLASHING_PHRASE = "잠시 후 점멸 신호 교차로입니다, 서행하세요";
 
@@ -219,6 +226,7 @@ export function fixedPhrases(): string[] {
   }
   for (const k of ALERT_KINDS) for (const l of ALERT_LEVELS) out.add(alertPhrase(k, l));
   for (const h of Object.values(LANE_HINTS)) out.add(h);
+  for (const m of FASTER_MINUTES) out.add(fasterPhrase(m));
   for (const g of Object.values(GUIDE_LINES)) out.add(g);
   return [...out];
 }

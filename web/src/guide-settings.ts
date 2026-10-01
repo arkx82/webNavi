@@ -40,6 +40,8 @@ export interface GuideSettings {
   endOnArrive: boolean;
   /** 지도 해상도: as the screen is, or one pixel per CSS pixel for a slow car computer (main.ts, before the maps are made). */
   mapDpr: "auto" | "balanced" | "fast";
+  /** 더 빠른 길: found by the recheck on the move — told and taken by itself after a moment, only asked, or not looked for. */
+  fasterRoute: "auto" | "ask" | "off";
   /** 안내 중 음악 줄이기: faded down and up round the voice, dropped at once, or left alone (voice.ts). */
   ducking: "soft" | "quick" | "off";
   /** 화면 크기: the panels, cards and buttons scaled (the map itself is not) — a screen's CSS pixel is bigger on some than others. */
@@ -84,7 +86,7 @@ export interface GuideSettings {
 export type Mode = "voice" | "show" | "off";
 
 export const DEFAULTS: GuideSettings = {
-  voice: true, voiceName: null, volume: 1, turns: true, junctionNames: true, laneHints: true, merges: true, closeups: true, sendLogs: true, layout: "classic", hdLanes: true, laneGuide: true, colorLines: true, theme: "auto", nightCity: false, endOnArrive: true, mapDpr: "auto", ducking: "soft", uiScale: 1, lightsOnMap: "route", camerasOnMap: "route", nextLight: true, flashSignals: true,
+  voice: true, voiceName: null, volume: 1, turns: true, junctionNames: true, laneHints: true, merges: true, closeups: true, sendLogs: true, layout: "classic", hdLanes: true, laneGuide: true, colorLines: true, theme: "auto", nightCity: false, endOnArrive: true, mapDpr: "auto", ducking: "soft", fasterRoute: "auto", uiScale: 1, lightsOnMap: "route", camerasOnMap: "route", nextLight: true, flashSignals: true,
   cameras: true, cameraFromM: 600, sections: true, schools: true,
   bumps: "show", curves: "show", accidents: "show", bikeAccidents: "show",
   overspeed: true, overspeedBy: 0,
@@ -191,6 +193,7 @@ const ROWS: Row[] = [
   { key: "hdLanes", label: "정밀 차선 그리기", kind: "toggle", sub: "정밀도로지도가 있는 곳에서 크게 확대하면 실제 차선 · 화살표 · 횡단보도 (느린 차량이면 끄세요)" },
   { key: "layout", label: "화면 배치", kind: "choice", options: [["classic", "기본"], ["mini", "미니"]], sub: "미니: 왼쪽 창을 좁게, 시계 · 다음 신호등 · 그다음 안내는 숨김" },
   { key: "sendLogs", label: "진단 기록 보내기", kind: "toggle", sub: "주행 중 진단 기록(음성, 재탐색, 차로 판정 …)을 서버에 남겨 문제를 나중에 확인" },
+  { key: "fasterRoute", label: "더 빠른 길", kind: "choice", options: [["auto", "20초 뒤 자동"], ["ask", "물어보기"], ["off", "끔"]], sub: "안내 중 6분마다 티맵·카카오·네이버·자체 경로를 다시 비교해 3분 이상 빠른 길이 있으면 알립니다. 자동: 패널에 띄우고 20초 안에 '그대로'를 누르지 않으면 바꿈" },
   { key: "endOnArrive", label: "도착하면 안내 종료", kind: "toggle", sub: "도착 안내 뒤 10초 뒤에 자동으로 검색 화면으로. 끄면 종료 버튼을 누를 때까지 그대로" },
   { key: "uiScale", label: "화면 크기", kind: "choice", options: [[0.85, "작게"], [1, "보통"], [1.15, "크게"], [1.3, "더 크게"]], sub: "패널 · 카드 · 버튼의 크기 (지도는 그대로). 기기마다 화면 픽셀 크기가 달라 글씨가 크거나 작게 보일 때" },
   { key: "mapDpr", label: "지도 해상도", kind: "choice", options: [["auto", "선명하게"], ["balanced", "균형"], ["fast", "빠르게"]], sub: "선명하게: 화면 그대로 · 균형: 1.5배까지 · 빠르게: 1배로 그리고 창 뒤 흐림 효과도 끔. 바꾼 뒤 새로 고침" },
