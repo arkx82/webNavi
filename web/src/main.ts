@@ -293,17 +293,24 @@ gps.on(onFix);
 // Routes asked on the move start on the carriageway the car is on (Kakao and TMAP take the heading).
 setHeading(() => {
   const f = gps.last;
-  if (!f || f.course == null || !(f.speed != null && f.speed > 2) || Date.now() - f.t > 10_000) return null;
+  // Parked, the course is the GPS wandering, not the way the car points.
+  if (!f || f.course == null || !(f.speed != null && f.speed > 2) || Date.now() - f.t > 10_000 || tracker.car?.parked()) return null;
   return { deg: f.course, kmh: f.speed * 3.6 };
 });
 
+/** The fix's speed, m/s — 0 while the car says it is parked: a car park's GPS reads 2, 5, 3 km/h of a car in P. */
+function speedOf(fix: Fix): number | null {
+  return tracker.car?.parked() ? 0 : fix.speed;
+}
+
 function onFix(fix: Fix) {
   tracker.feed(fix);
-  stillness.feed([fix.lon, fix.lat], fix.speed);
+  const speed = speedOf(fix);
+  stillness.feed([fix.lon, fix.lat], speed);
   if (!sim?.running) saveLast([fix.lon, fix.lat]);
   void watchRoad(fix);
   // Through put(), as the frame loop writes it in a tunnel: the two keep one record of what is shown.
-  put("speed", fix.speed == null ? "--" : Math.round(fix.speed * 3.6).toString());
+  put("speed", speed == null ? "--" : Math.round(speed * 3.6).toString());
   el("pos").textContent = `${fix.lat.toFixed(5)}, ${fix.lon.toFixed(5)}`;
   el("acc").textContent = `${Math.round(fix.accM)} m`;
   el("heading").textContent = `${fix.heading == null ? "없음" : Math.round(fix.heading) + "°"} / 계산 ${fix.course == null ? "--" : Math.round(fix.course) + "°"}`;
@@ -1901,8 +1908,8 @@ async function watchRoad(fix: Fix) {
     voice.say(phrase, undefined, { key: `warn:${f.id}:${due.rungM}` });
   }
   showSectionHud(tracker.frame());
-  showLimit(w.limitAt(along), fix.speed);
-  showNextLight(w, along, fix.speed);
+  showLimit(w.limitAt(along), speedOf(fix));
+  showNextLight(w, along, speedOf(fix));
   // The protected zones on the route, as bands on the road (those the driver keeps shown).
   zoneLayer.set([
     ...w.zones().filter((z) => shows(guide, z.feature.kind)).map((z) => ({ id: z.feature.id, kind: z.feature.kind as "school-zone" | "senior-zone", alongM: z.alongM, endM: z.endM })),
