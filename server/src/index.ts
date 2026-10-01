@@ -371,7 +371,10 @@ app.get<{ Querystring: RouteQuery }>("/api/route", async (request, reply) => {
     // Our own route only with live speeds on it: without them it runs at the limit and reads quicker than it is
     // (the first lookup in an area comes before that area's speeds are in; the recheck on the move brings it back).
     const routes = came.filter((r) => r.provider !== "korea" || r.segments.some((s) => s.congestion > 0));
-    const pending: Provider[] = routes.length < came.length ? ["korea"] : [];
+    // Held back for want of speeds on it — or not offered yet at all because ITS has not answered since the server
+    // came up (the first lookup is what starts the speeds coming): either way the page asks again in a moment.
+    const koreaSoon = !providers.korea.ready && !!env.KOREA_OSRM_URL && traffic.ready && traffic.status().approved !== false;
+    const pending: Provider[] = routes.length < came.length || koreaSoon ? ["korea"] : [];
     if (pending.length) request.log.info("korea route held back: no live speeds on it yet (the page asks again in a moment)");
     const errors = settled.flatMap((r, i) => (r.status === "rejected" ? [`${ready[i].name}: ${(r.reason as Error).message}`] : []));
     traffic.touch([s, g, ...came.flatMap((r) => r.path.filter((_, i) => i % 20 === 0))]);
