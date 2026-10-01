@@ -173,44 +173,63 @@ export function korean(type: string, modifier?: string, exit?: number, road?: st
 }
 
 /**
- * Calibrates OSRM duration for Korean road realities:
- * - Local/city roads: OSRM assumes free-flow speed limit (50-60 km/h) with 0s signal delay.
- *   Calibrated by 1.45x plus signal delays (~12s per 400m / intersections) and turn penalties
- *   (left turn/U-turn ~25s, right turn ~12s).
- * - Motorways/expressways: flow is closer to speed limit, minor 1.05x merge/traffic buffer.
+ * The route's time as a Korean road is actually driven, where OSRM knows
+ * only the limit. Without live speeds OSRM drives a city street at its
+ * limit and stops for no light; so a step is slowed (×1.45), given its
+ * lights (12 s a 400 m, or 8 s an intersection the step lists) and its
+ * turn (a left or U-turn 25 s, a right 12 s, a roundabout 10 s); a
+ * motorway step only a little (×1.05). But where ITS's live speeds are
+ * on the step already (the speed file: the link's real pace, lights and
+ * all), that share of the step is left as it is — slowing it again made
+ * the route read slower than the three providers'. The turn's own delay
+ * is added whatever the speeds, since ITS measures links, not corners.
+ * Never quicker than OSRM's own figure.
  */
 export function calibrateDuration(route: OsrmAnswer["routes"][number]): number {
   const steps = route.legs.flatMap((l) => l.steps);
   if (!steps.length) return route.duration;
+  const live = liveShareByStep(route);
   let totalS = 0;
-  for (const s of steps) {
+  steps.forEach((s, i) => {
     const distM = s.distance ?? 0;
-    let stepDurationS = s.duration ?? 0;
-    const classed = s.intersections?.some((i) => i.classes?.includes("motorway")) ?? false;
+    const stepS = s.duration ?? 0;
+    const blind = 1 - (live[i] ?? 0);
+    const classed = s.intersections?.some((x) => x.classes?.includes("motorway")) ?? false;
     const isMotorway = classed || isMotorwayName(s.name) || isMotorwayName(s.ref);
-
     if (isMotorway) {
-      totalS += stepDurationS * 1.05;
-    } else {
-      stepDurationS *= 1.45;
-      const intersectionsCount = s.intersections?.length ?? 0;
-      const signalDelayS = Math.max(intersectionsCount * 8, (distM / 400) * 12);
-      stepDurationS += signalDelayS;
+      totalS += stepS * (1 + 0.05 * blind);
+      return;
+    }
+    let out = stepS * (1 + 0.45 * blind);
+    const intersections = s.intersections?.length ?? 0;
+    out += Math.max(intersections * 8, (distM / 400) * 12) * blind;
+    const mType = s.maneuver?.type, mod = s.maneuver?.modifier;
+    if (mType === "turn" || mType === "end of road") {
+      if (mod === "left" || mod === "sharp left" || mod === "uturn") out += 25;
+      else if (mod === "right" || mod === "sharp right") out += 12;
+    } else if (mType === "roundabout" || mType === "rotary") out += 10;
+    totalS += out;
+  });
+  return Math.max(route.duration, Math.round(totalS));
+}
 
-      const mType = s.maneuver?.type;
-      const mod = s.maneuver?.modifier;
-      if (mType === "turn" || mType === "end of road") {
-        if (mod === "left" || mod === "sharp left" || mod === "uturn") {
-          stepDurationS += 25;
-        } else if (mod === "right" || mod === "sharp right") {
-          stepDurationS += 12;
-        }
-      } else if (mType === "roundabout" || mType === "rotary") {
-        stepDurationS += 10;
-      }
-
-      totalS += stepDurationS;
+/**
+ * For each step, the share of its segments whose speed came from the live
+ * speed file (annotation datasources > 0), 0 where there is no annotation:
+ * the steps' lines join end to start, so the segments are counted along.
+ */
+export function liveShareByStep(route: OsrmAnswer["routes"][number]): number[] {
+  const out: number[] = [];
+  for (const leg of route.legs) {
+    const ds = leg.annotation?.datasources;
+    let index = 0;
+    for (const s of leg.steps) {
+      const n = Math.max(0, (s.geometry?.coordinates.length ?? 1) - 1);
+      let liveN = 0;
+      if (ds) for (let k = index; k < index + n && k < ds.length; k++) if (ds[k] > 0) liveN++;
+      out.push(n > 0 ? liveN / n : 0);
+      index += n;
     }
   }
-  return Math.max(route.duration, Math.round(totalS));
+  return out;
 }

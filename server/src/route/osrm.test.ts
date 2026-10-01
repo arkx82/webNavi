@@ -64,3 +64,17 @@ test("calibrateDuration adds realistic signal delays and turn penalties on city 
   const calibrated = calibrateDuration(rawRoute);
   assert.ok(calibrated > rawRoute.duration * 1.5, `Calibrated duration ${calibrated}s should be significantly higher than raw ${rawRoute.duration}s`);
 });
+
+test("the korea route's time is calibrated only where no live speed is on it; a live street is left as ITS measured it", async () => {
+  const { calibrateDuration } = await import("./osrm.js");
+  const line = (n: number) => ({ coordinates: Array.from({ length: n }, (_, i) => [127 + i * 0.001, 37] as [number, number]) });
+  const street = (dur: number, geom: number) => ({ maneuver: { location: [127, 37] as [number, number], type: "turn", modifier: "straight" }, name: "테헤란로", distance: 800, duration: dur, geometry: line(geom), intersections: [{ classes: [] }, { classes: [] }] });
+  // Two 800 m streets of 60 s each, five segments apiece; the first wholly live, the second blind.
+  const route = { distance: 1600, duration: 120, geometry: line(11), legs: [{ steps: [street(60, 6), street(60, 6)], annotation: { nodes: [], speed: [], datasources: [1, 1, 1, 1, 1, 0, 0, 0, 0, 0] } }] };
+  const calibrated = calibrateDuration(route as never);
+  // Live step: 60 s as it is. Blind step: 60 × 1.45 + max(2 × 8, 800 / 400 × 12 = 24) = 111 s. Together 171.
+  assert.equal(calibrated, 171);
+  // No annotation at all: both steps blind, 222 s.
+  const blind = { ...route, legs: [{ steps: [street(60, 6), street(60, 6)] }] };
+  assert.equal(calibrateDuration(blind as never), 222);
+});
