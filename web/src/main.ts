@@ -1181,6 +1181,7 @@ el("routes").addEventListener("click", async () => {
  * driver says 그대로 (안내 설정: 자동), or only on a tap (물어보기).
  */
 const FASTER_AUTO_MS = 20_000;
+const FASTER_ASK_MS = 120_000;
 let faster: { best: Route; to: Place; timer: number | null } | null = null;
 /** The duration of the way declined with 그대로: nothing slower than it by less than BETTER_BY_S is offered again this drive. */
 let declinedS: number | null = null;
@@ -1192,7 +1193,8 @@ function offerFaster(best: Route, to: Place, savedS: number) {
   el("faster-sub").textContent = guide.fasterRoute === "auto" ? "20초 안에 고르지 않으면 바꿉니다" : "바꾸기를 누르면 이 길로, 아니면 지금 길 그대로";
   el("faster").hidden = false;
   voice.say(fasterPhrase(min), undefined, { key: `faster:${best.provider}:${min}` });
-  faster = { best, to, timer: guide.fasterRoute === "auto" ? window.setTimeout(takeFaster, FASTER_AUTO_MS) : null };
+  // 자동: taken after a moment unless declined. 물어보기: the offer stands a couple of minutes, then counts as 그대로.
+  faster = { best, to, timer: window.setTimeout(guide.fasterRoute === "auto" ? takeFaster : keepRoute, guide.fasterRoute === "auto" ? FASTER_AUTO_MS : FASTER_ASK_MS) };
 }
 function takeFaster() {
   const f = faster;

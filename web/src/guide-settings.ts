@@ -46,6 +46,8 @@ export interface GuideSettings {
   mapDpr: "auto" | "balanced" | "fast";
   /** 더 빠른 길: found by the recheck on the move — told and taken by itself after a moment, only asked, or not looked for. */
   fasterRoute: "auto" | "ask" | "off";
+  /** The settings' revision, for one-time changes of a default already saved (migrate). */
+  rev?: number;
   /** 안내 중 음악 줄이기: faded down and up round the voice, dropped at once, or left alone (voice.ts). */
   ducking: "soft" | "quick" | "off";
   /** 화면 크기: the panels, cards and buttons scaled (the map itself is not) — a screen's CSS pixel is bigger on some than others. */
@@ -90,7 +92,7 @@ export interface GuideSettings {
 export type Mode = "voice" | "show" | "off";
 
 export const DEFAULTS: GuideSettings = {
-  voice: true, voiceName: null, volume: 1, turns: true, junctionNames: true, laneHints: true, merges: true, closeups: true, sendLogs: true, layout: "classic", hdLanes: true, hdLanesWhen: "turns", laneGuide: true, colorLines: true, theme: "auto", nightCity: false, endOnArrive: true, mapDpr: "auto", followFps: "auto", ducking: "soft", fasterRoute: "ask", uiScale: 1, lightsOnMap: "route", camerasOnMap: "route", nextLight: true, flashSignals: true,
+  voice: true, voiceName: null, volume: 1, turns: true, junctionNames: true, laneHints: true, merges: true, closeups: true, sendLogs: true, layout: "classic", hdLanes: true, hdLanesWhen: "turns", laneGuide: true, colorLines: true, theme: "auto", nightCity: false, endOnArrive: true, mapDpr: "auto", followFps: "auto", ducking: "soft", fasterRoute: "ask", rev: 2, uiScale: 1, lightsOnMap: "route", camerasOnMap: "route", nextLight: true, flashSignals: true,
   cameras: true, cameraFromM: 600, sections: true, schools: true,
   bumps: "show", curves: "show", accidents: "show", bikeAccidents: "show",
   overspeed: true, overspeedBy: 0,
@@ -116,6 +118,11 @@ export function migrate(s: GuideSettings): GuideSettings {
   }
   const lights = s.lightsOnMap as unknown;
   if (typeof lights === "boolean") s.lightsOnMap = lights ? "route" : "off";
+  // rev 2 (2026-10-01): 더 빠른 길 began as "자동" and was saved so with any other change; the owner wants it asked.
+  if ((s.rev ?? 1) < 2) {
+    if (s.fasterRoute === "auto") s.fasterRoute = "ask";
+    s.rev = 2;
+  }
   return s;
 }
 
