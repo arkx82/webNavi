@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { ACTIVE_MS, CYCLE_MS, FRESH_MS, LinkBook, REFUSED_RETRY_MS, Traffic, boxOf, cellOf, cellsAlong } from "./traffic.js";
+import { ACTIVE_MS, CYCLE_MS, FRESH_MS, LOOKUP_MS, LinkBook, REFUSED_RETRY_MS, Traffic, boxOf, cellOf, cellsAlong } from "./traffic.js";
 import { congestionOf } from "../route/osrm.js";
 
 function linksDb(dir: string) {
@@ -68,6 +68,22 @@ test("a link is found by the nodes it joins, and a route's congestion comes from
   const nodes = [1000000001, 100000000001, 100000000002, 1000000002, 1000000003];
   const segs = congestionOf(nodes, [4, 4, 9, 20], [1, 1, 1, 0], limit);
   assert.deepEqual(segs, [{ from: 0, to: 2, congestion: 3 }, { from: 2, to: 3, congestion: 2 }, { from: 3, to: 4, congestion: 0 }]);
+});
+
+test("a route looked up earns one round and a few minutes; a car on the move keeps the cells fresh for longer", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "traffic-"));
+  linksDb(dir);
+  let clock = 9_000_000;
+  const traffic = new Traffic(() => "key", dir, () => {}, async () => ({ body: { items: [] } }), () => clock);
+  traffic.touch([[127.05, 37.5]]);
+  assert.ok(traffic.active);
+  clock += LOOKUP_MS + 1;
+  assert.ok(!traffic.active, "a lookup is over after LOOKUP_MS");
+  traffic.touch([[127.05, 37.5]], true);
+  clock += LOOKUP_MS + 1;
+  assert.ok(traffic.active, "a drive is still on");
+  clock += ACTIVE_MS;
+  assert.ok(!traffic.active);
 });
 
 test("a key ITS refuses (waiting for approval) keeps the 자체 route off, and is tried again only every half hour", async () => {

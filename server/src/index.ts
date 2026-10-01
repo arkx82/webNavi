@@ -257,7 +257,7 @@ app.get<{ Querystring: { at: string; r?: string } }>("/api/road/incidents", asyn
   if (!incidents.ready) return reply.code(503).send({ error: "incidents have no ITS key on this server" });
   const r = Math.min(50_000, Math.max(500, Number(request.query.r ?? 15_000) || 15_000));
   // A car on the move asks this every few minutes: the router's speeds round it are kept fresh meanwhile.
-  traffic.touch([at]);
+  traffic.touch([at], true);
   try {
     return await incidents.near(at, r);
   } catch (refused) {

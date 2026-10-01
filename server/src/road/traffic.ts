@@ -19,8 +19,10 @@ import type { LonLat } from "../route/types.js";
 const URL = "https://openapi.its.go.kr:9443/trafficInfo";
 /** ITS's own period: nothing new comes sooner. */
 export const CYCLE_MS = 5 * 60_000;
-/** Asked this recently, the router is in use and its cells are kept fresh. */
+/** A car on the move asked this recently (the incidents poll while driving): its cells are kept fresh. */
 export const ACTIVE_MS = 10 * 60_000;
+/** A route merely looked up: fresh speeds for its card, then quiet unless a drive follows. */
+export const LOOKUP_MS = 4 * 60_000;
 /** A speed older than this is dropped from the file: the link goes back to its limit. */
 export const FRESH_MS = 15 * 60_000;
 export const CELL_DEG = 1;
@@ -149,12 +151,17 @@ export class Traffic {
     return this.approved === true;
   }
 
-  /** Someone is using the router round these points (a route's ends and path, or the car): keep their cells fresh. */
-  touch(points: LonLat[]) {
+  /**
+   * Someone is using the router round these points. [driving]: a car on the
+   * move (keeps the cells fresh for ACTIVE_MS); otherwise a route looked up,
+   * which earns one round and LOOKUP_MS — most lookups never become drives,
+   * and the key's calls are for the drives.
+   */
+  touch(points: LonLat[], driving = false) {
     if (!this.ready) return;
     const t = this.now();
     for (const c of cellsAlong(points)) this.wanted.set(c, t);
-    this.touched = t;
+    this.touched = Math.max(this.touched, driving ? t : t - (ACTIVE_MS - LOOKUP_MS));
     this.kick();
   }
 
