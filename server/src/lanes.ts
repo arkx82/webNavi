@@ -89,6 +89,8 @@ type End = Link & { path: LonLat[]; end: LonLat; before: number; side: number };
 /** How far past the stop line a corner is threaded, and how close to the route its links must keep. */
 const THREAD_M = 150;
 const THREAD_OFF_M = 6;
+/** A lane's end this close to the next link's start is the same point, surveyed twice. */
+const TRAIL_JOIN_M = 3;
 /** A lane within this of a route vertex, running within SNAP_DEG of the route's way, is the road's; lanes within CARRIAGEWAY_M of the nearest are one carriageway. */
 const SNAP_M = 20;
 const SNAP_DEG = 30;
@@ -246,7 +248,8 @@ export class LaneIndex {
         const probes: number[] = [];
         for (let m = 10; m <= Math.min(total, THREAD_M); m += 10) probes.push(offLine(along(trail, m), after));
         const off = probes.reduce((a, d) => a + d, 0) / probes.length;
-        if (off < (best?.off ?? THREAD_OFF_M)) best = { trail: [seed.end, ...trail], off };
+        if (off < (best?.off ?? THREAD_OFF_M)) // From the lane's end — unless the next link starts a step beside it (another lane's survey), when it starts there.
+        best = { trail: dist(seed.end, trail[0]) < TRAIL_JOIN_M ? trail : [seed.end, ...trail], off };
       }
     }
     return best?.trail ?? null;

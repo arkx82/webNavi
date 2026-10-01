@@ -28,6 +28,8 @@ export interface Route {
   segments: Segment[];
   /** Index ranges into [path] on a motorway or car-only road (server/src/route/types.ts). */
   motorways?: [number, number][];
+  /** Index ranges into [path] taken from 정밀도로지도's lanes (web/src/thread.ts): already on a lane, not to be snapped. */
+  threaded?: [number, number][];
 }
 
 export interface Place {

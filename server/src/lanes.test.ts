@@ -100,11 +100,11 @@ test("a corner is threaded through the lane that turns the route's way: from the
   for (let m = 0; m <= 150; m += 15) after.push(m <= 20 ? at(0, m) : at(m - 20, 20));
   const trail = index.thread(at(0, 20), 0, after);
   assert.ok(trail, "threaded");
-  assert.equal(trail!.length, 4 + 3 - 1 + 1, "the stop line, the arc, then the cross street's lane");
+  assert.equal(trail!.length, 4 + 3 - 1, "the stop line (the arc's own first point), the arc, then the cross street's lane");
   // It starts at the right lane's end and passes the arc's middle.
   const near = (p: LonLat, q: LonLat) => Math.abs(p[0] - q[0]) < 1e-6 && Math.abs(p[1] - q[1]) < 1e-6;
   assert.ok(near(trail![0], at(1.75, 0)), JSON.stringify(trail![0]));
-  assert.ok(near(trail![2], at(6, 10)), JSON.stringify(trail![2]));
+  assert.ok(near(trail![1], at(6, 10)), JSON.stringify(trail![1]));
   // A way in that no lane here takes (from the east) threads nothing.
   assert.equal(index.thread(at(0, 20), 270, after), null);
 });
