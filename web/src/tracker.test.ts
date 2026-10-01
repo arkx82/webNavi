@@ -40,23 +40,36 @@ test("a fix beside the road is drawn on the road, with the road's bearing", () =
   tracker.feed(fix(offset(offset(start, 0, 300), 90, 10), now, { course: 5 }), now);
   const shown = tracker.frame(now + 2000)!;
   assert.equal(shown.mode, "gps");
-  const onRoad = offset(start, 0, 300);
-  assert.ok(metres(shown.at[0], shown.at[1], onRoad[0], onRoad[1]) < 1);
+  // On the road (not 10 m beside it), carried on at its 15 m/s for the two seconds since the fix: 30 m past where
+  // the fix sat on the road, where the car is by now.
+  const onRoad = offset(start, 0, 330);
+  assert.ok(metres(shown.at[0], shown.at[1], onRoad[0], onRoad[1]) < 1, `${metres(shown.at[0], shown.at[1], onRoad[0], onRoad[1])}`);
   assert.ok(Math.abs(shown.bearing) < 0.5);
   assert.equal(shown.nextGuide?.guide.text, "500m 앞 우회전");
-  assert.ok(Math.abs(shown.nextGuide!.inM - 200) < 2);
-  assert.ok(Math.abs(shown.remainingM! - 1700) < 2);
+  assert.ok(Math.abs(shown.remainingM! - 1700) < 2, "what is ahead is counted from the fix's place, not the drawn car's");
 });
 
-test("the marker glides between fixes rather than jumping", () => {
+test("the marker moves on at the car's speed between fixes, never stopping or jumping", () => {
   const tracker = new Tracker();
   tracker.setRoute(route);
   tracker.feed(fix(offset(start, 0, 300), 0), 0);
-  tracker.frame(1000);
-  tracker.feed(fix(offset(start, 0, 315), 1000), 1000);
-  const half = tracker.frame(1500)!;
-  const d = metres(half.at[0], half.at[1], offset(start, 0, 300)[0], offset(start, 0, 300)[1]);
-  assert.ok(d > 5 && d < 10, `${d}`);
+  const along = (at: LonLat) => metres(at[0], at[1], start[0], start[1]);
+  // Frame by frame through the second: every step forward, each about the 15 m/s the car does.
+  let last = along(tracker.frame(16)!.at);
+  for (let t = 32; t <= 1000; t += 16) {
+    const a = along(tracker.frame(t)!.at);
+    assert.ok(a > last && a - last < 0.6, `${t}: ${a - last}`);
+    last = a;
+  }
+  // The next fix a little short of where the car was carried: no jump back, the gap melts over the next frames.
+  tracker.feed(fix(offset(start, 0, 312), 1000), 1000);
+  const before = along(tracker.frame(1000)!.at);
+  const after = along(tracker.frame(1016)!.at);
+  assert.ok(after > before - 1 && after < before + 1, `${after - before}`);
+  // And a second on, frame by frame, the car is where the fixes say: 15 m/s past the 312 m fix, give or take.
+  let later = 0;
+  for (let t = 1032; t <= 2000; t += 16) later = along(tracker.frame(t)!.at);
+  assert.ok(Math.abs(later - 327) < 4, `${later}`);
 });
 
 test("one bad fix is not off-route; three seconds off the road is", () => {

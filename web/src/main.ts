@@ -868,6 +868,7 @@ async function fetchOffers(): Promise<boolean> {
     el("pv-msg").textContent = gps.last ? "" : "현위치를 모릅니다 — 지도 가운데에서 출발하는 경로입니다";
     drawOffers();
     routeLayer.show(chosen, offers);
+    laneLine(chosen);
     setFollow(false);
     routeLayer.fit(...offers);
     log(`경로 ${offers.map((r) => `${r.provider} ${minutes(r.durationS)}`).join(", ")}`);
@@ -919,6 +920,7 @@ function drawOffers() {
       chosen = r;
       drawOffers();
       routeLayer.show(chosen, offers);
+      laneLine(chosen);
     });
     ul.append(li);
   }
@@ -976,6 +978,19 @@ function relined(r: Route) {
 }
 /** Routes whose line has been put onto the lanes (or asked to be): once each. */
 const laned = new WeakSet<Route>();
+/**
+ * [r]'s line onto the travel-direction lanes where 정밀도로지도 has them, in the background (a long route takes
+ * seconds), once: asked for the route chosen among the cards, so the line sits on the car's side of the road from
+ * the first look, and for the route driven. When it comes, whatever shows the line is drawn again.
+ */
+function laneLine(r: Route) {
+  if (laned.has(r)) return;
+  laned.add(r);
+  void snapRoute(r).then(() => {
+    if (route === r) relined(r);
+    else if (chosen === r && !el("s-preview").hidden) routeLayer.show(chosen, offers);
+  });
+}
 function startDrive(r: Route) {
   const fresh = route == null;
   const elsewhere = !fresh && goal !== drivingTo;
@@ -983,12 +998,8 @@ function startDrive(r: Route) {
   clearFaster();
   if (fresh || elsewhere || r !== faster?.best) declinedS = null;
   route = r;
-  // The line onto the travel-direction lanes where 정밀도로지도 has them — only the route driven, and in the background
-  // (a long route takes seconds): the drive starts on the provider's line and is set up again on the lanes' when they come.
-  if (!laned.has(r)) {
-    laned.add(r);
-    void snapRoute(r).then(() => { if (route === r) relined(r); });
-  }
+  // The line onto the travel-direction lanes where 정밀도로지도 has them (laneLine, often done while the cards were open).
+  laneLine(r);
   chosen = r;
   drivingTo = goal;
   routeLayer.show(route);

@@ -31,6 +31,12 @@ export const OFF_AGAIN_S = 6;
 export const LOST_S = 2;
 export const LOST_ACC_M = 50;
 export const SNAP_S = 1.5;
+/** How far ahead of its last fix the car is carried by its speed before it waits for the next. */
+const PREDICT_S = 2.5;
+/** How quickly the drawn car closes on where the fixes say it is: most of the way in about a second. */
+const CATCH_UP_S = 0.5;
+/** A fix this far from the drawn car (a leap) is taken at once, not slid to. */
+const LEAP_M = 40;
 /**
  * Reckoning only at a real speed, and only when the fixes have stopped (a
  * tunnel), not when they come vague (a garage, where they wander tens of
@@ -91,6 +97,8 @@ export class Tracker {
   private glideFromAlong: number | null = null;
   private glideToAlong: number | null = null;
   private shownAlong: number | null = null;
+  /** When the last frame was drawn: the car on the road moves by the time since, at its speed. */
+  private lastFrameAt = 0;
 
   private speedMps = 0;
   private reckonAlong = 0;
@@ -232,9 +240,18 @@ export class Tracker {
       this.shownBearing = reckoned.bearing;
     } else {
       const t = Math.min(1, (now - this.glideStart) / (this.glideS * 1000));
-      if (this.line && this.glideFromAlong != null && this.glideToAlong != null && this.glideToAlong >= this.glideFromAlong) {
-        // Along the road between the two fixes: round a ramp's curve, not across it.
-        const along = this.glideFromAlong + (this.glideToAlong - this.glideFromAlong) * t;
+      if (this.line && this.glideToAlong != null) {
+        // On the road the car is kept moving at its speed, frame by frame, and steered toward where the last fix
+        // says it should be by now — the fix's place plus the way travelled since. A glide that ran from fix to fix
+        // stopped dead at each one and jumped when the next came late; this never stops while the car moves.
+        const dt = this.lastFrameAt ? Math.min(0.25, (now - this.lastFrameAt) / 1000) : 0;
+        const predicted = this.glideToAlong + this.speedMps * Math.min(PREDICT_S, (now - this.lastFixAt) / 1000);
+        let along = this.shownAlong ?? predicted;
+        along += this.speedMps * dt;
+        // The error closed with a time constant: a small one melts away, a large one (a leap in the fixes) is taken.
+        const gap = predicted - along;
+        along += Math.abs(gap) > LEAP_M ? gap : gap * (1 - Math.exp(-dt / CATCH_UP_S));
+        along = Math.max(0, Math.min(this.line.lengthM, along));
         const placed = this.line.place(along);
         this.shownAt = placed.at;
         this.shownAlong = along;
@@ -247,6 +264,7 @@ export class Tracker {
       }
       if (this.glideS === SNAP_S && t < 1) mode = "snapping";
     }
+    this.lastFrameAt = now;
 
     const shown: Shown = {
       at: this.shownAt,
