@@ -402,6 +402,9 @@ function measure() {
 }
 const measuring = new ResizeObserver(measure);
 for (const id of ["hud", "dest-panel", "lanes", "map"]) measuring.observe(el(id));
+// Once now as well: the observer's first report comes after the first frame's layout, and a frame before it would
+// place the car by a canvas of no size.
+measure();
 function carSpot(carLow = 0) {
   // The free part of the map: right of the top-left card, and of the destination window when it is up.
   const left = Math.max(layout.hudRight, layout.destRight);
