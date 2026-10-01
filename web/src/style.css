@@ -227,7 +227,8 @@ button.ctl small { font-size: 12px; color: var(--dim); }
 button.ctl.on { background: var(--accent); color: #000; }
 button.ctl.on small { color: #000; }
 .ctl-pair { display: flex; flex-direction: column; border-radius: 14px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,.35); }
-.ctl-pair button.ctl { border-radius: 0; box-shadow: none; }
+/* The zoom pair shorter than the rest: two buttons the size of the others made the column reach the dock. */
+.ctl-pair button.ctl { border-radius: 0; box-shadow: none; height: 44px; min-height: 44px; font-size: 24px; }
 .ctl-pair button.ctl + button.ctl { border-top: 1px solid var(--line); }
 #view-ic { transition: transform 0.2s; }
 /* 현위치 in the control column, under the zoom pair: lit blue while following (pressed in), white while off the car,
@@ -630,5 +631,3 @@ body.fast * { backdrop-filter: none !important; }
 
 /* No browser zoom on a double tap over the page, and no 300 ms wait before a tap counts: the map zooms by pinch and ±. */
 body, button, #hud, #controls { touch-action: manipulation; }
-/* The folded dock sits left of the control column, so a long column (a big 화면 크기 on a short screen) does not cover it. */
-#music-dock.closed { right: 92px; }
