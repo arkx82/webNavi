@@ -627,3 +627,8 @@ body.fast * { backdrop-filter: none !important; }
 #faster b { font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #faster small { font-size: 12px; color: var(--dim); }
 #faster button.narrow { flex: 0 0 auto; min-height: 40px; line-height: 40px; padding: 0 12px; font-size: 14px; }
+
+/* No browser zoom on a double tap over the page, and no 300 ms wait before a tap counts: the map zooms by pinch and ±. */
+body, button, #hud, #controls { touch-action: manipulation; }
+/* The folded dock sits left of the control column, so a long column (a big 화면 크기 on a short screen) does not cover it. */
+#music-dock.closed { right: 92px; }

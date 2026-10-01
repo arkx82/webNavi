@@ -116,6 +116,9 @@ function openMap(): maplibregl.Map {
     let arrived = false;
     let grounded = false;
     m.once("style.load", () => { arrived = true; });
+    // No zoom on a double tap: in a car a second tap lands by mistake, and the map leaping under the buttons made the
+    // right-hand column seem to vanish. A pinch and the ± buttons zoom.
+    m.doubleClickZoom.disable();
     const ground = (why: string) => {
       if (grounded || arrived || base !== "osm") return;
       grounded = true;
