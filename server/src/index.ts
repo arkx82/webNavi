@@ -34,6 +34,7 @@ import { RefusedUrl, fetchPublic, registerGuard } from "./guard.js";
 import { registerHdmap } from "./hdmap.js";
 import fastifyCompress from "@fastify/compress";
 import { Traffic } from "./road/traffic.js";
+import { HdPoints } from "./safety/hd-points.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "..");
@@ -87,13 +88,21 @@ for (const d of DATASETS) {
   const k = kept(configDir, d.name);
   if (k) sets.set(d.name, k);
 }
+// 정밀도로지도's traffic lights and speed bumps (safety/hd-points.ts): the public lists' points near them stand aside.
+const hdPoints = new HdPoints(join(workDir, "hdmap"), (m) => app.log.info(m));
 let safety = buildSafety();
 function buildSafety(): SafetyIndex {
   const index = SafetyIndex.fromDirectory(dataDir);
   if (cameras) index.add(cameras.features);
-  for (const k of sets.values()) index.add(k.features);
+  index.add(hdPoints.features);
+  for (const k of sets.values()) index.add(hdPoints.without(k.features));
   return index.build();
 }
+// The HD points read when their files come or change (build.py writes them whole), the index rebuilt then.
+const refreshHdPoints = () => hdPoints.refresh().then((changed) => { if (changed) { safety = buildSafety(); app.log.info({ features: safety.features.length, hd: hdPoints.features.length }, "safety index rebuilt with hdmap points"); } })
+  .catch((e) => app.log.warn({ err: (e as Error).message }, "hdmap points"));
+void refreshHdPoints();
+setInterval(() => void refreshHdPoints(), 3_600_000).unref();
 app.log.info({ features: safety.features.length, cameras: cameras?.features.length ?? 0, bumps: sets.get("bumps")?.features.length ?? 0, schoolZones: sets.get("school-zones")?.features.length ?? 0, dataDir }, "safety index built");
 const hotspots = new Hotspots(settings.reader("dataGoKrKey"), (at) => nearby.ev.districtOf(at));
 let camerasError: string | null = null;
@@ -358,7 +367,11 @@ app.get<{ Querystring: RouteQuery }>("/api/route", async (request, reply) => {
     const ready = keyed.length ? keyed : [providers.osrm];
     if (ready.length === 0) return reply.code(503).send({ error: "no provider has a key on this server" });
     const settled = await Promise.allSettled(ready.map((p) => p.route({ start: s, goal: g, ...headingOf(request.query) })));
-    const routes = settled.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
+    const came = settled.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
+    // Our own route only with live speeds on it: without them it runs at the limit and reads quicker than it is
+    // (the first lookup in an area comes before that area's speeds are in; the recheck on the move brings it back).
+    const routes = came.filter((r) => r.provider !== "korea" || r.segments.some((s) => s.congestion > 0));
+    if (routes.length < came.length) request.log.info("korea route left out: no live speeds on it yet");
     const errors = settled.flatMap((r, i) => (r.status === "rejected" ? [`${ready[i].name}: ${(r.reason as Error).message}`] : []));
     traffic.touch([s, g, ...routes.flatMap((r) => r.path.filter((_, i) => i % 20 === 0))]);
     return { routes, errors };

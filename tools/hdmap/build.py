@@ -5,6 +5,8 @@
   lines.geojsons   lane lines (B2_SURFACELINEMARK / RM1_LANELINE): t = colour·single/double·solid/dashed, k = kind
   marks.geojsons   road markings (B3_SURFACEMARK / RM2_ROADMARKING): arrows (k 537x–539x), crosswalks …
   links.geojsons   lane-level links (A2_LINK / NT2_LINK), for the lane guidance: lane no., type, turn, from/to/left/right
+  lights.geojsons  traffic lights (C1_TRAFFICLIGHT / SF3_TRAFFICLIGHT): t = type (2019: 1–9 a car's, 11 a walker's; 2024: 1xx a car's)
+  bumps.geojsons   speed bumps (C4_SPEEDBUMP / SF5_SPEEDBUMP) as polygons; the server takes their middle
   hdmap.mbtiles    lines + marks as vector tiles, zoom 15–18 (tippecanoe), served by the server
 
 The zips are read in place (GDAL /vsizip/): of their 360 GB only the vector
@@ -29,10 +31,12 @@ ap.add_argument("out", help="where the layers and tiles go (the server's WORK_DI
 ap.add_argument("--only", metavar="이름,이름", help="only the zips whose names contain one of these (--only=… works too)")
 # The layer files are there already: only clean them and make the tiles again.
 ap.add_argument("--tiles-only", action="store_true", help="the layer files are there: clean them and make the tiles again")
+ap.add_argument("--layers", metavar="lights,bumps", help="only these layers (the others' files are left as they are; no tiles unless lines or marks are among them)")
 ARGS = ap.parse_args()
 SRC, OUT = ARGS.src, ARGS.out
 ONLY = [o for o in ARGS.only.split(",") if o] if ARGS.only else None
 TILES_ONLY = ARGS.tiles_only
+ONLY_LAYERS = [l for l in ARGS.layers.split(",") if l] if ARGS.layers else None
 GDAL = "ghcr.io/osgeo/gdal:alpine-small-latest"
 TIPPE = "klokantech/tippecanoe:latest"
 FOLDERS = ["HDMap_UTM52N_타원체고", "HDMap_UTMK_정표고", "HDMap_UTM-K_정표고", "HDMap_UTMK_타원체고", "HDMap_UTM-K_타원체고"]
@@ -44,7 +48,13 @@ LAYERS = {
     "links": [(layer, {"id": ["ID"], "lane": ["LaneNo"], "type": ["LinkType"], "turn": ["Turn"], "v": ["MaxSpeed"],
                        "a": ["FromNodeID"], "b": ["ToNodeID"], "l": ["L_LinkID"], "r": ["R_LinkID"]})
               for layer in ("A2_LINK", "NT2_LINK")],
+    "lights": [("C1_TRAFFICLIGHT", {"id": ["ID"], "t": ["Type"], "link": ["LinkID"]}), ("SF3_TRAFFICLIGHT", {"id": ["ID"], "t": ["LightType"]})],
+    "bumps": [("C4_SPEEDBUMP", {"id": ["ID"], "link": ["LinkID"]}), ("SF5_SPEEDBUMP", {"id": ["ID"]})],
 }
+if ONLY_LAYERS:
+    unknown = [l for l in ONLY_LAYERS if l not in LAYERS]
+    if unknown: sys.exit(f"모르는 레이어: {unknown} (있는 것: {list(LAYERS)})")
+    LAYERS = {k: v for k, v in LAYERS.items() if k in ONLY_LAYERS}
 USED = {shp_layer for choices in LAYERS.values() for shp_layer, _ in choices}
 # Korea, with room: a feature outside it (one sits at 73.7 N) would stretch the tiles' bounds over nothing.
 LON = (124.0, 132.0)
@@ -221,7 +231,7 @@ def main():
         kept, dropped, far = clean_join(parts, os.path.join(OUT, f"{layer}.geojsons"))
         print(f"{layer}: {kept} features ({dropped} bad lines, {far} outside Korea dropped), {os.path.getsize(os.path.join(OUT, f'{layer}.geojsons')) / 1e6:.0f} MB", flush=True)
     shutil.rmtree(stage, ignore_errors=True)
-    tiles()
+    if "lines" in LAYERS or "marks" in LAYERS: tiles()
 
 main()
 finish()
