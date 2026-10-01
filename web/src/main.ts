@@ -25,11 +25,12 @@ import { ALERT_KINDS, alertPhrase, type AlertKind } from "../../server/src/phras
 import { Nearby } from "./nearby";
 import { autoZoom } from "./autozoom";
 import { EVENTS, turnSay } from "./speech";
-import { junctionOf, laneHint, motorwayAt, namedTurnPhrase } from "./highway";
+import { junctionKind, junctionOf, laneHint, motorwayAt, motorwaySides, namedTurnPhrase } from "./highway";
 import { CLOSEUP_CAR_AT, CLOSEUP_PITCH, CloseupHold, zoomToSee, type Closeup } from "./closeup";
 import { RerouteBackoff } from "./reroute-backoff";
 import { Stillness } from "./still";
 import { TURN_NEAR_M, fasterPhrase, turnPhrase, warningPhrase, type Turn } from "../../server/src/phrases";
+import { SectionTracker, type ActiveSectionInfo } from "./section-tracker";
 import { drawGuide, loadGuide, shows, wants, type VoiceList } from "./guide-settings";
 import { currentUser, logout, push as pushUserData } from "./userdata";
 import { WeatherPanel } from "./weather";
@@ -289,7 +290,8 @@ function frame() {
     if (shown) {
       marker.setLngLat(shown.at);
       put("mode", MODES[shown.mode] + (shown.offM != null ? ` · ${Math.round(shown.offM)} m` : ""));
-      marker.setRotation(shown.bearing);
+      markerBearing = markerBearing == null ? shown.bearing : lerpAngle(markerBearing, shown.bearing, MARKER_TURN_SHARE);
+      marker.setRotation(markerBearing);
       zoomSpeed += (shown.speedMps * 3.6 - zoomSpeed) * 0.03;
       turnInM = route ? shown.nextGuide?.inM : undefined;
       closeup = closeupFor(shown);
@@ -304,6 +306,7 @@ function frame() {
       hdLayer?.setAway(guide.hdLanesWhen === "turns" && follow && !handsOn() && lanesAway(shown));
       showTurn(shown);
       showLanes(shown);
+      showSectionHud(shown);
       backoff.seen(!shown.offRoute && (shown.offM == null || shown.offM <= OFF_M));
     }
   } catch (e) {
@@ -334,6 +337,11 @@ const LANES_SLOW_KMH = 30;
 
 /** When the camera last followed, so its easing goes by time, not by frames. */
 let followedAt = 0;
+/** The most the camera turns in a second: a sharp turn is followed, a re-route's new heading is swung to. */
+const CAMERA_TURN_DEG_S = 70;
+/** The car's own arrow turned by this share a frame: the line's bearing steps at each vertex, the arrow should not. */
+const MARKER_TURN_SHARE = 0.2;
+let markerBearing: number | null = null;
 
 /** One frame of following: everything eases toward where it should be. */
 function followCar(at: LonLat, speedMps = 0) {
@@ -356,7 +364,9 @@ function followCar(at: LonLat, speedMps = 0) {
   const before = map.getCenter();
   const zoomTo = close ? zoomToSee(Math.max(0, closeup!.inM), at[1], layout.height * (CLOSEUP_CAR_AT - 0.12)) : Math.max(10, Math.min(20, speedZoom() + zoomBias));
   const camera = {
-    bearing: tracker.cameraBearing(map.getBearing(), k(0.18)),
+    // Gently (a time constant of a third of a second), and never faster than CAMERA_TURN_DEG_S: the target itself
+    // changes smoothly (tracker.ts cameraBearing looks 2.5 s ahead), so a small share is enough to follow it.
+    bearing: tracker.cameraBearing(map.getBearing(), k(0.05), CAMERA_TURN_DEG_S * (frames / 60)),
     pitch: approach(map.getPitch(), close ? CLOSEUP_PITCH : v.pitch, k(close ? 0.08 : 0.12)),
     // Quick when coming back to the car; smooth as the speed changes, like a drive.
     zoom: approach(map.getZoom(), zoomTo, k(returning ? 0.14 : close ? 0.06 : 0.04)),
@@ -704,13 +714,17 @@ function showScreen(name: Screen) {
 
 // -- 1. where to --
 
+let searchAsked = 0;
 async function search(q: string) {
   const results = el<HTMLUListElement>("results");
   results.replaceChildren();
   results.hidden = false;
   el("recent-box").hidden = true;
+  // Only the latest search fills the list: a slower earlier answer would otherwise be appended under it.
+  const asked = ++searchAsked;
   try {
     const places = await api.search(q, gps.last ? here() : undefined);
+    if (asked !== searchAsked) return;
     if (places.length === 0) results.append(item("결과 없음", ""));
     for (const p of places) {
       const li = item(p.name, `${p.address}${p.distanceM != null ? ` · ${km(p.distanceM)}` : ""}`);
@@ -718,6 +732,7 @@ async function search(q: string) {
       results.append(li);
     }
   } catch (e) {
+    if (asked !== searchAsked) return;
     results.append(item("검색 실패", (e as Error).message));
   }
 }
@@ -903,8 +918,11 @@ el("pv-find").addEventListener("click", async () => {
 
 async function fetchOffers(): Promise<boolean> {
   if (!goal) return false;
+  const to = goal;
   try {
     const answer = await api.routes(here(), goal.at);
+    // Another place was chosen while the ways were found: these are not its ways (koreaLater has the same guard).
+    if (goal !== to) return false;
     for (const e of answer.errors) log(`경로 실패 ${e}`);
     if (answer.routes.length === 0) throw new Error(answer.errors.join("; ") || "경로 없음");
     offers = answer.routes.sort((a, b) => a.durationS - b.durationS);
@@ -1154,6 +1172,8 @@ function endDrive() {
   recheck = null;
   // The camera card, the red speed and the next-camera mark: showLimit is only otherwise called from watchRoad.
   showLimit(null, null);
+  sectionTracker.reset();
+  showSectionHud(null);
   closeupHold.reset();
   closeup = null;
   backoff.reset();
@@ -1554,13 +1574,44 @@ function forNextTurn(info: Lanes | null, shown: Shown): Lanes | null {
 function junctionFor(g: Guide, m: Maneuver): JunctionView | null {
   const go = branchOf(m);
   if (!go) return null;
-  const t = g.text, j = junctionOf(g);
+  // TMAP's and NAVER's words for the same junction, where the drive is on Kakao's route: theirs say 출구·입구·방향
+  // apart, Kakao's "진입" for a branch and an entrance alike. The kind is read from the plainer text; the name and
+  // the place pointed to from ours first, theirs where ours lack them.
+  const other = sameJunctionElsewhere(g);
+  const t = other?.text ?? g.text, j = junctionOf(g), jo = other ? junctionOf(other) : null;
   const motorway = onMotorway.get(g) ?? false;
-  const named = /IC|JC|분기|나들목|톨게이트|TG/.test(`${t} ${g.name ?? ""}`);
+  const named = /IC|JC|분기|나들목|톨게이트|TG/.test(`${g.text} ${g.name ?? ""} ${other?.text ?? ""}`);
   if (!motorway && !named && !/고속|도시고속|자동차전용/.test(t)) return null;
-  const kind: JunctionView["kind"] = /출구|진출/.test(t) ? "exit" : /입구|진입/.test(t) ? "enter" : "fork";
+  // From the road first, not the words alone (highway.ts junctionKind).
+  const kind: JunctionView["kind"] = junctionKind(t, route && routeLine ? motorwaySides(route, routeLine, g) : null);
   if (kind === "fork" && !(m === "slight-left" || m === "slight-right" || m === "ramp-left" || m === "ramp-right" || m === "loop-left" || m === "loop-right")) return null;
-  return { kind, go, name: j?.name, toward: j?.toward };
+  return { kind, go, name: j?.name ?? jo?.name, toward: j?.toward ?? jo?.toward };
+}
+
+/** Guides of the same junction in another provider's route (the ways offered), within this of each other. */
+const SAME_JUNCTION_M = 60;
+/** Once a guide (asked every frame); made again with the route (prepareHighway). */
+let junctionElsewhere = new WeakMap<Guide, Guide | null>();
+/**
+ * The guide at the same junction in a TMAP or NAVER route among the ways
+ * offered, when the drive is on Kakao's route, else null: the nearest
+ * guide of theirs within SAME_JUNCTION_M that names a motorway junction.
+ */
+function sameJunctionElsewhere(g: Guide): Guide | null {
+  if (!route || route.provider !== "kakao") return null;
+  const had = junctionElsewhere.get(g);
+  if (had !== undefined) return had;
+  let best: { guide: Guide; d: number } | null = null;
+  for (const r of offers) {
+    if (r === route || (r.provider !== "tmap" && r.provider !== "naver")) continue;
+    for (const o of r.guides) {
+      if (!/IC|JC|분기|출구|진출|입구|진입|고속|나들목/.test(o.text)) continue;
+      const d = metres(g.at[0], g.at[1], o.at[0], o.at[1]);
+      if (d <= SAME_JUNCTION_M && (!best || d < best.d)) best = { guide: o, d };
+    }
+  }
+  junctionElsewhere.set(g, best?.guide ?? null);
+  return best?.guide ?? null;
 }
 
 // ---- 노면색깔유도선: the pink or green line to follow at a motorway junction (color-guides.ts) ----
@@ -1675,6 +1726,7 @@ function prepareHighway(r: Route) {
   closeupHold.reset();
   closeup = null;
   onMotorway = new Map(r.guides.map((g) => [g, motorwayAt(r, line.project(g.at, 0, r.path.length).segment)]));
+  junctionElsewhere = new WeakMap();
   if (!guide.junctionNames || !guide.turns) return;
   for (const g of r.guides) {
     if (!onMotorway.get(g)) continue;
@@ -1789,6 +1841,7 @@ async function watchRoad(fix: Fix) {
     log(`경고 ${phrase}`);
     voice.say(phrase, undefined, { key: `warn:${f.id}:${due.rungM}` });
   }
+  showSectionHud(tracker.frame());
   showLimit(w.limitAt(along), fix.speed);
   showNextLight(w, along, fix.speed);
   // The protected zones on the route, as bands on the road (those the driver keeps shown).
@@ -1969,6 +2022,61 @@ function alertNotes(): Note[] {
 let chimedAt = 0;
 const CHIME_EVERY_MS = 3000;
 
+const sectionTracker = new SectionTracker();
+let currentSectionInfo: ActiveSectionInfo | null = null;
+/** Where along the route the HUD was last worked out, and when: again once the car has moved on, or after a while standing. */
+let hudAlong: number | null = null;
+let hudAt = 0;
+const HUD_STANDING_MS = 2000;
+
+/**
+ * 가운데 상단 구간 단속 실시간 누적 평균속도 HUD 위젯 (Section Speed HUD):
+ * 터널 안(추측 항법)이나 GPS 음영 지역에서도 경과 시간과 경로상 진행 거리(alongM)로
+ * 누적 평균속도를 산출하여 표시하고, 제한속도 대비 초과 시 붉은색 경고 및 차임벨.
+ * The voice is the road watch's own 구간 단속 sentences (warnings.ts, rendered ahead of time, under the
+ * driver's settings): nothing is said from here. Worked out when the car has moved along the route (a fix,
+ * or a reckoned step in a tunnel), not every frame: between fixes the time runs on while the distance does
+ * not, and an average of the two saws.
+ */
+function showSectionHud(shown: Shown | null) {
+  const along = shown?.alongM ?? null;
+  const now = Date.now();
+  if (along != null && along === hudAlong && now - hudAt < HUD_STANDING_MS) return;
+  hudAlong = along;
+  hudAt = now;
+  const speedKmh = shown ? shown.speedMps * 3.6 : 0;
+  const sec = watch && along != null ? watch.currentSection(along) : null;
+  const res = sectionTracker.update(
+    along ?? 0,
+    speedKmh,
+    sec ? { id: sec.feature.id, limit: sec.limit, startAlongM: sec.startAlongM, endAlongM: sec.endAlongM } : null,
+    guide.overspeedBy,
+    now,
+  );
+  currentSectionInfo = res.current;
+  if (res.justExited) log(`구간단속 종료 최종 평균 ${res.justExited.avgKmh}km/h (제한 ${res.justExited.limit})`);
+
+  const box = el("section-hud");
+  if (!res.current) {
+    box.hidden = true;
+    return;
+  }
+  const s = res.current;
+  if (res.justEntered) log(`구간단속 진입 제한 ${s.limit}km/h`);
+  box.hidden = false;
+  put("sec-limit-num", String(s.limit));
+  put("sec-remain", `남은 거리 ${km(s.remainM)}`);
+  put("sec-avg-num", String(s.avgKmh));
+  const targetBox = el("sec-target-box");
+  targetBox.hidden = s.targetKmh == null;
+  if (s.targetKmh != null) put("sec-target-num", String(s.targetKmh));
+  box.classList.toggle("over", s.over);
+  if (s.over && guide.overspeed && now - chimedAt > CHIME_EVERY_MS) {
+    chimedAt = now;
+    voice.chime();
+  }
+}
+
 /**
  * The limit ahead on the panel (a sign, and "과속 카메라 420 m" or
  * "구간 단속"), the speed in red over it, and the chime — the car apps'
@@ -1979,12 +2087,16 @@ function showLimit(held: ReturnType<RouteWatch["limitAt"]>, speedMps: number | n
   // The camera it is about, marked on the map (camera-layer.ts): the one the warning counts down to.
   cameraLayer?.setNextCamera(held?.why === "camera" && held.id ? held.id : null);
   const kmh = speedMps == null ? null : speedMps * 3.6;
-  const over = !!held && kmh != null && kmh > held.limit + guide.overspeedBy;
+  const speedOver = !!held && kmh != null && kmh > held.limit + guide.overspeedBy;
+  const sectionOver = !!held && held.why === "section" && !!currentSectionInfo && currentSectionInfo.over;
+  const over = speedOver || sectionOver;
   document.querySelector(".big")!.classList.toggle("over", over);
   document.body.classList.toggle("over-limit", over);
   if (!held) return;
   el("cam-limit").textContent = String(held.limit);
-  el("cam-what").textContent = held.why === "section" ? "구간 단속 중" : held.why === "school" ? "보호구역" : `단속 카메라 ${km(held.inM ?? 0)}`;
+  el("cam-what").textContent = held.why === "section"
+    ? (currentSectionInfo ? `구간 단속 (평균 ${currentSectionInfo.avgKmh})` : "구간 단속 중")
+    : held.why === "school" ? "보호구역" : `단속 카메라 ${km(held.inM ?? 0)}`;
   if (over && guide.overspeed && Date.now() - chimedAt > CHIME_EVERY_MS) {
     chimedAt = Date.now();
     voice.chime();

@@ -185,3 +185,24 @@ test("still off after a re-route that did not come, it is asked again", () => {
   }
   assert.deepEqual(calls, [OFF_S * 1000, (OFF_S + OFF_AGAIN_S) * 1000, (OFF_S + 2 * OFF_AGAIN_S) * 1000]);
 });
+
+test("the camera looks 2.5 s ahead along the chord, so a bend is turned into as a whole, and never faster than asked", () => {
+  // North 500 m, then east 500 m.
+  const bent: LonLat[] = [...Array.from({ length: 6 }, (_, i) => offset(start, 0, i * 100)), ...Array.from({ length: 5 }, (_, i) => offset(offset(start, 0, 500), 90, (i + 1) * 100))];
+  const tracker = new Tracker();
+  tracker.setRoute({ ...route, path: bent, distanceM: 1000 });
+  const now = 1_000_000;
+  // 480 m along, doing 10 m/s: the lookahead is the 40 m floor, 20 m of it past the corner.
+  tracker.feed(fix(offset(start, 0, 480), now, { speed: 10, course: 0 }), now);
+  tracker.frame(now);
+  const chord = tracker.cameraBearing(0, 1);
+  assert.ok(Math.abs(chord - 45) < 2, `chord ${chord}`);
+  // The step capped: ten degrees of the forty-five.
+  const capped = tracker.cameraBearing(0, 1, 10);
+  assert.ok(Math.abs(capped - 10) < 0.01, `capped ${capped}`);
+  // Well before the corner the chord is the road's own way.
+  tracker.feed(fix(offset(start, 0, 300), now + 1000, { speed: 10, course: 0 }), now + 1000);
+  tracker.frame(now + 1000);
+  const straight = tracker.cameraBearing(90, 1);
+  assert.ok(straight < 1 || straight > 359, `straight ${straight}`);
+});

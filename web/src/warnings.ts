@@ -85,6 +85,8 @@ const ALL: WatchPrefs = { wants: () => true, cameraFromM: 600 };
 
 /** Cameras this close along the route are one camera. */
 const CAMERA_TWIN_M = 40;
+/** The longest a 구간 단속 is taken to run past its start camera when its end camera is not on the route. */
+export const SECTION_MAX_M = 25_000;
 const MERGED_CAMERAS = new Set<Kind>(["speed", "signal", "speed-signal"]);
 /** Two rows for one camera as one: speed and signal together are a 신호·과속 camera; the limit is whichever says one. The first row's id is kept, so what was said of it stays said. */
 function mergeCameras(a: Feature, b: Feature): Feature {
@@ -112,7 +114,10 @@ export class RouteWatch {
   /** Takes the server's radius answer; features already known are left alone. */
   add(features: Feature[]) {
     const known = new Set(this.onRoute.map((f) => f.feature.id));
-    for (const f of features) if (!known.has(f.id)) this.place(f);
+    let added = false;
+    for (const f of features) if (!known.has(f.id)) { this.place(f); added = true; }
+    // A new array marks the features changed, for what is cached off them (sections()).
+    if (added) this.onRoute = [...this.onRoute];
   }
 
   private place(f: Feature) {
@@ -156,16 +161,35 @@ export class RouteWatch {
     return this.onRoute.filter((f) => f.feature.kind === "school-zone" || f.feature.kind === "senior-zone");
   }
 
-  /** The 구간 단속 stretches on the route: from each start camera to the end camera after it (to the route's end without one). */
+  /**
+   * The 구간 단속 stretches on the route: from each start camera to the end camera after it. Without one (the route
+   * leaves by an exit before it, or the end camera is still beyond the radius asked for) the stretch runs on for
+   * SECTION_MAX_M at most, not to the destination. Kept until the features change: asked every frame.
+   */
   sections(): { feature: Feature; alongM: number; endM: number }[] {
+    if (this.sectionsOf === this.onRoute) return this.sectionsKnown;
     const out: { feature: Feature; alongM: number; endM: number }[] = [];
     let open: { feature: Feature; alongM: number; endM: number } | null = null;
     for (const f of this.onRoute) {
-      if (f.feature.kind === "section-start" && !open) open = { feature: f.feature, alongM: f.alongM, endM: this.line.lengthM };
+      if (f.feature.kind === "section-start" && !open) open = { feature: f.feature, alongM: f.alongM, endM: Math.min(this.line.lengthM, f.alongM + SECTION_MAX_M) };
       else if (f.feature.kind === "section-end" && open) { open.endM = f.alongM; out.push(open); open = null; }
     }
     if (open) out.push(open);
+    this.sectionsOf = this.onRoute;
+    this.sectionsKnown = out;
     return out;
+  }
+  private sectionsOf: unknown = null;
+  private sectionsKnown: { feature: Feature; alongM: number; endM: number }[] = [];
+
+  /** The 구간 단속 the car is currently inside, if any. */
+  currentSection(alongM: number): { feature: Feature; startAlongM: number; endAlongM: number; limit: number } | null {
+    for (const s of this.sections()) {
+      if (alongM >= s.alongM && alongM <= s.endM && s.feature.limit) {
+        return { feature: s.feature, startAlongM: s.alongM, endAlongM: s.endM, limit: s.feature.limit };
+      }
+    }
+    return null;
   }
 
   /** Forgets the features of [kinds] (an incident list asked again: the cleared ones go). */
@@ -229,7 +253,8 @@ export class RouteWatch {
     const prefs = this.prefs();
     for (const f of this.onRoute) {
       if (f.alongM > alongM) break;
-      if (f.feature.kind === "section-start" && f.feature.limit) section = f.feature.limit;
+      // Past its start by more than a section can be long: its end camera is not on this route (sections()).
+      if (f.feature.kind === "section-start" && f.feature.limit) section = alongM - f.alongM <= SECTION_MAX_M ? f.feature.limit : null;
       if (f.feature.kind === "section-end") section = null;
       // Inside a school zone the limit holds whatever a camera says.
       if ((f.feature.kind === "school-zone" || f.feature.kind === "senior-zone") && f.feature.limit && f.endM >= alongM && (prefs.shows?.(f.feature.kind) ?? true)) {

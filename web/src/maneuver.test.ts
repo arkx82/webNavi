@@ -44,14 +44,23 @@ test("a guide with no way in its words gets one from the road's bend", () => {
   assert.equal(fromBend(0, 180, false), "uturn");
 });
 
-test("the road's shape has the last word: a loop ramp is a loop, and a side named against a clear bend gives way", async () => {
+test("a lane named beside the way does not become the way: the side bound to 방향/출구 wins, else the last said", async () => {
+  const { fromText } = await import("./maneuver.js");
+  assert.equal(fromText("좌측 차로를 이용하여 오른쪽 방향"), "slight-right");
+  assert.equal(fromText("우측 2차로 이용, 왼쪽 고속도로 출구"), "ramp-left");
+  assert.equal(fromText("오른쪽 방향으로 진행, 왼쪽 차로 주의"), "slight-right");
+  assert.equal(fromText("왼쪽 차로에서 오른쪽"), "slight-right");
+  assert.equal(fromText("오른쪽 방향"), "slight-right");
+});
+
+test("the road's shape preserves explicit directions and recognizes loop ramps", async () => {
   const { shapedOf } = await import("./maneuver.js");
   // 성수대교 onto 강변북로: the words say 오른쪽 방향, the road curls 270° right.
   assert.equal(shapedOf("slight-right", { d60: 40, sweep200: 270 }), "loop-right");
   assert.equal(shapedOf("other", { d60: -30, sweep200: -250 }), "loop-left");
-  // The words say right, the road bends 40° left within 60 m: left it is (a ramp stays a ramp).
-  assert.equal(shapedOf("slight-right", { d60: -40, sweep200: -45 }), "slight-left");
-  assert.equal(shapedOf("ramp-right", { d60: -40, sweep200: -45 }), "ramp-left");
+  // Explicit directions are preserved and never inverted by road curvature
+  assert.equal(shapedOf("slight-right", { d60: -40, sweep200: -45 }), "slight-right");
+  assert.equal(shapedOf("ramp-right", { d60: -40, sweep200: -45 }), "ramp-right");
   // A fork that parts slowly, or bends the named way: the words stand.
   assert.equal(shapedOf("slight-right", { d60: 8, sweep200: 12 }), "slight-right");
   assert.equal(shapedOf("slight-right", { d60: -10, sweep200: -12 }), "slight-right");

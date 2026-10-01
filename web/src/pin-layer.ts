@@ -40,6 +40,8 @@ export class PinLayer {
         if (typeof id === "string") this.onPick(id);
       });
     }
+    // An install that fell through (the style not done, an icon refused) is tried again at the next idle.
+    map.on("idle", () => { if (!this.ready) void this.install(); });
     if (map.isStyleLoaded()) void this.install();
   }
 
@@ -48,7 +50,20 @@ export class PinLayer {
     if (this.ready) this.fill();
   }
 
+  private installing = false;
   private async install() {
+    if (this.ready || this.installing) return;
+    this.installing = true;
+    try {
+      await this.installOnce();
+    } catch {
+      // The style not done yet: the next idle tries again.
+    } finally {
+      this.installing = false;
+    }
+  }
+
+  private async installOnce() {
     // Called from style.load, where isStyleLoaded() can still be false
     // while the sprite comes; sources and layers may be added all the same.
     if (this.ready) return;
@@ -116,7 +131,8 @@ export class PinLayer {
     if (this.map.hasImage(name)) return;
     const img = new Image();
     img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
-    await img.decode();
+    // One icon that will not decode leaves that icon out, not every pin.
+    try { await img.decode(); } catch { return; }
     if (!this.map.hasImage(name)) this.map.addImage(name, img, options);
   }
 }

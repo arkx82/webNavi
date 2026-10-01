@@ -90,14 +90,18 @@ export function retryAfterMs(failures: number): number {
 }
 
 const timers = new Map<UserKey, ReturnType<typeof setTimeout>>();
-/** What is to be sent, the latest value a key; taken out once the server has it. */
-const pending = new Map<UserKey, unknown>();
+/**
+ * What is to be sent, the latest value a key, as JSON; taken out once the server has it. Serialised, not the
+ * object: the guide settings are one object changed in place, and the same reference after a send does not mean
+ * nothing changed while it was on its way.
+ */
+const pending = new Map<UserKey, string>();
 const failures = new Map<UserKey, number>();
 
 /** Sends [value] to the server a moment after the last change; marked unsent in storage until the server has it. */
 export function push(key: UserKey, value: unknown) {
   if (!me) return;
-  pending.set(key, value);
+  pending.set(key, JSON.stringify(value));
   write(dirtyKey(key), String(Date.now()));
   later(key, SETTLE_MS);
 }
@@ -112,9 +116,9 @@ async function send(key: UserKey, keepalive = false) {
   clearTimeout(timers.get(key));
   timers.delete(key);
   if (!pending.has(key)) return;
-  const value = pending.get(key);
+  const value = pending.get(key)!;
   try {
-    const a = await fetch(`/api/me/data/${key}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ value }), keepalive });
+    const a = await fetch(`/api/me/data/${key}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: `{"value":${value}}`, keepalive });
     if (!a.ok) throw new Error(`${a.status}`);
     failures.delete(key);
     // A newer change came while this one was on its way: it is still pending, its own send follows.

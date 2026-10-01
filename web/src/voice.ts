@@ -191,13 +191,32 @@ export class Voice {
         return;
       }
       await this.unlock();
+      // The unlock can wait for a tap (a page reopened and the guide resumed): a sentence whose moment passed
+      // meanwhile stays unsaid rather than coming out at the wrong place.
+      if (Date.now() > item.until) {
+        this.onLate(text, (Date.now() - item.at) / 1000);
+        void this.next();
+        return;
+      }
       this.duck(true);
       const began = this.context.currentTime;
       await new Promise<void>((done) => {
         const source = this.context.createBufferSource();
         source.buffer = buffer;
         source.connect(this.speech);
-        source.onended = () => done();
+        let finished = false;
+        const finish = () => {
+          if (finished) return;
+          finished = true;
+          clearTimeout(watchdog);
+          done();
+        };
+        source.onended = finish;
+        // ended can fail to come (the context stalled mid-sentence): then the queue must not wait for ever.
+        const watchdog = setTimeout(() => {
+          try { source.stop(); } catch { /* already stopped */ }
+          finish();
+        }, buffer.duration * 1000 + 2000);
         this.playing = source;
         source.start();
       });

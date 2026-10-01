@@ -122,10 +122,16 @@ export function junctionSvg(j: Junction, lines?: LaneCard["lines"]): string {
     body = path("M80 104 L80 8", "main", false) + path(ramp, j.go, true) +
       (L ? head(36, 22, -50, "left") : head(124, 22, 50, "right")) + label(L ? 28 : 132, 16, j.toward, L ? "end" : "start");
   } else {
-    const ramp = L ? "M34 104 C34 70 80 64 80 40" : "M126 104 C126 70 80 64 80 40";
-    body = path("M80 104 L80 8", "main", false) + path(ramp, j.go, true) + path("M80 42 L80 10", "main", true) + head(80, 10, 0, "main") + label(92, 20, j.toward, "start");
+    // An entrance as it is driven: the road the car is on up the middle, the ramp off it to the side taken, joining
+    // the motorway that runs up that side. (Drawn before as a ramp merging in from the side, which read as the
+    // opposite way at a right-hand entrance.)
+    const mx = L ? 36 : 124;
+    const ramp = L ? "M80 104 L80 72 C80 54 56 46 36 30" : "M80 104 L80 72 C80 54 104 46 124 30";
+    body = path("M80 104 L80 8", "main", false) + path(`M${mx} 104 L${mx} 8`, "main", false) + path(ramp, j.go, true)
+      + path(`M${mx} 32 L${mx} 10`, "main", true) + head(mx, 10, 0, "main") + label(L ? mx - 10 : mx + 10, 20, j.toward, L ? "end" : "start");
   }
-  return `<svg viewBox="0 0 160 110" width="176" height="121" aria-hidden="true">${body}</svg>`;
+  // overflow visible: a long name (남구리IC) runs past the drawing's edge into the card's margin rather than being cut.
+  return `<svg viewBox="0 0 160 110" width="176" height="121" overflow="visible" aria-hidden="true">${body}</svg>`;
 }
 
 export type GuideColour = "pink" | "green" | "blue" | "orange";

@@ -154,6 +154,7 @@ export class Nearby {
     }
   }
 
+  private static readonly FAILED_RETRY_MS = 60_000;
   private async ask(category: Category, at: LonLat, r: number) {
     this.busy.add(category);
     const fuel = this.fuel;
@@ -164,8 +165,9 @@ export class Nearby {
       this.asked.set(category, { at, r, t: Date.now(), fuel });
     } catch (e) {
       this.errors.set(category, (e as Error).message);
-      // Not asked again for a while, or a missing key would be asked every two seconds.
-      this.asked.set(category, { at, r, t: Date.now() - 240_000, fuel });
+      // Not asked again for a minute, or a missing key would be asked every two seconds (the chargers' own
+      // staleness is 90 s, so their wait is set from it, not from a fixed age).
+      this.asked.set(category, { at, r, t: Date.now() - (category === "ev" ? 90_000 : 300_000) + Nearby.FAILED_RETRY_MS, fuel });
       this.host.log(`주변 ${LOOK[category].label} 실패 ${(e as Error).message}`);
     } finally {
       this.busy.delete(category);

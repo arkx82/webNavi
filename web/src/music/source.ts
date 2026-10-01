@@ -87,11 +87,13 @@ export async function tokenFor(service: "tidal"): Promise<string> {
  */
 export function lazy(id: MusicSource["id"], label: string, load: () => Promise<MusicSource>): MusicSource {
   let real: MusicSource | null = null;
+  let loading: Promise<MusicSource> | null = null;
   const pending: ((now: NowPlaying) => void)[] = [];
   return {
     id, label,
     async connect() {
-      real ??= await load();
+      // One load however many connect() overlap (this source, another, this again before the module came).
+      real ??= await (loading ??= load());
       for (const l of pending) real.onState(l);
       pending.length = 0;
       await real.connect();

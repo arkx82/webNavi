@@ -1,15 +1,14 @@
 import type maplibregl from "maplibre-gl";
 import type { Line } from "./geo";
-import type { LonLat } from "./types";
 
 /**
  * 보호구역 on the road itself: the stretch of the route a school (or a home
- * for the old) makes a zone, as a translucent band the road's width — red
- * for a child's, orange for an old person's, yellow for a 구간 단속 between
- * its cameras — with its name, so the car is seen to be in it, not only told.
+ * for the old) makes a zone, as a band along the route line's own shape —
+ * red for a child's, orange for an old person's, amber for a 구간 단속
+ * between its cameras — a little wider than the route line at every zoom
+ * (route-layer.ts), so it reads as the road lit, not a smear over the town.
  */
 export interface Zone { id: string; kind: "school-zone" | "senior-zone" | "section"; alongM: number; endM: number }
-const HALF_WIDTH_M = 11;
 /** 구간 단속 too: the stretch between its cameras, in yellow (warnings.ts sections()). */
 const WORDS = { "school-zone": "어린이 보호구역", "senior-zone": "노인 · 장애인 보호구역", section: "구간 단속" };
 
@@ -17,7 +16,7 @@ export class ZoneLayer {
   private ready = false;
   private data: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [] };
   private key = "";
-  /** The line the bands were last drawn along: a new line (the route moved onto the lanes) draws them again. */
+  /** The line the bands were last drawn along. */
   private line: Line | null = null;
 
   constructor(private map: maplibregl.Map) {
@@ -26,26 +25,26 @@ export class ZoneLayer {
     this.tryInstall();
   }
 
-  /** The zones on the route, drawn along [line] (the route's own shape, so a bend is a bent band). */
+  /** The zones on the route, drawn directly along the route line's exact coordinates. */
   set(zones: Zone[], line: Line | null) {
-    const key = line ? zones.map((z) => `${z.id}:${Math.round(z.alongM)}`).join("|") : "";
+    const key = line ? zones.map((z) => `${z.id}:${Math.round(z.alongM)}:${Math.round(z.endM)}`).join("|") : "";
     if (key === this.key && line === this.line) return;
     this.key = key;
     this.line = line;
     const features: GeoJSON.Feature[] = [];
     for (const z of line ? zones : []) {
-      const left: LonLat[] = [], right: LonLat[] = [];
-      for (let m = z.alongM; m <= z.endM + 0.1; m += Math.max(5, (z.endM - z.alongM) / 40)) {
-        const p = line!.place(m);
-        const rad = ((p.bearing + 90) * Math.PI) / 180;
-        const k = 111_320 * Math.cos((p.at[1] * Math.PI) / 180);
-        const dx = (Math.sin(rad) * HALF_WIDTH_M) / k, dy = (Math.cos(rad) * HALF_WIDTH_M) / 111_320;
-        right.push([p.at[0] + dx, p.at[1] + dy]);
-        left.push([p.at[0] - dx, p.at[1] - dy]);
-      }
-      if (left.length < 2) continue;
-      features.push({ type: "Feature", properties: { kind: z.kind }, geometry: { type: "Polygon", coordinates: [[...left, ...right.reverse(), left[0]]] } });
-      features.push({ type: "Feature", properties: { kind: z.kind, words: WORDS[z.kind] }, geometry: { type: "Point", coordinates: line!.place((z.alongM + z.endM) / 2).at } });
+      const coords = line!.slice(z.alongM, z.endM);
+      if (coords.length < 2) continue;
+      features.push({
+        type: "Feature",
+        properties: { kind: z.kind },
+        geometry: { type: "LineString", coordinates: coords },
+      });
+      features.push({
+        type: "Feature",
+        properties: { kind: z.kind, words: WORDS[z.kind] },
+        geometry: { type: "Point", coordinates: line!.place((z.alongM + z.endM) / 2).at },
+      });
     }
     this.data = { type: "FeatureCollection", features };
     (this.map.getSource("zones") as maplibregl.GeoJSONSource | undefined)?.setData(this.data);
@@ -60,13 +59,33 @@ export class ZoneLayer {
     if (!this.map.getSource("zones")) this.map.addSource("zones", { type: "geojson", data: this.data });
     // Under the route line, over the ground and the lanes.
     const before = this.map.getLayer("alts-line") ? "alts-line" : undefined;
-    const colour = ["match", ["get", "kind"], "senior-zone", "#ff8a3d", "section", "#f5c518", "#e5484d"] as maplibregl.ExpressionSpecification;
-    if (!this.map.getLayer("zones-fill")) this.map.addLayer({ id: "zones-fill", type: "fill", source: "zones", filter: ["==", ["geometry-type"], "Polygon"], paint: { "fill-color": colour, "fill-opacity": 0.24 } }, before);
-    if (!this.map.getLayer("zones-edge")) this.map.addLayer({ id: "zones-edge", type: "line", source: "zones", filter: ["==", ["geometry-type"], "Polygon"], paint: { "line-color": colour, "line-width": 2, "line-opacity": 0.7 } }, before);
+    // Rich, distinct colors: child zone red, senior orange, section enforcement vibrant amber/yellow.
+    const colour = ["match", ["get", "kind"], "senior-zone", "#ff8a3d", "section", "#f59e0b", "#e5484d"] as maplibregl.ExpressionSpecification;
+    const opacity = ["match", ["get", "kind"], "section", 0.50, 0.35] as maplibregl.ExpressionSpecification;
+
+    // Widths in screen pixels, scaled with the zoom as the route line's are (route-layer.ts: its casing is 8 px at
+    // zoom 11 and 14 at 18): a band wider than the line, never one that covers the town when zoomed out.
+    const bandWidth = ["interpolate", ["linear"], ["zoom"], 11, 10, 15, 16, 18, 22] as maplibregl.ExpressionSpecification;
+    const glowWidth = ["interpolate", ["linear"], ["zoom"], 11, 16, 15, 24, 18, 32] as maplibregl.ExpressionSpecification;
+
+    // A soft glow under the band.
+    if (!this.map.getLayer("zones-edge")) this.map.addLayer({
+      id: "zones-edge", type: "line", source: "zones", filter: ["==", ["geometry-type"], "LineString"],
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: { "line-color": colour, "line-width": glowWidth, "line-opacity": 0.22 },
+    }, before);
+
+    // The band itself, along the route's exact line.
+    if (!this.map.getLayer("zones-fill")) this.map.addLayer({
+      id: "zones-fill", type: "line", source: "zones", filter: ["==", ["geometry-type"], "LineString"],
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: { "line-color": colour, "line-width": bandWidth, "line-opacity": opacity },
+    }, before);
+
     if (!this.map.getLayer("zones-words")) this.map.addLayer({
-      id: "zones-words", type: "symbol", source: "zones", filter: ["==", ["geometry-type"], "Point"], minzoom: 14,
-      layout: { "text-field": ["get", "words"], "text-font": ["Noto Sans Bold"], "text-size": 13, "text-allow-overlap": true, "text-pitch-alignment": "map", "text-rotation-alignment": "viewport" },
-      paint: { "text-color": colour, "text-halo-color": "#ffffff", "text-halo-width": 2 },
+      id: "zones-words", type: "symbol", source: "zones", filter: ["==", ["geometry-type"], "Point"], minzoom: 13,
+      layout: { "text-field": ["get", "words"], "text-font": ["Noto Sans Bold"], "text-size": 14, "text-allow-overlap": true, "text-pitch-alignment": "map", "text-rotation-alignment": "viewport" },
+      paint: { "text-color": colour, "text-halo-color": "#ffffff", "text-halo-width": 2.5 },
     });
     this.ready = true;
     (this.map.getSource("zones") as maplibregl.GeoJSONSource | undefined)?.setData(this.data);

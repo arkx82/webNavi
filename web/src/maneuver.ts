@@ -85,6 +85,8 @@ const ARRIVE = /도착|목적지/, DEPART = /출발/, UTURN = /유턴|U턴/, ROU
 const HOUR = /(\d{1,2})\s*시\s*방향/;
 const SHARP_LEFT = /급좌/, SHARP_RIGHT = /급우/, LEFT_TURN = /좌회전/, RIGHT_TURN = /우회전/;
 const LEFT = /왼쪽|좌측/, RIGHT = /오른쪽|우측/, EXIT = /출구|진출/, MOTORWAY = /고속|전용|램프|IC|JC/, STRAIGHT = /직진/;
+/** A side named as the way ("오른쪽 방향", "왼쪽 고속도로 출구"), as against the lane to be in ("우측 2차로 이용"). */
+const SIDE_OF_WAY = /(왼쪽|좌측|오른쪽|우측)(?=\s*(?:에\s*)?(?:방향|고속|도시고속|자동차전용|출구|진출|진입|입구|도로|램프|길))/;
 
 /** The way the words say, or null when they do not say one (a 지하차도, a 톨게이트). */
 export function fromText(text: string): Maneuver | null {
@@ -106,6 +108,15 @@ export function fromText(text: string): Maneuver | null {
   const ramp = EXIT.test(t) && MOTORWAY.test(t);
   if (left && !right) return ramp ? "ramp-left" : "slight-left";
   if (right && !left) return ramp ? "ramp-right" : "slight-right";
+  if (left && right) {
+    // Both sides named: one is the lane to be in, the other the way ("좌측 차로를 이용하여 오른쪽 방향"). The way is
+    // the side bound to its word; failing that, the last said, as the action ends a Korean sentence.
+    const bound = t.match(SIDE_OF_WAY)?.[1];
+    const lastLeft = Math.max(t.lastIndexOf("왼쪽"), t.lastIndexOf("좌측")), lastRight = Math.max(t.lastIndexOf("오른쪽"), t.lastIndexOf("우측"));
+    const goesLeft = bound ? LEFT.test(bound) : lastLeft > lastRight;
+    if (goesLeft) return ramp ? "ramp-left" : "slight-left";
+    return ramp ? "ramp-right" : "slight-right";
+  }
   if (STRAIGHT.test(t)) return "straight";
   return null;
 }
@@ -159,24 +170,16 @@ function drawArrow(m: Maneuver, size: number): string {
 export interface Bend { d60: number; sweep200: number }
 /** A road that sweeps this much within 200 m is a loop ramp. */
 export const LOOP_DEG = 200;
-/** The words say one side; the road bends this much the other way: the road is believed. */
-const CONTRARY_DEG = 25;
 
 /**
  * The manoeuvre [m] (from the words and codes) set against the road's
- * own shape: a loop ramp is shown as one whichever side the words name;
- * a side named against a clear bend the other way gives way to the
- * bend (the words are the provider's, the line is where the car goes).
+ * own shape: a loop ramp is shown as one whichever side the words name.
+ * Explicit turn/exit directions from providers are never inverted by road curvature.
  */
 export function shapedOf(m: Maneuver, bend: Bend | null): Maneuver {
   if (!bend) return m;
   if (m === "arrive" || m === "depart" || m === "roundabout" || m === "uturn") return m;
   if (Math.abs(bend.sweep200) >= LOOP_DEG) return bend.sweep200 > 0 ? "loop-right" : "loop-left";
-  const side = m.endsWith("-right") || m === "right" ? 1 : m.endsWith("-left") || m === "left" ? -1 : 0;
-  if (side !== 0 && Math.sign(bend.d60) === -side && Math.abs(bend.d60) >= CONTRARY_DEG) {
-    const ramp = m.startsWith("ramp-");
-    return fromBend(0, bend.d60, ramp) ?? m;
-  }
   return m;
 }
 

@@ -5,9 +5,11 @@ import { EVENTS, spokenGuide, turnRungs, turnSpeech } from "./speech";
 import { phraseFor, type Kind } from "./warnings";
 import type { Maneuver } from "./maneuver";
 
-test("a left turn is said at 300 m in town, then 잠시 후, once each", () => {
+test("a left turn is said at 500 m and 300 m in town, then 잠시 후, once each", () => {
   const said = new Set<number>();
-  assert.equal(turnSpeech("left", 450, 50, said, ""), null);
+  assert.equal(turnSpeech("left", 550, 50, said, ""), null);
+  assert.equal(turnSpeech("left", 480, 50, said, ""), "오백미터 앞에서 좌회전입니다");
+  assert.equal(turnSpeech("left", 350, 50, said, ""), null);
   assert.equal(turnSpeech("left", 290, 50, said, ""), "삼백미터 앞에서 좌회전입니다");
   assert.equal(turnSpeech("left", 250, 50, said, ""), null);
   assert.equal(turnSpeech("left", 140, 50, said, ""), "잠시 후 좌회전입니다");
@@ -84,7 +86,7 @@ test("every sentence the page can say from the vocabulary is one the server rend
     assert.ok(fixed.has(s), `not rendered ahead: ${s}`);
   }
   for (const k of ALERT_KINDS) for (const l of ALERT_LEVELS) assert.ok(fixed.has(alertPhrase(k, l)));
-  assert.deepEqual(turnRungs(50), [300, 150]);
+  assert.deepEqual(turnRungs(50), [500, 300, 150]);
 });
 
 test("a motorway junction's name and way come from any provider's text", async () => {
@@ -105,6 +107,28 @@ test("a motorway junction's name and way come from any provider's text", async (
   assert.equal(merges[0].kind, "merge");
   assert.ok(fixedPhrases().includes("잠시 후 합류 구간입니다, 주의하세요"));
   assert.ok(fixedPhrases().includes("오른쪽 차로로 미리 이동하세요"));
+});
+
+test("a motorway junction's kind comes from the road: 진입 at a JC is a fork, not an entrance from the side", async () => {
+  const { junctionKind, findMerges } = await import("./highway");
+  const { metres } = await import("./geo");
+  // On the motorway before and after: a fork, whatever the words (Kakao writes 진입 at 신갈JC).
+  assert.equal(junctionKind("인천 원주 방면으로 오른쪽 고속도로 진입", { before: true, after: true }), "fork");
+  assert.equal(junctionKind("남구리IC 방면으로 오른쪽 방향", { before: true, after: true }), "fork");
+  // Off the motorway onto it: an entrance; off it: an exit, and 출구 says so even where the ramp still counts as one.
+  assert.equal(junctionKind("부산 방면으로 오른쪽 고속도로 진입", { before: false, after: true }), "enter");
+  assert.equal(junctionKind("오른쪽 방향", { before: true, after: false }), "exit");
+  assert.equal(junctionKind("용인 방면으로 오른쪽 고속도로 출구", { before: true, after: true }), "exit");
+  // The road not saying: only 입구 is an entrance; 진입 is the fork, whose picture is right either way.
+  assert.equal(junctionKind("장수IC에서 전방 고속도로 입구", null), "enter");
+  assert.equal(junctionKind("인천 원주 방면으로 오른쪽 고속도로 진입", null), "fork");
+  assert.equal(junctionKind("오른쪽 방향", { before: false, after: false }), "fork");
+  // The merge after a JC branch written as 진입 is a link road's length on (450 m), not a ramp's (300 m).
+  const path = Array.from({ length: 31 }, (_, i) => [127, 37 + (i * 100) / 111_320] as [number, number]);
+  const merges = findMerges({ provider: "kakao", distanceM: 3000, durationS: 200, path, segments: [], motorways: [[0, 31]],
+    guides: [{ at: path[10], text: "인천 원주 방면으로 오른쪽 고속도로 진입", name: "신갈JC", distanceM: 0, turnType: 49 }] });
+  assert.equal(merges.length, 1);
+  assert.ok(Math.abs(metres(path[10][0], path[10][1], merges[0].lon, merges[0].lat) - 450) < 5);
 });
 
 test("a speed that dips across 70 km/h does not bring the other set's rungs: the set first said from is kept", () => {

@@ -81,11 +81,16 @@ export class TidalSource implements MusicSource {
     });
 
     this.audio.addEventListener("error", () => {
+      // The source let go (disconnect): no track failed.
+      if (this.queue.length === 0) return;
       this.failure = "TIDAL 재생 오류가 발생했습니다";
       this.emitNow();
+      // Moved on only if nothing else has by then: a play() refused for the same fault moves on itself (advance),
+      // and this must not skip the track that one put on.
+      const load = this.load;
       if (!this.playing && ++this.failedInRow <= 3 && this.queue[this.at + 1]) {
         setTimeout(() => {
-          if (!this.playing) void this.advance().catch(() => undefined);
+          if (!this.playing && load === this.load) void this.advance().catch(() => undefined);
         }, 1500);
       }
     });
@@ -282,6 +287,9 @@ export class TidalSource implements MusicSource {
     await this.advance();
   }
 
+  /** Each load of a track counts up: a play() left waiting by a newer load is that load's business, not a failure. */
+  private load = 0;
+
   private async advance(skips = 0): Promise<void> {
     this.at++;
     const track = this.queue[this.at];
@@ -291,11 +299,16 @@ export class TidalSource implements MusicSource {
       return;
     }
 
+    const load = ++this.load;
     try {
       this.audio.src = `/api/music/tidal/track/${encodeURIComponent(track.id)}/audio`;
       await this.audio.play();
+      if (load !== this.load) return;
       this.failure = undefined;
     } catch (e) {
+      // A newer load took the element (the next button twice): its play() is the one that counts. Taking this
+      // for a failure skipped a track for each tap, the two chains interrupting each other.
+      if (load !== this.load || (e as Error)?.name === "AbortError") return;
       if (skips < 3 && this.queue[this.at + 1]) {
         return this.advance(skips + 1);
       }
@@ -350,13 +363,17 @@ export class TidalSource implements MusicSource {
   }
 
   onState(listener: (now: NowPlaying) => void): void {
-    this.listeners.push(listener);
+    // Once each: the page hands the same one over again whenever this source is picked.
+    if (!this.listeners.includes(listener)) this.listeners.push(listener);
   }
 
   disconnect(): void {
+    this.load++;
     this.audio.pause();
-    this.audio.src = "";
     this.queue = [];
+    // The attribute removed, not set to "": an empty src is an error event (MEDIA_ERR_SRC_NOT_SUPPORTED).
+    this.audio.removeAttribute("src");
+    this.audio.load();
     this.at = -1;
     this.playing = false;
     this.emitNow();

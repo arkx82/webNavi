@@ -200,6 +200,28 @@
     <div id="lanes" hidden></div>
     <!-- 분기점 확대: which junction the camera has closed on (closeup.ts). -->
     <div id="closeup" hidden></div>
+    <!-- 구간 단속: 가운데 상단 실시간 누적 평균속도 HUD 위젯 (after #closeup and #lanes: moved down under whichever shows) -->
+    <div id="section-hud" hidden>
+      <div class="sec-badge-box">
+        <span class="sec-limit-circle" id="sec-limit-num">100</span>
+      </div>
+      <div class="sec-content">
+        <div class="sec-header">
+          <span class="sec-badge">구간단속</span>
+          <span class="sec-remain" id="sec-remain">--</span>
+        </div>
+        <div class="sec-speed-box">
+          <span class="sec-speed-label">구간 평균</span>
+          <b class="sec-speed-num" id="sec-avg-num">--</b>
+          <span class="sec-speed-unit">km/h</span>
+        </div>
+      </div>
+      <div class="sec-target-box" id="sec-target-box" hidden>
+        <span class="sec-target-label">권장</span>
+        <b class="sec-target-num" id="sec-target-num">--</b>
+        <span class="sec-target-unit">km/h</span>
+      </div>
+    </div>
     <!-- Which map is the ground: a list, not a toggle, so the choice is seen. -->
     <div id="base-menu" hidden>
       <div class="menu-title">바탕 지도</div>

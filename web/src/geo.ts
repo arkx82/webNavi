@@ -81,8 +81,9 @@ export class Line {
    * jump, and a route that loops past itself must not snap to the far pass.
    */
   project(p: LonLat, near = 0, window = 40): Projection {
-    const [px, py] = this.toXY(p);
     const n = this.path.length;
+    if (n === 0) return { at: p, alongM: 0, offM: Infinity, segment: 0, bearing: 0 };
+    const [px, py] = this.toXY(p);
     if (n === 1) return { at: this.path[0], alongM: 0, offM: Math.hypot(px - this.xs[0], py - this.ys[0]), segment: 0, bearing: 0 };
     let best = this.scan(px, py, Math.max(0, near - window), Math.min(n - 1, near + window));
     // Off the window by a lot: look again everywhere before believing it.
@@ -123,7 +124,7 @@ export class Line {
   /** The place [alongM] metres from the start, clamped to the line. */
   place(alongM: number): Projection {
     const n = this.path.length;
-    if (n < 2) return { at: this.path[0], alongM: 0, offM: 0, segment: 0, bearing: 0 };
+    if (n < 2) return { at: this.path[0] ?? [0, 0], alongM: 0, offM: 0, segment: 0, bearing: 0 };
     const m = Math.max(0, Math.min(this.lengthM, alongM));
     // Binary search the vertex before m.
     let lo = 0, hi = n - 1;
@@ -134,6 +135,28 @@ export class Line {
     const segLen = this.along[lo + 1] - this.along[lo];
     const t = segLen === 0 ? 0 : (m - this.along[lo]) / segLen;
     return this.at(lo, t, 0);
+  }
+
+  /**
+   * The sub-polyline between fromM and toM along this line, including exact
+   * start/end positions and all route vertices strictly between them.
+   */
+  slice(fromM: number, toM: number): LonLat[] {
+    const from = Math.max(0, Math.min(this.lengthM, fromM));
+    const to = Math.max(from, Math.min(this.lengthM, toM));
+    if (this.path.length < 2 || to <= from) return [];
+
+    const startP = this.place(from);
+    const endP = this.place(to);
+    const out: LonLat[] = [startP.at];
+
+    for (let i = startP.segment + 1; i <= endP.segment; i++) {
+      if (this.along[i] > from && this.along[i] < to) {
+        out.push(this.path[i]);
+      }
+    }
+    out.push(endP.at);
+    return out;
   }
 }
 

@@ -63,6 +63,39 @@ export function motorwayAt(route: Route, i: number): boolean {
   return !!route.motorways?.some(([from, to]) => i >= from && i < to);
 }
 
+/** Whether the road is a motorway just before a guide and a little after it, or null where the route does not say. */
+export function motorwaySides(route: Route, line: Line, g: Pick<Guide, "at">): { before: boolean; after: boolean } | null {
+  if (!route.motorways) return null;
+  const p = line.project(g.at, 0, line.path.length);
+  return {
+    before: motorwayAt(route, line.place(Math.max(0, p.alongM - SIDES_BEFORE_M)).segment),
+    after: motorwayAt(route, line.place(Math.min(line.lengthM, p.alongM + SIDES_AFTER_M)).segment),
+  };
+}
+const SIDES_BEFORE_M = 60;
+const SIDES_AFTER_M = 150;
+
+export type JunctionKind = "fork" | "exit" | "enter";
+/**
+ * What a motorway junction is — a fork (a JC), an exit off the main road,
+ * or an entrance onto it — from the road first: on a motorway before and
+ * after the guide is a fork, before only an exit, after only an entrance.
+ * The words settle it only where they are plain (출구·진출) or the road
+ * does not say. "진입" alone is never an entrance: Kakao writes it at a JC
+ * branch too ("인천 원주 방면으로 오른쪽 고속도로 진입" at 신갈JC), and the
+ * entrance picture there showed a ramp merging from the wrong side.
+ */
+export function junctionKind(text: string, road: { before: boolean; after: boolean } | null): JunctionKind {
+  if (/출구|진출/.test(text)) return "exit";
+  if (road) {
+    if (road.before && road.after) return "fork";
+    if (road.before) return "exit";
+    if (road.after) return "enter";
+  }
+  if (/입구/.test(text)) return "enter";
+  return "fork";
+}
+
 /** A ramp onto a motorway (or a junction's link road onto the next one) is this long before it meets the main road. */
 const ENTRANCE_RAMP_M = 300;
 const JUNCTION_RAMP_M = 450;
@@ -77,9 +110,11 @@ export function findMerges(route: Route): Feature[] {
   const line = new Line(route.path);
   const out: Feature[] = [];
   route.guides.forEach((g, n) => {
-    const entrance = /고속도로\s*(입구|진입)|도시고속도로\s*(입구|진입)|자동차전용도로\s*(입구|진입)/.test(g.text);
     const p = line.project(g.at, 0, route.path.length);
-    const branch = !entrance && /JC|분기점/.test(g.text) && /방향|분기/.test(g.text) && motorwayAt(route, p.segment);
+    // An entrance is from off the motorway: the same words at a JC branch (Kakao's "고속도로 진입") are no entrance.
+    const entrance = /고속도로\s*(입구|진입)|도시고속도로\s*(입구|진입)|자동차전용도로\s*(입구|진입)/.test(g.text)
+      && !motorwayAt(route, line.place(Math.max(0, p.alongM - SIDES_BEFORE_M)).segment);
+    const branch = !entrance && /JC|분기점/.test(`${g.text} ${g.name ?? ""}`) && /방향|분기|진입/.test(g.text) && motorwayAt(route, p.segment);
     if (!entrance && !branch) return;
     const at = p.alongM + (entrance ? ENTRANCE_RAMP_M : JUNCTION_RAMP_M);
     if (at >= line.lengthM - 50) return;

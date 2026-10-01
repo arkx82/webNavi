@@ -54,6 +54,10 @@ const CONGESTED_MPS: Partial<Record<number, number>> = { 2: 8, 3: 3 };
 export const VAGUE_ACC_M = 40;
 /** Below this the heading is held where it was. */
 export const HEADING_MIN_MPS = 1.4;
+/** How far ahead the camera looks, in seconds of travel, and its bounds in metres. */
+export const LOOKAHEAD_S = 2.5;
+export const LOOKAHEAD_MIN_M = 40;
+export const LOOKAHEAD_MAX_M = 150;
 
 export type Mode = "waiting" | "gps" | "reckoning" | "snapping";
 
@@ -294,17 +298,30 @@ export class Tracker {
     return shown;
   }
 
-  cameraBearing(current: number, share = 0.15): number {
+  /**
+   * The bearing the camera turns toward: the way to the road LOOKAHEAD_S
+   * ahead (40–150 m), as the chord from the car, not the bearing of the one
+   * segment there. A segment's bearing steps at every vertex of the line,
+   * and a camera tracking it turned at every one; the chord changes
+   * smoothly through a bend and sees the bend as a whole, the way the
+   * car apps' cameras do. Turned by [share] of the way, and never more
+   * than [maxDeg] (a re-route, a U-turn: swung, not snapped).
+   */
+  cameraBearing(current: number, share = 0.15, maxDeg = Infinity): number {
     let target = this.shownBearing;
-    if (this.line && this.shownAlong != null && this.speedMps > 1.5) {
-      // Lookahead: look ahead along the route (14m in town to 35m at speed) so curves feel anticipated and fluid
-      const lookaheadM = Math.min(35, Math.max(14, this.speedMps * 1.0));
+    if (this.line && this.shownAlong != null && this.shownAt && this.speedMps > 1.5) {
+      const lookaheadM = Math.min(LOOKAHEAD_MAX_M, Math.max(LOOKAHEAD_MIN_M, this.speedMps * LOOKAHEAD_S));
       const targetAlong = Math.min(this.line.lengthM, this.shownAlong + lookaheadM);
-      if (targetAlong > this.shownAlong + 1) {
-        const ahead = this.line.place(targetAlong);
-        if (Number.isFinite(ahead.bearing)) target = ahead.bearing;
+      if (targetAlong > this.shownAlong + 5) {
+        const ahead = this.line.place(targetAlong).at;
+        const chord = bearing(this.shownAt[0], this.shownAt[1], ahead[0], ahead[1]);
+        if (Number.isFinite(chord)) target = chord;
       }
     }
-    return lerpAngle(current, target, share);
+    const eased = lerpAngle(current, target, share);
+    let step = eased - current;
+    while (step > 180) step -= 360;
+    while (step < -180) step += 360;
+    return (current + Math.max(-maxDeg, Math.min(maxDeg, step)) + 360) % 360;
   }
 }

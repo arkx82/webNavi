@@ -85,3 +85,13 @@ test("a lane that goes two ways is drawn as one arrow that forks; a plain lane a
   assert.ok(laneGlyph(["left", "right"]).includes("M12 21v-8"), "a T for left or right");
   assert.equal((laneGlyph(["straight"]).match(/<path/g) ?? []).length, 1);
 });
+
+test("an entrance is drawn as driven: the ramp off to the side taken, joining the motorway on that side", async () => {
+  const { junctionSvg } = await import("./lanes-strip");
+  const right = junctionSvg({ kind: "enter", go: "right", toward: "남구리IC" });
+  assert.ok(right.includes("M124 104 L124 8"), "the motorway up the right");
+  assert.ok(right.includes("C80 54 104 46 124 30"), "the ramp bending right");
+  assert.ok(right.includes("남구리IC"));
+  const left = junctionSvg({ kind: "enter", go: "left" });
+  assert.ok(left.includes("M36 104 L36 8") && left.includes("C80 54 56 46 36 30"));
+});

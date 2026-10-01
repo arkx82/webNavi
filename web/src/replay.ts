@@ -28,7 +28,8 @@ export class Replay {
         heading: num(at(row, "heading")),
         course: num(at(row, "course")),
       };
-    }).filter((f) => Number.isFinite(f.lon) && Number.isFinite(f.lat));
+    // Without a time a fix cannot be spaced: NaN would make every wait zero and the whole log play at once.
+    }).filter((f) => Number.isFinite(f.t) && Number.isFinite(f.lon) && Number.isFinite(f.lat));
   }
 
   start() {

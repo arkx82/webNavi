@@ -4,7 +4,7 @@ import type { Maneuver } from "./maneuver";
 /**
  * What the voice says for the next turn, and when: the car apps' fixed
  * sentences (server/src/phrases.ts, all rendered ahead of time) at a few
- * distances — 1 km and 500 m on a fast road, 300 m in town — then
+ * distances — 1 km and 500 m on a fast road, 500 m and 300 m in town — then
  * "잠시 후" close in. The provider's own guide text is only for the screen,
  * except for a manoeuvre the vocabulary has no word for.
  */
@@ -14,8 +14,7 @@ export { EVENTS };
 const FAR_ENOUGH = 0.7;
 
 const FAST_RUNGS = [1000, 500, TURN_NEAR_M];
-const TOWN_RUNGS = [300, TURN_NEAR_M];
-const ALL_RUNGS = [...new Set([...FAST_RUNGS, ...TOWN_RUNGS])];
+const TOWN_RUNGS = [500, 300, TURN_NEAR_M];
 
 /** The distances a turn is spoken at, for the speed the car is doing. */
 export function turnRungs(speedKmh: number): number[] {
@@ -28,8 +27,8 @@ export function turnRungs(speedKmh: number): number[] {
  * sticks with the fast road rungs without adding an extra 300m.
  */
 function rungsFor(speedKmh: number, said: Set<number>): number[] {
+  if (said.has(1000)) return [...FAST_RUNGS];
   if (said.has(300)) return [...TOWN_RUNGS];
-  if (said.has(1000) || said.has(500)) return [...FAST_RUNGS];
   return turnRungs(speedKmh);
 }
 
@@ -71,8 +70,8 @@ export function turnSay(maneuver: Maneuver, inM: number, speedKmh: number, said:
   if (inside.length === 0) return null;
   const rung = Math.min(...inside);
   if (said.has(rung)) return null;
-  // The further rungs of both sets are said with it: none is owed after a nearer one.
-  for (const r of ALL_RUNGS) if (r >= rung) said.add(r);
+  // The further rungs of this set are said with it: none is owed after a nearer one.
+  for (const r of rungs) if (r >= rung) said.add(r);
   // First seen well inside a far rung (just re-routed, or a guide that
   // came late): "500미터 앞" at 170 m is wrong, so wait for 잠시 후 instead.
   if (rung > TURN_NEAR_M && inM < rung * FAR_ENOUGH) return null;
