@@ -28,16 +28,16 @@ export function laneGlyph(turns: Turn[]): string {
   const set = new Set(turns);
   const has = (...t: Turn[]) => t.every((x) => set.has(x));
   if (has("straight", "right") && !set.has("left") && !set.has("uturn")) {
-    return `<path d="M9 21V5"/><path d="M5 9l4-4 4 4"/><path d="M9 13h6"/><path d="M12 10l3 3-3 3"/>`;
+    return `<path d="M8 21V5"/><path d="M4 9l4-4 4 4"/><path d="M8 15h9"/><path d="M14 12l3 3-3 3"/>`;
   }
   if (has("straight", "left") && !set.has("right") && !set.has("uturn")) {
-    return `<path d="M15 21V5"/><path d="M11 9l4-4 4 4"/><path d="M15 13H9"/><path d="M12 10l-3 3 3 3"/>`;
+    return `<path d="M16 21V5"/><path d="M12 9l4-4 4 4"/><path d="M16 15H7"/><path d="M10 12l-3 3 3 3"/>`;
   }
   if (has("left", "right") && !set.has("straight") && !set.has("uturn")) {
-    return `<path d="M12 21v-8"/><path d="M12 13H6"/><path d="M9 10l-3 3 3 3"/><path d="M12 13h6"/><path d="M15 10l3 3-3 3"/>`;
+    return `<path d="M12 21v-8"/><path d="M12 13H4"/><path d="M7 10l-3 3 3 3"/><path d="M12 13h8"/><path d="M17 10l3 3-3 3"/>`;
   }
   if (has("straight", "left", "right") && !set.has("uturn")) {
-    return `<path d="M12 21V5"/><path d="M8 9l4-4 4 4"/><path d="M12 14H6"/><path d="M9 11l-3 3 3 3"/><path d="M12 14h6"/><path d="M15 11l3 3-3 3"/>`;
+    return `<path d="M12 21V4"/><path d="M8 8l4-4 4 4"/><path d="M12 15H4"/><path d="M7 12l-3 3 3 3"/><path d="M12 15h8"/><path d="M17 12l3 3-3 3"/>`;
   }
   if (has("uturn", "left") && set.size === 2) {
     return `<path d="M17 21V9a4 4 0 0 0-8 0v5"/><path d="M6 11l3 3 3-3"/><path d="M17 15H11"/><path d="M14 12l-3 3 3 3"/>`;
