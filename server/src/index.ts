@@ -7,7 +7,8 @@ import { Tmap } from "./route/tmap.js";
 import { Kakao } from "./route/kakao.js";
 import { Naver } from "./route/naver.js";
 import { Osrm } from "./route/osrm.js";
-import { ProviderError, type LonLat, type Provider, type RouteProvider } from "./route/types.js";
+import { sayMissedTurns } from "./route/missed.js";
+import { ProviderError, type LonLat, type Provider, type Route, type RouteProvider } from "./route/types.js";
 import { SafetyIndex } from "./safety/index.js";
 import { CAMERAS_MAX_AGE_MS, fetchCameras, keptCameras } from "./safety/cameras.js";
 import { Hotspots } from "./safety/hotspots.js";
@@ -357,6 +358,13 @@ function headingOf(q: RouteQuery): { heading?: number; speedKmh?: number } {
   return q.heading != null && Number.isFinite(h) ? { heading: ((h % 360) + 360) % 360, speedKmh: Number.isFinite(v) ? v : undefined } : {};
 }
 
+/** The turns the provider drew and did not say, put in (route/missed.ts), where our own OSRM is here to ask. */
+async function sayMissed(route: Route): Promise<void> {
+  if (!env.KOREA_OSRM_URL) return;
+  const n = await sayMissedTurns(route, env.KOREA_OSRM_URL).catch(() => 0);
+  if (n) app.log.info({ provider: route.provider, added: n }, "turns the provider left unsaid, said");
+}
+
 app.get<{ Querystring: RouteQuery }>("/api/route", async (request, reply) => {
   const { provider: name, start, goal } = request.query;
   // Every keyed provider at once: the routes are not spliced (each one's
@@ -370,6 +378,7 @@ app.get<{ Querystring: RouteQuery }>("/api/route", async (request, reply) => {
     if (ready.length === 0) return reply.code(503).send({ error: "no provider has a key on this server" });
     const settled = await Promise.allSettled(ready.map((p) => p.route({ start: s, goal: g, ...headingOf(request.query) })));
     const came = settled.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
+    await Promise.all(came.map(sayMissed));
     // Our own route only with live speeds on it: without them it runs at the limit and reads quicker than it is
     // (the first lookup in an area comes before that area's speeds are in; the recheck on the move brings it back).
     const routes = came.filter((r) => r.provider !== "korea" || r.segments.some((s) => s.congestion > 0));
@@ -390,6 +399,7 @@ app.get<{ Querystring: RouteQuery }>("/api/route", async (request, reply) => {
   if (!s || !g) return reply.code(400).send({ error: "start and goal are lon,lat" });
   try {
     const route = await provider.route({ start: s, goal: g, ...headingOf(request.query) });
+    await sayMissed(route);
     traffic.touch([s, g, ...route.path.filter((_, i) => i % 20 === 0)]);
     return route;
   } catch (refused) {

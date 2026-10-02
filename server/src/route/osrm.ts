@@ -167,7 +167,8 @@ export function korean(type: string, modifier?: string, exit?: number, road?: st
     case "off ramp": return `${onto}${modifier?.includes("left") ? "왼쪽" : "오른쪽"} 출구`;
     case "fork": return `${onto}${modifier?.includes("left") ? "왼쪽" : "오른쪽"} 길`;
     case "end of road": return `길 끝에서 ${turn(modifier)}`;
-    case "continue": case "new name": return `${onto}직진`;
+    // "continue left": the road goes on but the way turns — a turn, not 직진 (and so not quiet).
+    case "continue": case "new name": return /^(left|right|sharp|uturn)/.test(modifier ?? "") ? `${onto}${turn(modifier)}` : `${onto}직진`;
     default: return `${onto}${turn(modifier)}`;
   }
 }
