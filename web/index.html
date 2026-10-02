@@ -45,12 +45,18 @@
         <div class="saved-row">
           <button id="go-home" type="button" class="saved">
             <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 11.5 12 4l9 7.5M6 10v10h12V10"/></svg>
-            <span><b>집</b><small id="home-sub">설정하기</small></span>
+            <span><b id="home-label">집</b><small id="home-sub">설정하기</small></span>
           </button>
           <button id="go-work" type="button" class="saved">
             <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="4" y="7" width="16" height="13" rx="1.5"/><path d="M9 7V4.5h6V7M4 12.5h16"/></svg>
-            <span><b>회사</b><small id="work-sub">설정하기</small></span>
+            <span><b id="work-label">회사</b><small id="work-sub">설정하기</small></span>
           </button>
+        </div>
+        <!-- 집 or 회사 held: put somewhere else, renamed, or cleared. -->
+        <div id="saved-menu" hidden>
+          <div class="sm-head"><b id="sm-title"></b><small id="sm-where"></small></div>
+          <div class="row"><input id="sm-name" maxlength="12" placeholder="이름 (예: 사무실, 학교)" /><button id="sm-rename" type="button" class="narrow">이름 저장</button></div>
+          <div class="row sm-actions"><button id="sm-move" type="button">위치 바꾸기</button><button id="sm-clear" type="button">지우기</button><button id="sm-close" type="button" class="narrow">닫기</button></div>
         </div>
         <div id="saving" hidden><span id="saving-text"></span><button id="saving-cancel" class="narrow" type="button">취소</button></div>
         <div id="quick-cats" class="chips quick"></div>

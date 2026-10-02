@@ -37,7 +37,8 @@ import { SectionTracker, type ActiveSectionInfo } from "./section-tracker";
 import { drawGuide, loadGuide, saveGuide, shows, wants, type GuideSettings, type VoiceList } from "./guide-settings";
 import { currentUser, logout, push as pushUserData } from "./userdata";
 import { WeatherPanel } from "./weather";
-import { isFavourite, loadPlaces, samePlace, savePlaces, toggleFavourite } from "./places";
+import { isFavourite, labelOf, loadPlaces, samePlace, savePlaces, toggleFavourite, toward } from "./places";
+import { escape as escapeHtml } from "./html";
 import { OVERLAY_STYLE, TmapBase, tmapAvailable } from "./tmap-base";
 import { NightCity } from "./night-city";
 import { CHECK, X } from "./icons";
@@ -1013,9 +1014,10 @@ function drawRecents() {
 let saved = loadPlaces();
 /** Waiting for the next place chosen to become 집 or 회사. */
 let saving: "home" | "work" | null = null;
-const SAVED_NAMES = { home: "집", work: "회사" } as const;
 
 function drawSaved() {
+  el("home-label").textContent = labelOf(saved, "home");
+  el("work-label").textContent = labelOf(saved, "work");
   el("home-sub").textContent = saved.home?.name ?? "설정하기";
   el("work-sub").textContent = saved.work?.name ?? "설정하기";
   const ul = el<HTMLUListElement>("favs");
@@ -1045,8 +1047,8 @@ function startSaving(kind: "home" | "work" | null) {
   el("saving").hidden = !kind;
   const input = el<HTMLInputElement>("q");
   if (kind) {
-    el("saving-text").textContent = `${SAVED_NAMES[kind]}으로 저장할 곳을 검색하세요`;
-    input.placeholder = `${SAVED_NAMES[kind]} 주소나 이름`;
+    el("saving-text").textContent = `${toward(labelOf(saved, kind))} 저장할 곳을 검색하세요`;
+    input.placeholder = `${labelOf(saved, kind)} 주소나 이름`;
     input.focus();
   } else {
     input.placeholder = "어디로 갈까요?";
@@ -1054,12 +1056,49 @@ function startSaving(kind: "home" | "work" | null) {
 }
 el("saving-cancel").addEventListener("click", () => startSaving(null));
 for (const kind of ["home", "work"] as const) {
-  el(kind === "home" ? "go-home" : "go-work").addEventListener("click", () => {
+  const b = el(kind === "home" ? "go-home" : "go-work");
+  // Held (or a right click at a desk): its menu; a tap: there, or set it when it is not yet.
+  let held: number | null = null, wasHeld = false;
+  b.addEventListener("pointerdown", () => { wasHeld = false; held = window.setTimeout(() => { held = null; wasHeld = true; openSavedMenu(kind); }, 500); });
+  const cancel = () => { if (held != null) { clearTimeout(held); held = null; } };
+  b.addEventListener("pointerup", cancel);
+  b.addEventListener("pointerleave", cancel);
+  b.addEventListener("contextmenu", (e) => { e.preventDefault(); cancel(); wasHeld = true; openSavedMenu(kind); });
+  b.addEventListener("click", () => {
+    if (wasHeld) return;
     const place = saved[kind];
     if (place) void choose(place);
     else startSaving(kind);
   });
 }
+/** 집 or 회사 held: where it is, and put elsewhere, renamed or cleared. */
+let menuFor: "home" | "work" | null = null;
+function openSavedMenu(kind: "home" | "work") {
+  menuFor = kind;
+  el("sm-title").textContent = labelOf(saved, kind);
+  el("sm-where").textContent = saved[kind] ? `${saved[kind]!.name} · ${saved[kind]!.address}` : "아직 정하지 않음";
+  el<HTMLInputElement>("sm-name").value = saved.labels?.[kind] ?? "";
+  el<HTMLInputElement>("sm-name").placeholder = `이름 (지금: ${labelOf(saved, kind)})`;
+  el<HTMLButtonElement>("sm-clear").disabled = !saved[kind];
+  el("saved-menu").hidden = false;
+}
+el("sm-close").addEventListener("click", () => { el("saved-menu").hidden = true; });
+el("sm-move").addEventListener("click", () => { if (menuFor) startSaving(menuFor); el("saved-menu").hidden = true; });
+el("sm-clear").addEventListener("click", () => {
+  if (!menuFor) return;
+  saved = { ...saved, [menuFor]: null };
+  savePlaces(saved);
+  drawSaved();
+  el("saved-menu").hidden = true;
+});
+el("sm-rename").addEventListener("click", () => {
+  if (!menuFor) return;
+  const name = el<HTMLInputElement>("sm-name").value.trim().slice(0, 12);
+  saved = { ...saved, labels: { ...saved.labels, [menuFor]: name || undefined } };
+  savePlaces(saved);
+  drawSaved();
+  el("saved-menu").hidden = true;
+});
 
 function setSaved(kind: "home" | "work", place: Place) {
   saved = { ...saved, [kind]: place };
@@ -1073,8 +1112,9 @@ function drawSaveMenu() {
   const isHome = samePlace(saved.home, goal), isWork = samePlace(saved.work, goal), fav = isFavourite(saved, goal);
   el("pv-save").textContent = isHome || isWork || fav ? "★" : "☆";
   el("pv-save").classList.toggle("on", isHome || isWork || fav);
-  el("save-home").innerHTML = isHome ? `집 ${CHECK}` : "집으로 설정";
-  el("save-work").innerHTML = isWork ? `회사 ${CHECK}` : "회사로 설정";
+  const home = labelOf(saved, "home"), work = labelOf(saved, "work");
+  el("save-home").innerHTML = isHome ? `${escapeHtml(home)} ${CHECK}` : `${escapeHtml(toward(home))} 설정`;
+  el("save-work").innerHTML = isWork ? `${escapeHtml(work)} ${CHECK}` : `${escapeHtml(toward(work))} 설정`;
   el("save-fav").textContent = fav ? "즐겨찾기에서 빼기" : "즐겨찾기에 추가";
   el("save-home").classList.toggle("on", isHome);
   el("save-work").classList.toggle("on", isWork);
@@ -1118,7 +1158,7 @@ async function choose(place: Place) {
   // Chosen while 집 or 회사 was being set: that is where it is now.
   if (saving) {
     setSaved(saving, place);
-    log(`${SAVED_NAMES[saving]} 저장: ${place.name}`);
+    log(`${labelOf(saved, saving)} 저장: ${place.name}`);
     startSaving(null);
   }
   drawSaveMenu();

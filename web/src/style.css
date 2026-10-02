@@ -816,3 +816,15 @@ body, button, #hud, #controls { touch-action: manipulation; }
 #car-modes button small { font-size: 12px; color: var(--dim); }
 #car-modes button.on { border-color: var(--accent); background: var(--sel); }
 
+
+/* ---- 집 · 회사 held: its menu under the two buttons ---- */
+#saved-menu { display: flex; flex-direction: column; gap: 8px; padding: 10px; border-radius: 12px; background: var(--card); }
+#saved-menu[hidden] { display: none; }
+#saved-menu .sm-head { display: flex; flex-direction: column; gap: 2px; }
+#saved-menu .sm-head b { font-size: 16px; }
+#saved-menu .sm-head small { font-size: 12px; color: var(--dim); }
+#saved-menu .row { display: flex; gap: 8px; }
+#saved-menu input { flex: 1; min-width: 0; min-height: 44px; padding: 0 12px; border: 0; border-radius: 10px; background: var(--field); color: var(--ink); font: inherit; font-size: 15px; }
+#saved-menu button { min-height: 44px; line-height: 1.2; padding: 0 12px; font-size: 15px; white-space: nowrap; }
+#saved-menu .sm-actions button { flex: 1; }
+#saved-menu .sm-actions button.narrow { flex: 0 0 auto; }
