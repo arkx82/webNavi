@@ -417,3 +417,18 @@ test("reckoned into a car park and put in P there: it stays where it was reckone
   const at = tracker.frame(33_000)!.at;
   assert.ok(Math.abs(metres(start[0], start[1], at[0], at[1]) - was) < 1);
 });
+
+test("guides that name no choice are passed over: the next shown is the turn that matters", () => {
+  const tracker = new Tracker();
+  tracker.quiet = (g) => g.text === "12시 방향";
+  tracker.setRoute({ ...route, guides: [
+    { at: path[3], text: "12시 방향", distanceM: 0, turnType: 29 },
+    { at: path[6], text: "12시 방향", distanceM: 0, turnType: 29 },
+    { at: path[12], text: "오른쪽 출구", distanceM: 0, turnType: 9 },
+  ] });
+  tracker.feed(fix(offset(start, 0, 100), 0, { speed: 20 }), 0);
+  const shown = tracker.frame(0)!;
+  assert.equal(shown.nextGuide?.guide.text, "오른쪽 출구");
+  assert.ok(Math.abs(shown.nextGuide!.inM - 1100) < 5, `${shown.nextGuide!.inM}`);
+  assert.equal(shown.thenGuide, undefined);
+});

@@ -130,6 +130,8 @@ export class Tracker {
   private fixPerf = 0;
   /** The car's own speed and odometer (car-track.ts), when the car streams them; without, the last fix's speed is held. */
   car: Pick<CarTrack, "between" | "lastSpeed" | "freePath" | "lastAt" | "parked"> | null = null;
+  /** Guides passed over, neither the next turn shown nor the one after it (main.ts: those that name no choice). */
+  quiet: (g: Guide, route: Route) => boolean = () => false;
   /** The reckoning now is off the road (car-track.ts freePath). */
   private reckonFree = false;
   /** Parked as of the last frame: the place it was drawn at then is where it stays. */
@@ -155,6 +157,7 @@ export class Tracker {
     this.declaredOff = false;
     if (this.line) {
       for (const g of route!.guides) {
+        if (this.quiet(g, route!)) continue;
         this.guides.push({ guide: g, alongM: this.line.project(g.at, 0, this.line.path.length).alongM });
       }
       this.guides.sort((a, b) => a.alongM - b.alongM);

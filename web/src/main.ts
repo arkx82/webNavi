@@ -26,12 +26,12 @@ import { GUIDE_LINES } from "../../server/src/phrases";
 import { ALERT_KINDS, alertPhrase, type AlertKind } from "../../server/src/phrases";
 import { Nearby } from "./nearby";
 import { autoZoom } from "./autozoom";
-import { EVENTS, turnSay } from "./speech";
+import { EVENTS, facilityOf, rungReach, straightMatters, turnRungs, turnSay } from "./speech";
 import { junctionKind, junctionOf, laneHint, motorwayAt, motorwaySides, namedTurnPhrase } from "./highway";
 import { CLOSEUP_CAR_AT, CLOSEUP_PITCH, CloseupHold, zoomToSee, type Closeup } from "./closeup";
 import { RerouteBackoff } from "./reroute-backoff";
 import { Stillness } from "./still";
-import { TURN_NEAR_M, fasterPhrase, turnPhrase, warningPhrase, type Turn } from "../../server/src/phrases";
+import { THEN_M, TURN_NEAR_M, fasterPhrase, thenPhrase, turnPhrase, warningPhrase, type Turn } from "../../server/src/phrases";
 import { SectionTracker, type ActiveSectionInfo } from "./section-tracker";
 import { drawGuide, loadGuide, shows, wants, type VoiceList } from "./guide-settings";
 import { currentUser, logout, push as pushUserData } from "./userdata";
@@ -216,6 +216,11 @@ let spot: { x: number; y: number } | null = null;
 let placed = false;
 const gps = new Gps();
 const tracker = new Tracker();
+// Guides that name no choice are not shown nor said: Kakao's "12시 방향" at each IC a motorway passes, a plain
+// "직진" at a crossroads, TMAP's tunnel and bridge (121, 122). The panel then shows the turn that matters.
+tracker.quiet = (g, r) =>
+  (maneuverOf(r.provider, g) === "straight" && !straightMatters(g.text) && !facilityOf(g.text)) ||
+  (r.provider === "tmap" && (g.turnType === 121 || g.turnType === 122));
 // The car's own speed and odometer (server car/ → car-link.ts): in a tunnel, the marker goes as the car really went.
 const carLink = new CarLink();
 tracker.car = carLink.track;
@@ -1449,9 +1454,27 @@ function showTurn(shown: Shown) {
   // On a motorway, a far rung names the junction and its way; the plain sentence is said if that cannot be had.
   const named = motorway && guide.junctionNames && due.rung > TURN_NEAR_M ? namedFor(g, m, due.rung) : null;
   // A guide said in its own words ("고속도로 출구") is made on the spot; if that fails, the fixed sentence for the road's bend.
-  const bent = TURN_WORDS_OK.has(m) ? null : bendOf(g);
-  const plain = bent ? turnPhrase(bent, due.rung) : undefined;
+  const bent = TURN_WORDS_OK.has(m) || m === "arrive" ? null : bendOf(g);
+  const plain = due.fallback ?? (bent ? turnPhrase(bent, due.rung) : undefined);
   voice.say(named ?? due.text, named ? due.text : plain, { key: `turn:${key}:${due.rung}`, turn: true });
+  // A second turn close after this one, told with its "잠시 후" as TMAP does: "그리고 이백미터 앞에서 우회전입니다".
+  if (due.rung <= TURN_NEAR_M && shown.thenGuide) {
+    const gap = shown.thenGuide.inM - shown.nextGuide.inM;
+    const then = maneuverFor(shown.thenGuide.guide);
+    // A 지하차도 or 고가차도 next says its own sentence ("잠시 후 고가차도 진입입니다"), which "오른쪽 방향" would not.
+    if (then !== "straight" && TURN_WORDS_OK.has(then) && !facilityOf(shown.thenGuide.guide.text) && gap <= (shown.speedMps * 3.6 < 70 ? 300 : 500)) {
+      voice.say(thenPhrase(then as Turn, gap < 75 ? null : nearestOf(THEN_M, gap)), undefined, { key: `then:${key}`, turn: true });
+      // Told already: its own sentences due within a few seconds of this one are not said again ("그리고 삼백미터
+      // 앞에서 좌회전" and then "잠시 후 좌회전" three seconds on); one further off still comes, as a reminder.
+      const thenKey = junction(shown.thenGuide.guide.at);
+      const thenSaid = turnsSaid.get(thenKey) ?? new Set<number>();
+      const fast = shown.speedMps * 3.6 >= 70, away = shown.nextGuide.inM + gap;
+      for (const r of turnRungs(shown.speedMps * 3.6)) {
+        if ((away - rungReach(r, fast)) / Math.max(1, shown.speedMps) < THEN_LEAD_S) thenSaid.add(r);
+      }
+      turnsSaid.set(thenKey, thenSaid);
+    }
+  }
   if (due.rung > TURN_NEAR_M && TURN_WORDS_OK.has(m)) {
     voice.prefetch(turnPhrase(m as Turn, TURN_NEAR_M));
   }
@@ -1465,6 +1488,14 @@ function showTurn(shown: Shown) {
     const hint = laneHint(m);
     if (hint) voice.say(hint, undefined, { key: `lane:${key}`, turn: true });
   }
+}
+
+/** A second turn's own sentence due this soon after its "그리고" is left out: that told it. */
+const THEN_LEAD_S = 6;
+
+/** The value of [steps] nearest [m]. */
+function nearestOf(steps: readonly number[], m: number): number {
+  return steps.reduce((a, b) => (Math.abs(b - m) < Math.abs(a - m) ? b : a));
 }
 
 /** Which guides are on a motorway, worked out once a route. */

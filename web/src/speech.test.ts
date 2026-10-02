@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ALERT_KINDS, ALERT_LEVELS, alertPhrase, fixedPhrases } from "../../server/src/phrases";
-import { EVENTS, spokenGuide, turnRungs, turnSpeech } from "./speech";
+import { ALERT_KINDS, ALERT_LEVELS, ENTRY_PHRASES, THEN_M, alertPhrase, fixedPhrases, thenPhrase } from "../../server/src/phrases";
+import { EVENTS, facilityOf, spokenGuide, turnRungs, turnSay, turnSpeech } from "./speech";
 import { phraseFor, type Kind } from "./warnings";
 import type { Maneuver } from "./maneuver";
 
@@ -30,9 +30,13 @@ test("a turn first seen close in is only 잠시 후, not every rung in one breat
 
 test("a turn first known well inside a far rung waits for 잠시 후 rather than say the wrong distance", () => {
   const said = new Set<number>();
-  assert.equal(turnSpeech("right", 171, 90, said, ""), null); // not "500미터 앞" at 171 m
-  assert.equal(turnSpeech("right", 160, 90, said, ""), null);
-  assert.equal(turnSpeech("right", 145, 90, said, ""), "잠시 후 우회전입니다");
+  // Not "500미터 앞" at 171 m: on a fast road that is inside 잠시 후's 250 m, so 잠시 후, once.
+  assert.equal(turnSpeech("right", 171, 90, said, ""), "잠시 후 우회전입니다");
+  assert.equal(turnSpeech("right", 145, 90, said, ""), null);
+  // In town the same: not 300미터 at 190 m, wait for 잠시 후.
+  const town = new Set<number>();
+  assert.equal(turnSpeech("right", 190, 50, town, ""), null);
+  assert.equal(turnSpeech("right", 145, 50, town, ""), "잠시 후 우회전입니다");
   assert.equal(turnSpeech("right", 380, 90, new Set(), ""), "오백미터 앞에서 우회전입니다"); // 76 %: close enough
 });
 
@@ -42,14 +46,15 @@ test("straight on and the arrival are said once, close in", () => {
   assert.equal(turnSpeech("straight", 140, 50, new Set(), ""), null);
   assert.equal(turnSpeech("straight", 140, 50, new Set(), "직진"), null);
   assert.equal(turnSpeech("straight", 140, 50, new Set(), "직진 방향 (성수대교 방면)"), "잠시 후 직진입니다");
-  assert.equal(turnSpeech("straight", 140, 50, new Set(), "지하차도 진입"), "잠시 후 직진입니다");
+  assert.equal(turnSpeech("straight", 140, 50, new Set(), "지하차도 진입"), "잠시 후 지하차도 진입입니다");
   assert.equal(turnSpeech("arrive", 140, 50, new Set(), ""), EVENTS.nearGoal);
 });
 
 test("provider text is made sayable for a manoeuvre with no word of its own", () => {
   assert.equal(spokenGuide("선릉역에서 강남구청 방면으로 좌회전 후 선릉로를 따라 15m 이동"), "선릉역에서 강남구청 방면으로 좌회전");
   assert.equal(spokenGuide("강남역에서 '역삼역' 방면으로 좌회전"), "강남역에서 역삼역 방면으로 좌회전");
-  assert.equal(turnSpeech("other", 140, 50, new Set(), "톨게이트 통과"), "잠시 후 톨게이트 통과");
+  assert.equal(turnSpeech("other", 140, 50, new Set(), "지정체 구간 진입"), "잠시 후 지정체 구간 진입");
+  assert.equal(turnSpeech("other", 140, 50, new Set(), "톨게이트 통과"), "잠시 후 톨게이트입니다");
 });
 
 test("every sentence the page can say from the vocabulary is one the server renders ahead", () => {
@@ -143,4 +148,67 @@ test("a speed that dips across 70 km/h does not bring the other set's rungs: the
   assert.equal(turnSpeech("right", 280, 75, town, ""), null);
   assert.equal(turnSpeech("right", 140, 75, town, ""), "잠시 후 우회전입니다");
   assert.equal(turnSpeech("right", 100, 60, town, ""), null);
+});
+
+test("Kakao's 12시 방향 at each IC is not said; a straight on that names its way still is", () => {
+  assert.equal(turnSpeech("straight", 140, 80, new Set(), "12시 방향"), null);
+  assert.equal(turnSpeech("straight", 140, 50, new Set(), "성산대교 일산 방면으로 직진"), "잠시 후 직진입니다");
+});
+
+test("into a 지하차도 or beside a 고가차도: said as such, with the side", () => {
+  const said = new Set<number>();
+  assert.equal(facilityOf("미사지하차도에서 '광주, 양평, 팔당댐' 방면으로 왼쪽 지하차도 진입")?.side, "왼쪽");
+  assert.equal(turnSpeech("slight-left", 290, 50, said, "미사지하차도에서 '광주, 양평, 팔당댐' 방면으로 왼쪽 지하차도 진입"), "삼백미터 앞에서 왼쪽 지하차도 진입입니다");
+  assert.equal(turnSpeech("slight-left", 140, 50, new Set(), "마포대교북단에서 '일산, 성산대교' 방면으로 고가차도 왼쪽 옆길"), "잠시 후 고가차도 왼쪽 옆길입니다");
+  // The place it is at is not the action: "조정지하차도에서 … 지하차도 진입".
+  assert.deepEqual(facilityOf("조정지하차도에서 '광주' 방면으로 지하차도 진입"), { kind: "지하차도", how: "진입" });
+  assert.equal(turnSpeech("other", 140, 50, new Set(), "지하차도 진입"), "잠시 후 지하차도 진입입니다");
+  assert.equal(facilityOf("응봉교에서 성동교 방면으로 오른쪽 방향"), null);
+  // Its own words if the facility sentence cannot be had.
+  assert.equal(turnSay("slight-left", 140, 50, new Set(), "고가차도 왼쪽 옆길")?.fallback, "잠시 후 왼쪽 방향입니다");
+});
+
+test("a toll gate is said once, close in, without its fare", () => {
+  const said = new Set<number>();
+  assert.equal(turnSpeech("other", 480, 80, said, "판교톨게이트 (통행료 1,000원)"), null);
+  assert.equal(turnSpeech("other", 240, 80, said, "판교톨게이트 (통행료 1,000원)"), "잠시 후 톨게이트입니다");
+  assert.equal(turnSpeech("other", 140, 50, new Set(), "하이패스 전용 톨게이트"), "잠시 후 하이패스 전용 톨게이트입니다");
+});
+
+test("on a fast road 잠시 후 comes at 250 m, not 150", () => {
+  const said = new Set<number>();
+  turnSpeech("ramp-right", 980, 100, said, "");
+  turnSpeech("ramp-right", 480, 100, said, "");
+  assert.equal(turnSpeech("ramp-right", 245, 100, said, ""), "잠시 후 오른쪽 출구입니다");
+  assert.equal(turnSpeech("right", 245, 50, new Set([500, 300]), ""), null);
+});
+
+test("the new sentences are rendered ahead too", () => {
+  const fixed = new Set(fixedPhrases());
+  for (const text of ["지하차도 진입", "왼쪽 지하차도 진입", "고가도로 옆길", "고가차도 오른쪽 옆길", "판교톨게이트", "하이패스 전용 톨게이트"]) {
+    for (const speed of [30, 100]) for (let inM = 1100; inM >= 0; inM -= 10) {
+      const s = turnSpeech("other", inM, speed, new Set(), text);
+      if (s) assert.ok(fixed.has(s), `not rendered ahead: ${s}`);
+    }
+  }
+  for (const t of ["left", "right", "uturn", "slight-right"] as const) {
+    assert.ok(fixed.has(thenPhrase(t, null)));
+    for (const g of THEN_M) assert.ok(fixed.has(thenPhrase(t, g)), thenPhrase(t, g));
+  }
+});
+
+test("onto a motorway straight on: one fixed sentence close in, not the provider's list of places", () => {
+  const said = new Set<number>();
+  assert.equal(turnSpeech("other", 990, 80, said, "하남시청,팔당대교 덕소삼패,춘천 방면으로 고속도로 입구"), null);
+  assert.equal(turnSpeech("other", 240, 80, said, "하남시청,팔당대교 덕소삼패,춘천 방면으로 고속도로 입구"), "잠시 후 고속도로 진입입니다");
+  assert.equal(turnSpeech("straight", 140, 50, new Set(), "한남IC에서 전방 고속도로 입구 후 경부 고속도로를 따라 15222m 이동"), "잠시 후 고속도로 진입입니다");
+  assert.equal(turnSpeech("other", 140, 50, new Set(), "'강변북로' 방면으로 도시고속도로 진입"), "잠시 후 도시고속도로 진입입니다");
+  for (const t of Object.values(ENTRY_PHRASES)) assert.ok(new Set(fixedPhrases()).has(t));
+});
+
+test("a 지하차도 is said twice, not three times", () => {
+  const said = new Set<number>();
+  const out = [];
+  for (let inM = 1100; inM >= 0; inM -= 10) { const s = turnSpeech("other", inM, 70, said, "지하차도 진입"); if (s) out.push(s); }
+  assert.deepEqual(out, ["오백미터 앞에서 지하차도 진입입니다", "잠시 후 지하차도 진입입니다"]);
 });

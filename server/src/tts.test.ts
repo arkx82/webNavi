@@ -21,7 +21,8 @@ test("the fixed phrases are the car apps' sentences, a closed set", () => {
   assert.ok(phrases.includes("잠시 후 오른쪽 방향입니다"));
   assert.ok(phrases.includes("일킬로미터 앞에서 오른쪽 출구입니다"));
   assert.ok(phrases.includes("사분 빠른 길이 있습니다"));
-  assert.ok(phrases.length > 90 && phrases.length < 260, `${phrases.length}`);
+  // The facilities (지하차도·고가차도), the toll gates and the "그리고" second turns came 2026-10-02.
+  assert.ok(phrases.length > 90 && phrases.length < 340, `${phrases.length}`);
 });
 
 /** 24 kHz samples: [ms of tone, ms of silence, …]. */

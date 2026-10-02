@@ -1,4 +1,4 @@
-import { EVENTS, TURN_NEAR_M, distanceWords, turnPhrase, type Turn } from "../../server/src/phrases";
+import { ENTRY_PHRASES, EVENTS, TOLL_PHRASES, TURN_NEAR_M, distanceWords, facilityPhrase, turnPhrase, type Facility, type Turn } from "../../server/src/phrases";
 import type { Maneuver } from "./maneuver";
 
 /**
@@ -15,6 +15,11 @@ const FAR_ENOUGH = 0.7;
 
 const FAST_RUNGS = [1000, 500, TURN_NEAR_M];
 const TOWN_RUNGS = [500, 300, TURN_NEAR_M];
+/**
+ * On a fast road "잠시 후" comes this far out, not at TURN_NEAR_M: at 100 km/h 150 m is five seconds, the sentence
+ * two of them. Kakao's SDK says it at 250 m on a motorway, 150 in town (KNVoiceDist).
+ */
+const FAST_NEAR_AT_M = 250;
 
 /** The distances a turn is spoken at, for the speed the car is doing. */
 export function turnRungs(speedKmh: number): number[] {
@@ -53,20 +58,54 @@ export function turnSpeech(maneuver: Maneuver, inM: number, speedKmh: number, sa
  * kept where its words name a choice — a direction to hold ("…방면",
  * "…방향"), a flyover or underpass to take or leave, a road to enter.
  */
-const STRAIGHT_MATTERS = /방면|방향|고가|지하차도|진입|램프|분기|갈림|본선|합류/;
+const STRAIGHT_MATTERS = /방면|방향|고가|지하차도|진입|입구|램프|분기|갈림|본선|합류/;
+/** Kakao's "12시 방향" at every IC a motorway passes: a clock hour names no choice. */
+const CLOCK_WAY = /\d{1,2}\s*시\s*방향/g;
 export function straightMatters(guideText: string): boolean {
-  return STRAIGHT_MATTERS.test(guideText.replace(/\s*후\s.*$/, ""));
+  return STRAIGHT_MATTERS.test(guideText.replace(/\s*후\s.*$/, "").replace(CLOCK_WAY, ""));
+}
+
+/**
+ * Into a 지하차도 or 고가차도, or the side road beside it, as the guide's
+ * own action says it (the words after "방면으로", not the place it is at:
+ * "조정지하차도에서 '광주' 방면으로 지하차도 진입"); null for any other guide.
+ */
+const FACILITY = /(왼쪽|오른쪽)?\s*(지하차도|고가차도|고가도로)\s*(왼쪽|오른쪽)?\s*(진입|옆길|옆)/;
+export function facilityOf(guideText: string): Facility | null {
+  const t = guideText.replace(/\s*후\s.*$/, "");
+  const at = t.lastIndexOf("방면으로");
+  const m = (at >= 0 ? t.slice(at + 4) : t).match(FACILITY);
+  if (!m) return null;
+  const side = (m[1] ?? m[3]) as Facility["side"];
+  return { kind: m[2] === "지하차도" ? "지하차도" : "고가차도", how: m[4] === "진입" ? "진입" : "옆길", ...(side ? { side } : {}) };
+}
+
+const TOLL = /톨게이트|요금소/;
+/** Onto a motorway or a 도시고속도로, as the words say it. */
+const ENTRY = /(도시)?고속도로\s*(입구|진입)|자동차전용도로\s*진입/;
+
+/** How far out rung [r] is said from: its own distance, but 잠시 후 sooner on a fast road. */
+export function rungReach(r: number, fast: boolean): number {
+  return r === TURN_NEAR_M && fast ? FAST_NEAR_AT_M : r;
 }
 
 /** The same, with the rung it was said at (a far one gets the junction's name and the side to move to). */
-export function turnSay(maneuver: Maneuver, inM: number, speedKmh: number, said: Set<number>, guideText: string): { text: string; rung: number } | null {
+export function turnSay(maneuver: Maneuver, inM: number, speedKmh: number, said: Set<number>, guideText: string): { text: string; rung: number; fallback?: string } | null {
   if (maneuver === "depart") return null;
+  const facility = maneuver === "arrive" ? null : facilityOf(guideText);
   // "잠시 후 직진" at every crossroads is noise: said only where the road gives a choice.
-  if (maneuver === "straight" && !straightMatters(guideText)) return null;
+  if (!facility && maneuver === "straight" && !straightMatters(guideText)) return null;
   let rungs = rungsFor(speedKmh, said);
-  // Straight on and the arrival are said once, close in.
-  if (maneuver === "straight" || maneuver === "arrive") rungs = [TURN_NEAR_M];
-  const inside = rungs.filter((r) => inM <= r);
+  const fast = rungs.includes(1000);
+  const action = guideText.replace(/\s*후\s.*$/, "");
+  const toll = !facility && TOLL.test(action);
+  // Onto a motorway with no side to take: a fixed sentence, not the provider's list of places.
+  const entry = !facility && !toll && (maneuver === "straight" || maneuver === "other") && ENTRY.test(action);
+  // Straight on, a toll gate, a motorway entry and the arrival are said once, close in.
+  if (!facility && (maneuver === "straight" || maneuver === "arrive" || toll || entry)) rungs = [TURN_NEAR_M];
+  // A 지하차도 or 고가차도 is a lane to be in, not a turn: the nearer far rung and 잠시 후 (three under 미사대로 are nine sentences otherwise).
+  if (facility) rungs = [fast ? 500 : 300, TURN_NEAR_M];
+  const inside = rungs.filter((r) => inM <= rungReach(r, fast));
   if (inside.length === 0) return null;
   const rung = Math.min(...inside);
   if (said.has(rung)) return null;
@@ -76,7 +115,11 @@ export function turnSay(maneuver: Maneuver, inM: number, speedKmh: number, said:
   // came late): "500미터 앞" at 170 m is wrong, so wait for 잠시 후 instead.
   if (rung > TURN_NEAR_M && inM < rung * FAR_ENOUGH) return null;
   if (maneuver === "arrive") return { text: EVENTS.nearGoal, rung };
-  if (TURNS.has(maneuver)) return { text: turnPhrase(maneuver as Turn, rung), rung };
+  if (toll) return { text: /하이패스/.test(guideText) ? TOLL_PHRASES.hipass : TOLL_PHRASES.plain, rung };
+  if (entry) return { text: /도시고속도로/.test(action) ? ENTRY_PHRASES.city : ENTRY_PHRASES.motorway, rung };
+  const plain = TURNS.has(maneuver) ? turnPhrase(maneuver as Turn, rung) : undefined;
+  if (facility) return { text: facilityPhrase(facility, rung), rung, ...(plain ? { fallback: plain } : {}) };
+  if (plain) return { text: plain, rung };
   const short = spokenGuide(guideText);
   if (!short) return null;
   return { text: rung <= TURN_NEAR_M ? `잠시 후 ${short}` : `${distanceWords(rung)} 앞 ${short}`, rung };

@@ -182,6 +182,35 @@ export function fasterPhrase(minutes: number): string {
   return `${sino(m)}분 빠른 길이 있습니다`;
 }
 
+/**
+ * 지하차도·고가차도: into it, or the side road beside it — the choice a
+ * Seoul road gives most often, which "왼쪽 방향" alone does not tell.
+ */
+export interface Facility { kind: "지하차도" | "고가차도"; how: "진입" | "옆길"; side?: "왼쪽" | "오른쪽" }
+const FACILITY_KINDS = ["지하차도", "고가차도"] as const;
+const FACILITY_HOWS = ["진입", "옆길"] as const;
+const FACILITY_SIDES = [undefined, "왼쪽", "오른쪽"] as const;
+
+export function facilityPhrase(f: Facility, rungM: number): string {
+  const side = f.side ? `${f.side} ` : "";
+  const words = f.how === "진입" ? `${side}${f.kind} 진입` : `${f.kind} ${side}옆길`;
+  return rungM <= TURN_NEAR_M ? `잠시 후 ${words}입니다` : `${distance(rungM)} 앞에서 ${words}입니다`;
+}
+
+/** Onto a motorway straight on (no side to take): said once, close in, not the provider's whole "…방면으로 고속도로 입구". */
+export const ENTRY_PHRASES = { motorway: "잠시 후 고속도로 진입입니다", city: "잠시 후 도시고속도로 진입입니다" } as const;
+
+/** A toll gate, said once close in (its name and fare are for the screen). */
+export const TOLL_PHRASES = { plain: "잠시 후 톨게이트입니다", hipass: "잠시 후 하이패스 전용 톨게이트입니다" } as const;
+
+/** Rungs a second turn close after the first is told at, with "그리고" (TMAP's way): "그리고 이백미터 앞에서 우회전입니다". */
+export const THEN_M = [100, 200, 300, 500] as const;
+/** The second of two turns close together, said right after the first's "잠시 후": [gapM] null for one straight after ("바로"). */
+export function thenPhrase(turn: Turn, gapM: number | null): string {
+  const word = TURN_WORDS[turn];
+  return gapM == null ? `그리고 바로 ${word}입니다` : `그리고 ${distance(gapM)} 앞에서 ${word}입니다`;
+}
+
 export const MERGE_PHRASE = "잠시 후 합류 구간입니다, 주의하세요";
 export const FLASHING_PHRASE = "잠시 후 점멸 신호 교차로입니다, 서행하세요";
 
@@ -229,5 +258,14 @@ export function fixedPhrases(): string[] {
   for (const h of Object.values(LANE_HINTS)) out.add(h);
   for (const m of FASTER_MINUTES) out.add(fasterPhrase(m));
   for (const g of Object.values(GUIDE_LINES)) out.add(g);
+  for (const kind of FACILITY_KINDS) for (const how of FACILITY_HOWS) for (const side of FACILITY_SIDES) {
+    for (const r of [...TURN_FAR_M, TURN_NEAR_M]) out.add(facilityPhrase({ kind, how, side }, r));
+  }
+  for (const t of Object.values(TOLL_PHRASES)) out.add(t);
+  for (const t of Object.values(ENTRY_PHRASES)) out.add(t);
+  for (const t of TURNS) {
+    out.add(thenPhrase(t, null));
+    for (const g of THEN_M) out.add(thenPhrase(t, g));
+  }
   return [...out];
 }

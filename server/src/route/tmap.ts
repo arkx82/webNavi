@@ -53,7 +53,7 @@ export class Tmap implements RouteProvider {
       if (feature.geometry.type === "Point") {
         route.guides.push({
           at: feature.geometry.coordinates,
-          text: p.description ?? "",
+          text: facilityText(p.description ?? "", p.turnType ?? 0),
           distanceM: p.distance ?? 0,
           turnType: p.turnType ?? 0,
         });
@@ -81,4 +81,22 @@ function tmapCongestion(level: number): Segment["congestion"] {
     case 3: case 4: return 3;
     default: return 0;
   }
+}
+
+/** TMAP's 지하차도, 고가도로, 터널, 교량 and the side roads (turnType 119–124), as the action the words leave out. */
+const FACILITY_ACTION: Record<number, string> = { 119: "지하차도 진입", 120: "고가차도 진입", 121: "터널 진입", 122: "교량 진입", 123: "지하차도 옆길", 124: "고가차도 옆길" };
+
+/**
+ * TMAP names the thing where a verb belongs ("미사 지하차도에서 광주,양평
+ * 방면으로 지하차도 후 …", "터널에서 터널 후 …"): the action put right,
+ * and a place that only repeats it dropped ("터널 진입 후 …").
+ */
+export function facilityText(text: string, turnType: number): string {
+  const action = FACILITY_ACTION[turnType];
+  if (!action) return text;
+  const tail = text.match(/\s+후\s+.*$/)?.[0] ?? "";
+  let head = text.slice(0, text.length - tail.length).replace(/\s*(지하차도|고가도로|고가차도|터널|교량)\s*옆?\s*$/, "").trim();
+  // "터널에서" with nothing more: the place is the thing itself.
+  head = head.replace(/^(지하차도|고가도로|고가차도|터널|교량)에서$/, "");
+  return `${head ? `${head} ` : ""}${action}${tail}`;
 }
