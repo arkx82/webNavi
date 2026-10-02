@@ -218,3 +218,18 @@ test("a school zone by the road onto a motorway stops where the motorway begins"
   assert.ok(Math.abs(zone.alongM - 300) < 2);
   assert.ok(Math.abs(zone.endM - 500) < 2);
 });
+
+test("the sentences ahead are every rung of every warning said within the horizon, none of those only shown", () => {
+  const watch = new RouteWatch(route, () => ({ wants: (k) => k !== "bump", cameraFromM: 600 }));
+  watch.add([
+    { id: "cam", kind: "speed", ...lonLat(offset(start, 0, 800)), limit: 50 },
+    { id: "bump", kind: "bump", ...lonLat(offset(start, 0, 600)) },
+    { id: "far", kind: "speed", ...lonLat(offset(corner, 90, 900)), limit: 60 },
+  ]);
+  const near = watch.phrasesAhead(100, 1500);
+  assert.deepEqual(near, ["육백미터 앞에 과속 단속 카메라가 있습니다, 제한 속도 오십입니다", "삼백미터 앞에 과속 단속 카메라가 있습니다, 제한 속도 오십입니다"]);
+  // Further on, the next camera comes in.
+  assert.equal(watch.phrasesAhead(100, 2000).length, 4);
+  // Fetching ahead says nothing: the camera's rungs are all still to come.
+  assert.equal(watch.due(250).length, 1);
+});

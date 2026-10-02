@@ -26,6 +26,9 @@ const FADE_S = 0.03;
  * recently used go once there are this many.
  */
 const KEPT_BUFFERS = 30;
+/** Sentences fetched ahead (warm) at once, and how many are remembered as fetched. */
+const WARM_AT_ONCE = 2;
+const WARMED_KEPT = 2000;
 
 export class Voice {
   readonly context: AudioContext;
@@ -127,6 +130,47 @@ export class Voice {
     void this.buffer(text).catch(() => {});
   }
 
+  /**
+   * [text]'s sound fetched into the browser's cache and no further: not
+   * decoded, so a few minutes of the road's sentences held ahead cost no
+   * memory (a decoded sentence is hundreds of KB). Said later, it is read
+   * from the cache, a dropped link or not. Two at a time, each once.
+   */
+  warm(text: string) {
+    if (!this.enabled) return;
+    text = koreanNumbers(text);
+    const key = `${this.voiceName ?? ""}|${text}`;
+    if (this.buffers.has(key) || this.warmed.has(key) || this.warmQueue.includes(key)) return;
+    this.warmQueue.push(key);
+    this.pumpWarm();
+  }
+
+  private warmed = new Set<string>();
+  private warmQueue: string[] = [];
+  private warming = 0;
+  private pumpWarm() {
+    while (this.warming < WARM_AT_ONCE && this.warmQueue.length) {
+      const key = this.warmQueue.shift()!;
+      const [voice, text] = [key.slice(0, key.indexOf("|")), key.slice(key.indexOf("|") + 1)];
+      this.warming++;
+      void fetch(this.url(text, voice || null))
+        .then(async (a) => { if (a.ok) { await a.arrayBuffer(); this.warmed.add(key); } })
+        .catch(() => { /* offline already, or refused: said later if it can be */ })
+        .finally(() => {
+          this.warming--;
+          // Kept bounded: an hours-long drive's sentences, the oldest forgotten (the cache still has them).
+          if (this.warmed.size > WARMED_KEPT) this.warmed.delete(this.warmed.values().next().value!);
+          this.pumpWarm();
+        });
+    }
+  }
+
+  /** Where [text]'s sound is, in [voice] (null: the server's own). The one address, for the cache to find it by. */
+  private url(text: string, voice: string | null): string {
+    // v=3: sentences cut off at the end made again (tts.ts); the browser keeps each answer a year under its address.
+    return `/api/tts?text=${encodeURIComponent(text)}&v=3${voice ? `&voice=${encodeURIComponent(voice)}` : ""}`;
+  }
+
   /** [text] now, even if it was just said: for hearing a voice before choosing it. */
   preview(text: string) {
     this.lastSaid.delete(text);
@@ -139,9 +183,7 @@ export class Voice {
     // Used again: newest in the order the least recently used are dropped by.
     if (had) { this.buffers.delete(key); this.buffers.set(key, had); }
     else {
-      // v=3: sentences cut off at the end made again (tts.ts); the browser keeps each answer a year under its address.
-      const voice = this.voiceName ? `&voice=${encodeURIComponent(this.voiceName)}` : "";
-      had = fetch(`/api/tts?text=${encodeURIComponent(text)}&v=3${voice}`)
+      had = fetch(this.url(text, this.voiceName))
         .then(async (a) => {
           if (!a.ok) throw new Error((await a.json().catch(() => ({}))).error ?? `${a.status}`);
           return padded(this.context, await this.context.decodeAudioData(await a.arrayBuffer()));

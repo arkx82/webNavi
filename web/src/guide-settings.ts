@@ -203,7 +203,7 @@ const GROUPS: Group[] = [
     { key: "colorLines", label: "색깔 유도선", kind: "toggle", sub: "고속도로 분기점 · 나들목에서 \"분홍색 유도선을 따라가세요\" 와 갈림길 그림 (한국도로공사)" },
     { key: "merges", label: "합류 구간", kind: "toggle", sub: "고속도로 입구 · 분기 뒤 램프에서" },
     { key: "closeups", label: "분기점 확대", kind: "toggle", sub: "IC · JC · 출구 500m 앞(시내 250m)에서 지도가 기울어 분기점까지 보이게" },
-    { key: "fasterRoute", label: "더 빠른 길", kind: "choice", options: [["ask", "물어보기"], ["auto", "20초 뒤 자동"], ["off", "끔"]], sub: "안내 중 6분마다 티맵·카카오·네이버·자체 경로를 다시 비교해 3분 이상 빠른 길이 있으면 알립니다. 물어보기: '바꾸기'를 눌러야 바뀜 · 자동: 20초 안에 '그대로'를 누르지 않으면 바뀜" },
+    { key: "fasterRoute", label: "더 빠른 길", kind: "choice", options: [["ask", "물어보기"], ["auto", "20초 뒤 자동"], ["off", "끔"]], sub: "안내 중 6분마다 티맵·카카오·네이버·자체 경로를 다시 비교해 3분 이상 빠른 길이 있으면 알립니다. 물어보기: '바꾸기'를 눌러야 바뀜 · 자동: 20초 안에 '그대로'를 누르지 않으면 바뀜. 꺼도 지금 길의 교통 색과 남은 시간은 6분마다 새로 받음" },
     { key: "endOnArrive", label: "도착하면 안내 종료", kind: "toggle", sub: "도착 안내 뒤 10초 뒤에 자동으로 검색 화면으로. 끄면 종료 버튼을 누를 때까지 그대로" },
   ] },
   { id: "enforce", title: "단속 · 경고", sub: "단속 카메라 · 구간 단속 · 과속 경고음", rows: [

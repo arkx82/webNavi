@@ -237,6 +237,17 @@ export class RouteWatch {
     return out;
   }
 
+  /** Every sentence the warnings ahead within [horizonM] can say, at each of their rungs: for the voice to fetch ahead. */
+  phrasesAhead(alongM: number, horizonM: number): string[] {
+    const prefs = this.prefs();
+    const out: string[] = [];
+    for (const a of this.ahead(alongM, horizonM)) {
+      if (!prefs.wants(a.feature.kind)) continue;
+      for (const r of this.rungsOf(a.feature.kind, prefs)) out.push(phraseFor({ ...a, rungM: r }));
+    }
+    return out;
+  }
+
   private rungsOf(kind: Kind, prefs: WatchPrefs): number[] {
     return CAMERA_KINDS.includes(kind) ? cameraRungs(prefs.cameraFromM) : RUNGS_M[kind];
   }

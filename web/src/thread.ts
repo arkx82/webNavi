@@ -17,6 +17,13 @@ const BEND_DEG = 25;
 const START_OFF_M = 12;
 const REJOIN_M = 4;
 /**
+ * Failing that, a trail running alongside the route this close and this
+ * nearly parallel rejoins it: a right turn into the outer lane of a wide
+ * road stays 8 m from the provider's centreline, and never came within 4.
+ */
+const REJOIN_FAR_M = 9;
+const REJOIN_PARALLEL_DEG = 15;
+/**
  * The joins are moved back and on along the route this many metres for
  * every metre the trail sits beside it (a slope of about 14°): a trail
  * on the outer lane of a wide road starts 10 m from the provider's
@@ -34,7 +41,7 @@ const TRAIL_SLACK_M = 20;
 /** A trail's first leg shorter than this, at an angle to the next, is a survey's step, not the lane's way. */
 const TRAIL_STEP_M = 3;
 
-export interface Turn { at: LonLat; in: number; after: LonLat[] }
+export interface Turn { at: LonLat; in: number; after: LonLat[]; before?: LonLat[] }
 
 /** The turns of [route] worth threading: each guide where the line bends, with the way in and the route after. */
 export function turnsOf(route: Route, line = new Line(route.path)): { guide: number; turn: Turn }[] {
@@ -47,7 +54,9 @@ export function turnsOf(route: Route, line = new Line(route.path)): { guide: num
     const outDeg = bearing(p.at[0], p.at[1], ahead[0], ahead[1]);
     if (Math.abs(((outDeg - inDeg + 540) % 360) - 180) < BEND_DEG) return;
     const after = Array.from({ length: 11 }, (_, k) => line.place(Math.min(line.lengthM, p.alongM + k * 15)).at);
-    out.push({ guide: i, turn: { at: g.at, in: Math.round(inDeg), after } });
+    // The 80 m in, for the lanes under the route before the junction (a slip lane leaves its road before the stop line).
+    const way = Array.from({ length: 17 }, (_, k) => line.place(Math.max(0, p.alongM - 80 + k * 5)).at);
+    out.push({ guide: i, turn: { at: g.at, in: Math.round(inDeg), after, before: way } });
   });
   return out;
 }
@@ -74,6 +83,16 @@ export function splice(route: Route, trail: LonLat[]): boolean {
     const p = line.project(trail[i], s.segment, 60);
     if (p.offM <= REJOIN_M && p.alongM > s.alongM + 10) { k = i; e = p; break; }
   }
+  if (k < 0) {
+    walked = 0;
+    for (let i = 1; i < trail.length; i++) {
+      walked += metres(trail[i - 1][0], trail[i - 1][1], trail[i][0], trail[i][1]);
+      if (walked < 30) continue;
+      const p = line.project(trail[i], s.segment, 60);
+      const deg = bearing(trail[i - 1][0], trail[i - 1][1], trail[i][0], trail[i][1]);
+      if (p.offM <= REJOIN_FAR_M && p.alongM > s.alongM + 10 && Math.abs(((p.bearing - deg + 540) % 360) - 180) <= REJOIN_PARALLEL_DEG) { k = i; e = p; break; }
+    }
+  }
   if (k < 0) return false;
   // Rejoining at an angle, or after a long way round: another lane's trail, not this turn's.
   const outDeg = bearing(trail[k - 1][0], trail[k - 1][1], trail[k][0], trail[k][1]);
@@ -89,8 +108,17 @@ export function splice(route: Route, trail: LonLat[]): boolean {
   for (let i = e.segment + 1; i + 1 < route.path.length; i++) if (bends[i] >= BEND_DEG) { ceiling = Math.min(ceiling, line.along[i]); break; }
   const sb = line.place(Math.max(floor, s.alongM - Math.max(TAPER_MIN_M, TAPER * s.offM)));
   const eb = line.place(Math.min(ceiling, e.alongM + Math.max(TAPER_MIN_M, TAPER * e.offM)));
+  rewrite(route, sb, eb, trail.slice(0, k + 1), true);
+  return true;
+}
+
+/**
+ * [route.path] from [sb] to [eb] (places on it) given [arc] in between
+ * instead, the indices into the path (congestion, motorways, threaded
+ * corners) moved with it; [threaded] marks the arc as a corner on the lanes.
+ */
+function rewrite(route: Route, sb: { at: LonLat; segment: number }, eb: { at: LonLat; segment: number }, arc: LonLat[], threaded: boolean) {
   const first = sb.segment + 1, past = eb.segment + 1;
-  const arc = trail.slice(0, k + 1);
   const head = first > 0 && metres(route.path[first - 1][0], route.path[first - 1][1], sb.at[0], sb.at[1]) < 0.5 ? [] : [sb.at];
   const tail = past < route.path.length && metres(route.path[past][0], route.path[past][1], eb.at[0], eb.at[1]) < 0.5 ? [] : [eb.at];
   const inserted: LonLat[] = [...head, ...arc, ...tail];
@@ -101,8 +129,68 @@ export function splice(route: Route, trail: LonLat[]): boolean {
   route.segments = route.segments.filter((seg) => seg.to > seg.from);
   if (route.motorways) route.motorways = route.motorways.map(([a, b]) => [move(a), move(b)] as [number, number]).filter(([a, b]) => b > a);
   const from = first + head.length;
-  route.threaded = [...threaded.map(([a, b]) => [move(a), move(b)] as [number, number]).filter(([a, b]) => b > a), [from, from + arc.length] as [number, number]].sort((a, b) => a[0] - b[0]);
-  return true;
+  const kept = (route.threaded ?? []).map(([a, b]) => [move(a), move(b)] as [number, number]).filter(([a, b]) => b > a);
+  route.threaded = (threaded ? [...kept, [from, from + arc.length] as [number, number]] : kept).sort((a, b) => a[0] - b[0]);
+}
+
+/**
+ * A corner the lanes could not thread (no 정밀도로지도 there, or no lane
+ * of it near the route), rounded: a right turn hugs the corner (about a
+ * 10 m radius), a left one sweeps across the junction (about 22 m), the
+ * way a car drives and the painted guide lines go — not the provider's
+ * point where two straight lines meet. Gentle bends, forks and U-turns
+ * are left as they are.
+ */
+const ROUND_R_M: Partial<Record<string, number>> = { right: 10, "sharp-right": 8, left: 22, "sharp-left": 18 };
+const ROUND_MAX_T_M: Partial<Record<string, number>> = { right: 16, "sharp-right": 14, left: 28, "sharp-left": 24 };
+/** A vertex bending this much (over ±8 m) is a corner, not a lane's arc. */
+const HARD_DEG = 60;
+export function roundCorners(route: Route) {
+  if (route.path.length < 3) return;
+  const corners: { along: number; r: number; tMax: number }[] = [];
+  let line = new Line(route.path);
+  const guideAlong = route.guides.map((g) => line.project(g.at, 0, line.path.length));
+  route.guides.forEach((g, i) => {
+    const kind = maneuverOf(route.provider, g);
+    const r = ROUND_R_M[kind], tMax = ROUND_MAX_T_M[kind];
+    if (r == null || tMax == null || guideAlong[i].offM > 30) return;
+    // Room before and after: half the way to the guides either side.
+    const prev = Math.max(0, ...guideAlong.slice(0, i).map((p) => p.alongM).filter((a) => a < guideAlong[i].alongM));
+    const nexts = guideAlong.slice(i + 1).map((p) => p.alongM).filter((a) => a > guideAlong[i].alongM);
+    const next = nexts.length ? Math.min(...nexts) : line.lengthM;
+    corners.push({ along: guideAlong[i].alongM, r, tMax: Math.min(tMax, (guideAlong[i].alongM - prev) / 2, (next - guideAlong[i].alongM) / 2) });
+  });
+  // From the end, so the earlier corners' places along the line stay as measured.
+  for (const c of corners.sort((a, b) => b.along - a.along)) {
+    line = new Line(route.path);
+    // The corner is the sharpest vertex within 20 m of the guide.
+    let at = c.along, sharpest = 0;
+    for (let i = 1; i + 1 < route.path.length; i++) {
+      const a = line.along[i];
+      if (Math.abs(a - c.along) > 20) continue;
+      const before = line.place(Math.max(0, a - 8)).at, after = line.place(Math.min(line.lengthM, a + 8)).at;
+      const bend = Math.abs(((bearing(route.path[i][0], route.path[i][1], after[0], after[1]) - bearing(before[0], before[1], route.path[i][0], route.path[i][1]) + 540) % 360) - 180);
+      if (bend > sharpest) { sharpest = bend; at = a; }
+    }
+    const inAt = line.place(Math.max(0, at - 25)).at, cornerAt = line.place(at).at, outAt = line.place(Math.min(line.lengthM, at + 25)).at;
+    const turn = Math.abs(((bearing(cornerAt[0], cornerAt[1], outAt[0], outAt[1]) - bearing(inAt[0], inAt[1], cornerAt[0], cornerAt[1]) + 540) % 360) - 180);
+    if (turn < 30 || turn > 150) continue;
+    const t = Math.min(c.tMax, c.r * Math.tan(((turn / 2) * Math.PI) / 180));
+    if (t < 4 || at - t < 0 || at + t > line.lengthM) continue;
+    // Not over a corner the lanes threaded — unless what they gave still has a hard corner in it (a lane's arc
+    // bends a little at each vertex; one that ends at the junction's mouth leaves the provider's point there).
+    const from = at - t, to = at + t;
+    if (sharpest < HARD_DEG && (route.threaded ?? []).some(([a, b]) => line.along[Math.min(b, line.along.length - 1)] >= from && line.along[a] <= to)) continue;
+    const sb = line.place(from), eb = line.place(to);
+    // A quadratic curve from A to B with the corner as its control point: tangent to both roads where it meets them.
+    const n = Math.max(4, Math.ceil((2 * t) / 2.5));
+    const arc: LonLat[] = [];
+    for (let k = 1; k < n; k++) {
+      const u = k / n, a = (1 - u) * (1 - u), b = 2 * u * (1 - u), cc = u * u;
+      arc.push([a * sb.at[0] + b * cornerAt[0] + cc * eb.at[0], a * sb.at[1] + b * cornerAt[1] + cc * eb.at[1]]);
+    }
+    rewrite(route, sb, eb, arc, false);
+  }
 }
 
 /** [points] without a point repeating the one before it. */
@@ -293,12 +381,14 @@ export async function snapRoute(route: Route): Promise<Route> {
 export async function threadRoute(route: Route): Promise<Route> {
   try {
     const turns = turnsOf(route);
-    if (turns.length === 0) return route;
+    if (turns.length === 0) { roundCorners(route); return route; }
     const a = await fetch("/api/hdmap/thread", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ turns: turns.map((t) => t.turn) }) });
     if (!a.ok) return route;
     const { trails } = (await a.json()) as { trails: (LonLat[] | null)[] };
     // Later corners first: a splice before them would move their indices, not their places, but the line is remade each time anyway.
     for (const trail of trails) if (trail) splice(route, trail);
   } catch { /* the corners as the provider drew them */ }
+  // What the lanes did not thread, rounded.
+  try { roundCorners(route); } catch { /* left as drawn */ }
   return route;
 }

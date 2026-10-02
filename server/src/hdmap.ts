@@ -84,12 +84,18 @@ export function registerHdmap(app: FastifyInstance, workDir: string) {
     return { at };
   });
   // The corners of a route as the lanes are painted (lanes.thread): one call, every turn of the route.
-  app.post<{ Body: { turns?: { at: LonLat; in: number; after: LonLat[] }[] } }>("/api/hdmap/thread", async (request, reply) => {
+  app.post<{ Body: { turns?: { at: LonLat; in: number; after: LonLat[]; before?: LonLat[] }[] } }>("/api/hdmap/thread", async (request, reply) => {
     const turns = Array.isArray(request.body?.turns) ? request.body.turns.slice(0, 200) : null;
     if (!turns) return reply.code(400).send({ error: "turns" });
     if (!lanes.ready) return { trails: turns.map(() => null) };
     const ok = (p: unknown): p is LonLat => Array.isArray(p) && p.length === 2 && p.every(Number.isFinite);
-    const trails = turns.map((t) => (ok(t.at) && Number.isFinite(t.in) && Array.isArray(t.after) && t.after.every(ok) ? lanes.thread(t.at, t.in, t.after.slice(0, AFTER_POINTS)) : null));
+    // The lane ends at the stop line first; failing them, the lanes under the route before it (a slip lane, an outer lane).
+    const trails = turns.map((t) => {
+      if (!(ok(t.at) && Number.isFinite(t.in) && Array.isArray(t.after) && t.after.every(ok))) return null;
+      const after = t.after.slice(0, AFTER_POINTS);
+      const before = Array.isArray(t.before) && t.before.every(ok) ? t.before.slice(-AFTER_POINTS) : null;
+      return lanes.thread(t.at, t.in, after) ?? (before ? lanes.threadAlong(before, after) : null);
+    });
     request.log.debug({ asked: turns.length, threaded: trails.filter(Boolean).length }, "corners threaded");
     return { trails };
   });

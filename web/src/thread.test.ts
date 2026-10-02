@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { applySnap, headingsOf, splice, turnsOf } from "./thread.js";
+import { applySnap, headingsOf, roundCorners, splice, turnsOf } from "./thread.js";
 import type { LonLat, Route } from "./types.js";
 
 /** Metres east/north of 강남역 as lon/lat. */
@@ -110,4 +110,40 @@ test("the splice slopes onto the trail and off it, and a trail that rejoins aske
   // Round the block and back: not this corner's.
   const around = corner();
   assert.ok(!splice(around, [at(0, 180), at(-40, 180), at(-40, 250), at(60, 250), at(60, 205), at(70, 201), at(80, 200)]));
+});
+
+test("a corner the lanes did not thread is rounded: a right turn tight, a left one wide, a fork left as it is", () => {
+  const cornerOf = (r: Route) => Math.min(...r.path.map((p) => Math.hypot((p[0] - at(0, 200)[0]) * 111_320 * Math.cos((37.4979 * Math.PI) / 180), (p[1] - at(0, 200)[1]) * 111_320)));
+  const right = corner();
+  roundCorners(right);
+  // The corner's own point is gone; the curve passes inside it, a few metres off (a 10 m radius: about 4 m).
+  assert.ok(cornerOf(right) > 2 && cornerOf(right) < 6, `right ${cornerOf(right)}`);
+  assert.deepEqual(right.path[right.path.length - 1], at(200, 200));
+  assert.equal(right.segments[right.segments.length - 1].to, right.path.length);
+  // A left turn sweeps wider (22 m: about 9 m inside the corner).
+  const left = corner();
+  left.path = [at(0, 0), at(0, 100), at(0, 200), at(-100, 200), at(-200, 200)];
+  left.guides = [{ at: at(0, 200), text: "좌회전", distanceM: 200, turnType: 1 }, { at: at(-200, 200), text: "도착", distanceM: 0, turnType: 101 }];
+  roundCorners(left);
+  assert.ok(cornerOf(left) > 6 && cornerOf(left) < 12, `left ${cornerOf(left)}`);
+  // A keep-right is not a corner to round.
+  const fork = corner();
+  fork.guides = [{ at: at(0, 200), text: "오른쪽 방향", distanceM: 200, turnType: 6 }, fork.guides[1]];
+  const was = fork.path.length;
+  roundCorners(fork);
+  assert.equal(fork.path.length, was);
+  // Nor one the lanes threaded.
+  const threaded = corner();
+  assert.ok(splice(threaded, [at(0, 180), at(3, 190), at(8, 197), at(15, 200), at(25, 200), at(60, 200)]));
+  const path = threaded.path.map((p) => [...p]);
+  roundCorners(threaded);
+  assert.deepEqual(threaded.path, path);
+});
+
+test("a right turn into the outer lane, 8 m beside the provider's line all the way on, rejoins it", () => {
+  const r = corner();
+  // The lane comes round to run 8 m south of the route's eastward line (the far side of a wide road).
+  const trail: LonLat[] = [at(0, 170), at(2, 182), at(8, 189), at(18, 192), at(40, 192), at(70, 192), at(100, 192)];
+  assert.ok(splice(r, trail));
+  assert.ok(r.path.some((p) => Math.abs(p[1] - at(0, 192)[1]) < 1e-7));
 });

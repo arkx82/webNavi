@@ -89,6 +89,18 @@ type End = Link & { path: LonLat[]; end: LonLat; before: number; side: number };
 /** How far past the stop line a corner is threaded, and how close to the route its links must keep. */
 const THREAD_M = 150;
 const THREAD_OFF_M = 6;
+/** threadAlong: the route sampled this often; seeds this close to it and this near its way; the trail judged to this far past the turn. */
+const ALONG_STEP_M = 5;
+const SEED_M = 12;
+const SEED_DEG = 30;
+const ALONG_PAST_M = 120;
+/** On average this close to the route, never further than MAX, ending within END, and no link of it straying past STRAY. */
+const ALONG_MEAN_M = 10;
+const ALONG_MAX_M = 22;
+const ALONG_END_M = 14;
+const ALONG_STRAY_M = 25;
+/** Ways tried at most, a corner (a junction's lanes branch, and a slip lane's again). */
+const ALONG_TRIES = 400;
 /** A lane's end this close to the next link's start is the same point, surveyed twice. */
 const TRAIL_JOIN_M = 3;
 /** A lane within this of a route vertex, running within SNAP_DEG of the route's way, is the road's; lanes within CARRIAGEWAY_M of the nearest are one carriageway. */
@@ -253,6 +265,73 @@ export class LaneIndex {
       }
     }
     return best?.trail ?? null;
+  }
+
+  /**
+   * The same corner found the other way, where thread() finds none: from
+   * the lanes under the route before the junction ([before], up to the
+   * guide, a point every few metres), every way on through the lane links,
+   * the one that keeps closest to the route through and past the turn.
+   * This finds a 도류화 right turn — a slip lane that leaves its road
+   * before the stop line, at an angle thread()'s lane ends never have —
+   * and a turn into the outer lane of a wide road, which stays 8 m from the
+   * provider's centreline where thread() wants 6 on average.
+   */
+  threadAlong(before: LonLat[], after: LonLat[]): LonLat[] | null {
+    const db = this.open();
+    if (!db || before.length < 2 || after.length < 2) return null;
+    const ref = resample([...before, ...after.slice(1)], ALONG_STEP_M);
+    const guideM = lengthOf(before);
+    const refM = lengthOf(ref);
+    const alongOf = (p: LonLat) => projectAlong(p, ref);
+    // Lanes under the route a little before the junction, running its way: 70 m back, or nearer where the map starts later.
+    let seeds: { link: Link; path: LonLat[]; from: LonLat; i: number }[] = [];
+    for (const backM of [70, 40, 20, 0]) {
+      const at = along(ref, Math.max(0, guideM - backM)), ahead = along(ref, Math.max(0, guideM - backM) + 10);
+      const way = bearingOf(at, ahead);
+      const d = SEED_M / M, k = d / Math.cos((at[1] * Math.PI) / 180);
+      const found = (db.near.all(at[0] + k, at[0] - k, at[1] + d, at[1] - d) as unknown as Link[]).flatMap((l) => {
+        const path = JSON.parse(l.coords) as LonLat[];
+        const hit = nearestIndex(at, path);
+        if (!hit || hit.off > SEED_M || Math.abs(diff(way, bearingOf(path[hit.i], path[Math.min(path.length - 1, hit.i + 1)]))) > SEED_DEG) return [];
+        return [{ link: l, path, from: hit.at, i: hit.i }];
+      });
+      if (found.length === 0) continue;
+      const newest = Math.max(...found.map((f) => surveyYear(f.link.id)));
+      seeds = found.filter((f) => surveyYear(f.link.id) === newest);
+      break;
+    }
+    let best: { trail: LonLat[]; off: number } | null = null;
+    let tried = 0;
+    const inSpan = (p: LonLat) => alongOf(p) < refM - 10;
+    const judge = (whole: LonLat[]) => {
+      const pts = resample(whole, ALONG_STEP_M);
+      const cut = pts.findIndex((p) => alongOf(p) >= guideM + ALONG_PAST_M);
+      const trail = cut > 1 ? pts.slice(0, cut + 1) : pts;
+      const end = trail[trail.length - 1];
+      if (alongOf(end) < guideM + 50) return;
+      const offs = trail.map((p) => offLine(p, ref));
+      const mean = offs.reduce((a, b) => a + b, 0) / offs.length;
+      // Running the route's way at its end, never far from it, and on the whole beside it.
+      const endWay = bearingOf(trail[Math.max(0, trail.length - 3)], end);
+      const refWay = bearingOf(along(ref, Math.max(0, alongOf(end) - 5)), along(ref, Math.min(refM, alongOf(end) + 5)));
+      if (Math.abs(diff(endWay, refWay)) > 20 || mean > ALONG_MEAN_M || Math.max(...offs) > ALONG_MAX_M || offs[offs.length - 1] > ALONG_END_M) return;
+      if (!best || mean < best.off) best = { trail, off: mean };
+    };
+    const walk = (trail: LonLat[], b: string | null, hops: number) => {
+      if (++tried > ALONG_TRIES) return;
+      if (!b || hops >= 9 || alongOf(trail[trail.length - 1]) >= guideM + ALONG_PAST_M - 10) { judge(trail); return; }
+      const on = db.next.all(b) as unknown as Link[];
+      if (on.length === 0) { judge(trail); return; }
+      for (const l of on) {
+        const path = JSON.parse(l.coords) as LonLat[];
+        // A way that strays from the route, within the stretch the route covers, is not the turn's.
+        if (resample(path, 10).some((p) => inSpan(p) && offLine(p, ref) > ALONG_STRAY_M)) continue;
+        walk(trail.concat(path.slice(dist(trail[trail.length - 1], path[0]) < TRAIL_JOIN_M ? 1 : 0)), l.b, hops + 1);
+      }
+    };
+    for (const s of seeds) walk([s.from, ...s.path.slice(s.i + 1)], s.link.b, 0);
+    return (best as { trail: LonLat[] } | null)?.trail ?? null;
   }
 
   /**
@@ -437,6 +516,41 @@ export function lanesAlong(index: LaneIndex, path: LonLat[]): (LaneInfo & { stop
   return out;
 }
 
+/** [path] as points every [step] metres, its own ends kept. */
+function resample(path: LonLat[], step: number): LonLat[] {
+  if (path.length < 2) return path.slice();
+  const total = lengthOf(path);
+  const out: LonLat[] = [];
+  for (let m = 0; m < total; m += step) out.push(along(path, m));
+  out.push(path[path.length - 1]);
+  return out;
+}
+/** How far along [line] the point of it nearest [p] is, metres. */
+function projectAlong(p: LonLat, line: LonLat[]): number {
+  let best = Infinity, at = 0, walked = 0;
+  for (let i = 0; i + 1 < line.length; i++) {
+    const [ax, ay] = toXY(line[i], p), [bx, by] = toXY(line[i + 1], p);
+    const dx = bx - ax, dy = by - ay, len2 = dx * dx + dy * dy;
+    const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, -(ax * dx + ay * dy) / len2));
+    const off = Math.hypot(ax + t * dx, ay + t * dy);
+    const seg = Math.sqrt(len2);
+    if (off < best) { best = off; at = walked + t * seg; }
+    walked += seg;
+  }
+  return at;
+}
+/** The vertex index of [line] whose segment comes nearest [p], with the nearest point and its distance. */
+function nearestIndex(p: LonLat, line: LonLat[]): { i: number; at: LonLat; off: number } | null {
+  let best: { i: number; at: LonLat; off: number } | null = null;
+  for (let i = 0; i + 1 < line.length; i++) {
+    const [ax, ay] = toXY(line[i], p), [bx, by] = toXY(line[i + 1], p);
+    const dx = bx - ax, dy = by - ay, len2 = dx * dx + dy * dy;
+    const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, -(ax * dx + ay * dy) / len2));
+    const off = Math.hypot(ax + t * dx, ay + t * dy);
+    if (!best || off < best.off) best = { i, off, at: [line[i][0] + (line[i + 1][0] - line[i][0]) * t, line[i][1] + (line[i + 1][1] - line[i][1]) * t] };
+  }
+  return best;
+}
 function lengthOf(path: LonLat[]): number {
   let m = 0;
   for (let i = 0; i + 1 < path.length; i++) m += dist(path[i], path[i + 1]);

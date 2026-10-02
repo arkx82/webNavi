@@ -27,6 +27,7 @@ import { ALERT_KINDS, alertPhrase, type AlertKind } from "../../server/src/phras
 import { Nearby } from "./nearby";
 import { autoZoom } from "./autozoom";
 import { EVENTS, facilityOf, straightMatters, turnRungs, turnSay } from "./speech";
+import { repaint } from "./traffic";
 import { junctionKind, junctionOf, laneHint, motorwayAt, motorwaySides, namedTurnPhrase } from "./highway";
 import { CLOSEUP_CAR_AT, CLOSEUP_PITCH, CloseupHold, zoomToSee, type Closeup } from "./closeup";
 import { RerouteBackoff } from "./reroute-backoff";
@@ -1314,25 +1315,58 @@ el("faster-go").addEventListener("click", takeFaster);
 el("faster-keep").addEventListener("click", keepRoute);
 
 async function recheckRoute() {
-  if (!drivingTo || !route || !gps.last || rerouting || guide.fasterRoute === "off" || faster) return;
+  if (!drivingTo || !route || !gps.last || rerouting || faster) return;
   if (!el("s-preview").hidden) return; // the cards are open; the driver is choosing
   if (stillness.still()) return; // parked a long while: the road has not changed for a car that does not move
   const asked = route, to = drivingTo;
   const current = tracker.frame()?.remainingS ?? route.durationS;
+  // No quicker way looked for: the way driven asked again, of its own provider alone, for its traffic now.
+  if (guide.fasterRoute === "off") {
+    try {
+      const fresh = await api.route(route.provider, here(), to.at);
+      if (route === asked && drivingTo === to && !rerouting) freshTraffic(fresh);
+    } catch (e) {
+      log(`교통 정보 갱신 실패 ${(e as Error).message}`);
+    }
+    return;
+  }
   try {
     const answer = await api.routes(here(), to.at);
     // An off-route re-route, a new place or the drive's end came while the answer did: it is for a route no longer driven.
     if (route !== asked || drivingTo !== to || rerouting) return;
-    const best = answer.routes.sort((a, b) => a.durationS - b.durationS)[0];
+    // First the way driven, its colours and time as the traffic is now (its own provider's fresh answer): measured against
+    // the time it was first given, the same road asked again looked minutes quicker ("더 빠른 길: tmap 16분 (지금 21분)").
+    const fresh = answer.routes.find((r) => r.provider === route!.provider);
+    const kept = fresh ? freshTraffic(fresh) : { same: false, timed: false };
+    const now = (kept.timed ? tracker.frame()?.remainingS : null) ?? current;
+    // The same road asked again is not another way; the same provider gone another way is.
+    const best = answer.routes.filter((r) => !(kept.same && r === fresh)).sort((a, b) => a.durationS - b.durationS)[0];
     // Quicker by enough — and, after a "그대로", by enough more than the way declined.
-    if (best && best.durationS < current - BETTER_BY_S && best.durationS < (declinedS ?? Infinity) - BETTER_BY_S) {
+    if (best && best.durationS < now - BETTER_BY_S && best.durationS < (declinedS ?? Infinity) - BETTER_BY_S) {
       offers = answer.routes;
-      log(`더 빠른 길: ${best.provider} ${minutes(best.durationS)} (지금 ${minutes(current)})`);
-      offerFaster(best, to, current - best.durationS);
+      log(`더 빠른 길: ${best.provider} ${minutes(best.durationS)} (지금 ${minutes(now)})`);
+      offerFaster(best, to, now - best.durationS);
     }
   } catch (e) {
     log(`재확인 실패 ${(e as Error).message}`);
   }
+}
+
+/**
+ * The route driven, given [fresh]'s traffic where it goes the same way (traffic.ts), and its time left where nearly all
+ * of it does: whether it is the same way, and whether the time left is the fresh one's now.
+ */
+function freshTraffic(fresh: Route): { same: boolean; timed: boolean } {
+  const shown = tracker.frame();
+  if (!route || shown?.alongM == null || shown.remainingM == null) return { same: false, timed: false };
+  const r = repaint(route, fresh, shown.alongM);
+  if (!r.same) return { same: false, timed: false };
+  // The tracker scales durationS by the distance left: set so that, from here, it is the fresh answer's.
+  const timed = r.matched / r.ahead >= 0.9;
+  if (timed) route.durationS = fresh.durationS * (routeLine?.lengthM ?? route.distanceM) / Math.max(1, shown.remainingM);
+  if (r.changed > 0) routeLayer.show(route);
+  log(`교통 정보 갱신: 앞 ${r.ahead}점 중 ${r.changed}점 색 바뀜 · 남은 ${minutes(fresh.durationS)}`);
+  return { same: true, timed };
 }
 
 // Off the road (tracker.ts says when, and again while it stays off): the
@@ -1907,9 +1941,97 @@ let watchedAt: { at: LonLat; t: number } | null = null;
 /** Parked with the page open (still.ts): the polls that follow the car wait until it moves. */
 const stillness = new Stillness();
 
+// ---- 미리 받기: the road's next few minutes held ahead, for a link that drops (a tunnel, a valley) ----
+
+/** Fetched ahead: this many seconds of the road at the car's speed, at least MIN and at most MAX metres. */
+const AHEAD_S = 300;
+const AHEAD_MIN_M = 3000;
+const AHEAD_MAX_M = 10_000;
+/** The road's cameras asked for ahead a cell this long at a time (each ask covers 1.5 km round its middle). */
+const AHEAD_CELL_M = 2500;
+const AHEAD_EVERY_MS = 5000;
+let aheadFor: Route | null = null;
+let aheadAt = 0;
+let aheadCells = new Set<number>();
+let aheadGuides = new WeakSet<Guide>();
+const guideAlong = new WeakMap<Guide, number>();
+/**
+ * The sentences the turns and warnings ahead may say fetched into the
+ * browser's cache (voice.warm: not decoded), and the cameras along the
+ * route ahead asked for — a little at a time, so a long route costs
+ * nothing at its start, and three to five minutes without a link still
+ * speak and warn as they would have.
+ */
+function holdAhead(w: RouteWatch) {
+  const r = route, line = routeLine;
+  if (!r || !line || Date.now() - aheadAt < AHEAD_EVERY_MS) return;
+  aheadAt = Date.now();
+  if (aheadFor !== r) {
+    aheadFor = r; aheadCells = new Set(); aheadGuides = new WeakSet();
+    // The drive's own sentences (the arrival, a re-route), once a route.
+    for (const e of Object.values(EVENTS)) voice.warm(e);
+  }
+  const shown = tracker.frame();
+  if (shown?.alongM == null) return;
+  const from = shown.alongM, to = from + Math.max(AHEAD_MIN_M, Math.min(AHEAD_MAX_M, shown.speedMps * AHEAD_S));
+  // The cameras of the stretch ahead, cell by cell: one ask now and then, not the whole route at once.
+  for (let m = from; m <= Math.min(to, line.lengthM); m += AHEAD_CELL_M) {
+    const cell = Math.floor(m / AHEAD_CELL_M);
+    if (aheadCells.has(cell)) continue;
+    aheadCells.add(cell);
+    const at = line.place(Math.min(line.lengthM, cell * AHEAD_CELL_M + AHEAD_CELL_M / 2)).at;
+    void fetch(`/api/safety/near?lon=${at[0]}&lat=${at[1]}&r=1500`).then((a) => (a.ok ? a.json() : null)).then((near: Feature[] | null) => {
+      if (near && watch === w) w.add(near);
+    }).catch(() => { aheadCells.delete(cell); });
+  }
+  if (!voice.enabled) return;
+  // The turns' sentences, every rung's (a dropped link knows no rung in advance).
+  if (guide.turns) {
+    for (let i = 0; i < r.guides.length; i++) {
+      const g = r.guides[i];
+      let a = guideAlong.get(g);
+      if (a == null) { a = line.project(g.at, 0, line.path.length).alongM; guideAlong.set(g, a); }
+      if (a < from || a > to || aheadGuides.has(g)) continue;
+      aheadGuides.add(g);
+      for (const text of sentencesOf(g, r.guides[i + 1] ?? null, a)) voice.warm(text);
+    }
+  }
+  for (const text of w.phrasesAhead(from, to - from)) voice.warm(text);
+}
+
+/** Whatever showTurn may say for guide [g] (and the "그리고" for [next] after it): every rung, named or plain, and the stand-ins. */
+function sentencesOf(g: Guide, next: Guide | null, alongM: number): string[] {
+  const out = new Set<string>();
+  const m = maneuverFor(g);
+  const motorway = onMotorway.get(g) ?? false;
+  const road = motorway ? "fast" : "town";
+  const bent = TURN_WORDS_OK.has(m) || m === "arrive" ? null : bendOf(g);
+  for (const rung of turnRungs(road)) {
+    const due = turnSay(m, rung.to, road, new Set(), g.text);
+    if (!due) continue;
+    out.add(due.text);
+    if (due.fallback) out.add(due.fallback);
+    if (bent) out.add(turnPhrase(bent, due.rung));
+    if (motorway && guide.junctionNames && NAMED_RUNGS.includes(due.rung)) { const named = namedFor(g, m, due.rung); if (named) out.add(named); }
+    if (due.rung === 1000) {
+      const colour = lineColour(g, m);
+      if (colour) out.add(GUIDE_LINES[colour]);
+      else if (motorway) { const hint = laneHint(m); if (hint) out.add(hint); }
+    }
+  }
+  if (next && routeLine) {
+    let nextAlong = guideAlong.get(next);
+    if (nextAlong == null) { nextAlong = routeLine.project(next.at, 0, routeLine.path.length).alongM; guideAlong.set(next, nextAlong); }
+    const gap = nextAlong - alongM, then = maneuverFor(next);
+    if (gap > 0 && gap <= 500 && then !== "straight" && TURN_WORDS_OK.has(then) && !facilityOf(next.text)) out.add(thenPhrase(then as Turn, gap < 75 ? null : nearestOf(THEN_M, gap)));
+  }
+  return [...out];
+}
+
 async function watchRoad(fix: Fix) {
   const w = watch, r = route;
   if (!w || !r) return;
+  holdAhead(w);
   const moved = watchedAt ? metres(watchedAt.at[0], watchedAt.at[1], fix.lon, fix.lat) : Infinity;
   if ((moved > 500 || !watchedAt || Date.now() - watchedAt.t > 30_000) && !stillness.still()) {
     watchedAt = { at: [fix.lon, fix.lat], t: Date.now() };

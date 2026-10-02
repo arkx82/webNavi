@@ -123,3 +123,30 @@ test("a route vertex is moved to the middle of the lanes running its way, not th
   assert.ok(south && Math.abs(xOf(south) + 3.5) < 0.05, `southbound → 3.5 m left: ${south && xOf(south)}`);
   assert.equal(away, null);
 });
+
+test("a 도류화 right turn: the slip lane leaves before the stop line, and is found from the lanes under the route", async () => {
+  const index = await indexOf([
+    // North to a stop line at y = 0: the through lane, and the outer lane that splits off at y = -40 into a slip road east.
+    link({ id: "A219B000001", lane: 1, a: "S0", b: "S1", l: null, r: null }, [[1.75, -120], [1.75, -60], [1.75, 0]]),
+    link({ id: "A219B000002", lane: 2, a: "S0", b: "S2", l: null, r: null }, [[5.25, -120], [5.25, -40]]),
+    link({ id: "A219B000003", lane: 1, a: "S2", b: "S3", l: null, r: null }, [[5.25, -40], [8, -25], [14, -14], [24, -9]]),
+    // East from the slip, the eastbound road's outer lane 9 m south of the route's line.
+    link({ id: "A219B000004", lane: 1, a: "S3", b: null, l: null, r: null }, [[24, -9], [80, -9], [200, -9]]),
+    link({ id: "A219B000005", lane: 1, a: "S1", b: null, l: null, r: null }, [[1.75, 0], [1.75, 100], [1.75, 200]]),
+  ]);
+  // The provider's line: north up the middle to the junction's centre, then east along the middle of the road at y = 0.
+  const before: LonLat[] = [], after: LonLat[] = [];
+  for (let y = -80; y <= 0; y += 5) before.push(at(0, y));
+  for (let x = 0; x <= 150; x += 15) after.push(at(x, 0));
+  // Its lane ends at the stop line turn the other way, so the lane ends find nothing.
+  assert.equal(index.thread(at(0, 0), 0, after), null);
+  const trail = index.threadAlong(before, after);
+  assert.ok(trail, "found along the route");
+  // It goes by the slip road: east of the through lane before the junction, and on the eastbound lane after it.
+  const xy = (p: LonLat) => [(p[0] - O[0]) * M * Math.cos((O[1] * Math.PI) / 180), (p[1] - O[1]) * M];
+  // Through the slip: some point well east of the through lane while still south of the junction.
+  assert.ok(trail!.some((p) => { const [x, y] = xy(p); return x > 6 && x < 22 && y > -30 && y < -10; }), "through the slip");
+  // And on along the eastbound lane, 9 m south of the line.
+  assert.ok(trail!.some((p) => { const [x, y] = xy(p); return x > 60 && Math.abs(y + 9) < 1; }), "on the eastbound lane");
+  assert.ok(!trail!.some((p) => xy(p)[1] > 5), "never north of the junction");
+});
