@@ -169,9 +169,13 @@ export class Speaker {
       } catch { /* the first take stands */ }
       repaired = true;
     }
-    writeFileSync(this.fileFor(text, 2, voice), wav);
-    this.ledger?.made(this.fileFor(text, 2, voice), voice, text, model, wav.length);
-    if (repaired) this.ledger?.repaired?.(this.fileFor(text, 2, voice));
+    // Kept under the voice it is in: a model with few voices speaks Sohee's sentence as Cherry, and filed as Sohee's
+    // it stayed Cherry for good (92 such, 2026-10-02) — filed as Cherry's, Sohee's is asked again next time.
+    const tier = CHAIN.find((t) => t.model === model);
+    const spoken = tier ? voiceOn(tier, voice) : voice;
+    writeFileSync(this.fileFor(text, 2, spoken), wav);
+    this.ledger?.made(this.fileFor(text, 2, spoken), spoken, text, model, wav.length);
+    if (repaired) this.ledger?.repaired?.(this.fileFor(text, 2, spoken));
     return wav;
   }
 }
