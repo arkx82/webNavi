@@ -1,4 +1,4 @@
-import { ENTRY_PHRASES, EVENTS, TOLL_PHRASES, TURN_NEAR_M, distanceWords, facilityPhrase, turnPhrase, type Facility, type Turn } from "../../server/src/phrases";
+import { ENTRY_PHRASES, EVENTS, ROUNDABOUT_RUNGS_M, TOLL_PHRASES, TURN_NEAR_M, distanceWords, facilityPhrase, roundaboutPhrase, turnPhrase, type Facility, type Turn } from "../../server/src/phrases";
 import type { Maneuver } from "./maneuver";
 
 /**
@@ -78,6 +78,15 @@ export function facilityOf(guideText: string): Facility | null {
   return { kind: m[2] === "지하차도" ? "지하차도" : "고가차도", how: m[4] === "진입" ? "진입" : "옆길", ...(side ? { side } : {}) };
 }
 
+/** The way out of a roundabout as the words give it: a clock hour, 12 for "직진" (null when they say none). */
+export function roundaboutHour(guideText: string): number | null {
+  const t = guideText.replace(/\s*후\s.*$/, "");
+  if (!/회전교차로/.test(t)) return null;
+  const h = t.match(/(\d{1,2})\s*시\s*방향/);
+  if (h) { const n = Number(h[1]); return n >= 1 && n <= 12 ? n : null; }
+  return /직진/.test(t) ? 12 : null;
+}
+
 const TOLL = /톨게이트|요금소/;
 /** Onto a motorway or a 도시고속도로, as the words say it. */
 const ENTRY = /(도시)?고속도로\s*(입구|진입)|자동차전용도로\s*진입/;
@@ -108,6 +117,9 @@ export function turnSay(maneuver: Maneuver, inM: number, road: RoadKind, said: S
   if (toll) return { text: /하이패스/.test(guideText) ? TOLL_PHRASES.hipass : TOLL_PHRASES.plain, rung };
   if (entry) return { text: /도시고속도로/.test(action) ? ENTRY_PHRASES.city : ENTRY_PHRASES.motorway, rung };
   const plain = TURNS.has(maneuver) ? turnPhrase(maneuver as Turn, rung) : undefined;
+  // A roundabout's way out where it is said close enough to matter (300 m, 잠시 후): "회전교차로에서 2시 방향".
+  const hour = maneuver === "roundabout" ? roundaboutHour(guideText) : null;
+  if (hour != null && (ROUNDABOUT_RUNGS_M as readonly number[]).includes(rung)) return { text: roundaboutPhrase(hour, rung), rung, ...(plain ? { fallback: plain } : {}) };
   if (facility) return { text: facilityPhrase(facility, rung), rung, ...(plain ? { fallback: plain } : {}) };
   if (plain) return { text: plain, rung };
   const short = spokenGuide(guideText);

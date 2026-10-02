@@ -63,9 +63,16 @@ export function sino(n: number): string {
 }
 
 /** Every number in [text] read out in Korean, digits and all; "2번째" becomes "두 번째". */
+/** A clock hour as Korean says it, in native numbers: 두 시, 열한 시 — not 이시, 십일시. */
+const HOURS = ["", "한", "두", "세", "네", "다섯", "여섯", "일곱", "여덟", "아홉", "열", "열한", "열두"];
+export function hourWords(hour: number): string {
+  return HOURS[hour] ? `${HOURS[hour]} 시` : `${sino(hour)}시`;
+}
+
 export function koreanNumbers(text: string): string {
   const ordinal = ["", "첫", "두", "세", "네", "다섯", "여섯", "일곱", "여덟", "아홉", "열"];
   return text
+    .replace(/(\d{1,2})\s*시\s*방향/g, (_, d) => `${hourWords(Number(d))} 방향`)
     .replace(/(\d+)\s*번째/g, (_, d) => (Number(d) <= 10 ? `${ordinal[Number(d)]} 번째` : `${sino(Number(d))} 번째`))
     .replace(/\d+(?:\.\d+)?/g, (d) => sino(Number(d)));
 }
@@ -200,6 +207,16 @@ export function facilityPhrase(f: Facility, rungM: number): string {
 /** Onto a motorway straight on (no side to take): said once, close in, not the provider's whole "…방면으로 고속도로 입구". */
 export const ENTRY_PHRASES = { motorway: "잠시 후 고속도로 진입입니다", city: "잠시 후 도시고속도로 진입입니다" } as const;
 
+/**
+ * A roundabout with the way out as a clock hour ("회전교차로에서 2시 방향"), at 300 m and 잠시 후; 12시 is straight
+ * through. Further out it is the plain "회전교차로" sentence.
+ */
+export const ROUNDABOUT_RUNGS_M = [300, TURN_NEAR_M] as const;
+export function roundaboutPhrase(hour: number, rungM: number): string {
+  const way = hour === 12 ? "직진" : `${hourWords(hour)} 방향`;
+  return rungM <= TURN_NEAR_M ? `잠시 후 회전교차로에서 ${way}입니다` : `${distance(rungM)} 앞 회전교차로에서 ${way}입니다`;
+}
+
 /** A toll gate, said once close in (its name and fare are for the screen). */
 export const TOLL_PHRASES = { plain: "잠시 후 톨게이트입니다", hipass: "잠시 후 하이패스 전용 톨게이트입니다" } as const;
 
@@ -264,6 +281,7 @@ export function fixedPhrases(): string[] {
   }
   for (const t of Object.values(TOLL_PHRASES)) out.add(t);
   for (const t of Object.values(ENTRY_PHRASES)) out.add(t);
+  for (let h = 1; h <= 12; h++) for (const r of ROUNDABOUT_RUNGS_M) out.add(roundaboutPhrase(h, r));
   for (const t of TURNS) {
     out.add(thenPhrase(t, null));
     for (const g of THEN_M) out.add(thenPhrase(t, g));

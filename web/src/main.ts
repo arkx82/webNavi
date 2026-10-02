@@ -217,10 +217,11 @@ let placed = false;
 const gps = new Gps();
 const tracker = new Tracker();
 // Guides that name no choice are not shown nor said: Kakao's "12시 방향" at each IC a motorway passes, a plain
-// "직진" at a crossroads, TMAP's tunnel and bridge (121, 122). The panel then shows the turn that matters.
+// "직진" at a crossroads, TMAP's tunnel and bridge and the rest stops it passes. The panel then shows the turn that matters.
 tracker.quiet = (g, r) =>
   (maneuverOf(r.provider, g) === "straight" && !straightMatters(g.text) && !facilityOf(g.text)) ||
-  (r.provider === "tmap" && (g.turnType === 121 || g.turnType === 122));
+  // TMAP's tunnels and bridges (121, 122), and the 졸음쉼터 and 휴게소 it passes (150, 151: the rest-area card shows them).
+  (r.provider === "tmap" && (g.turnType === 121 || g.turnType === 122 || g.turnType === 150 || g.turnType === 151));
 // The car's own speed and odometer (server car/ → car-link.ts): in a tunnel, the marker goes as the car really went.
 const carLink = new CarLink();
 tracker.car = carLink.track;

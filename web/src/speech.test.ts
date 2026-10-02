@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ALERT_KINDS, ALERT_LEVELS, ENTRY_PHRASES, THEN_M, alertPhrase, fixedPhrases, thenPhrase, turnPhrase } from "../../server/src/phrases";
-import { EVENTS, facilityOf, spokenGuide, turnRungs, turnSay, turnSpeech } from "./speech";
+import { ALERT_KINDS, ALERT_LEVELS, ENTRY_PHRASES, THEN_M, alertPhrase, fixedPhrases, koreanNumbers, roundaboutPhrase, thenPhrase, turnPhrase } from "../../server/src/phrases";
+import { EVENTS, facilityOf, roundaboutHour, spokenGuide, turnRungs, turnSay, turnSpeech } from "./speech";
 import { phraseFor, type Kind } from "./warnings";
 import type { Maneuver } from "./maneuver";
 
@@ -202,3 +202,17 @@ test("onto a motorway straight on: one fixed sentence close in, not the provider
   for (const t of Object.values(ENTRY_PHRASES)) assert.ok(new Set(fixedPhrases()).has(t));
 });
 
+
+test("a roundabout says its way out as a clock hour at 300 m and 잠시 후", () => {
+  const text = "신북교차로에서 '양구, 오음' 방면으로 회전교차로에서 2시 방향";
+  assert.deepEqual(approach("roundabout", "town", text).map(([, t]) => t), [
+    "일킬로미터 앞에서 회전교차로입니다", "오백미터 앞에서 회전교차로입니다", "삼백미터 앞 회전교차로에서 두 시 방향입니다", "잠시 후 회전교차로에서 두 시 방향입니다",
+  ]);
+  assert.equal(roundaboutHour("송청교차로에서 '양양, 인제' 방면으로 회전교차로에서 직진"), 12);
+  assert.equal(turnSpeech("roundabout", 120, "town", new Set(), "회전교차로에서 12시 방향"), "잠시 후 회전교차로에서 직진입니다");
+  assert.equal(roundaboutHour("왼쪽 방향"), null);
+  assert.equal(roundaboutPhrase(11, 150), "잠시 후 회전교차로에서 열한 시 방향입니다");
+  assert.equal(koreanNumbers("회전교차로에서 오른쪽 2시 방향, 300m"), "회전교차로에서 오른쪽 두 시 방향, 삼백m");
+  const fixed = new Set(fixedPhrases());
+  for (let h = 1; h <= 12; h++) for (const r of [300, 150]) assert.ok(fixed.has(roundaboutPhrase(h, r)));
+});
