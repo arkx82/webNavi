@@ -167,8 +167,9 @@ export class Voice {
 
   /** Where [text]'s sound is, in [voice] (null: the server's own). The one address, for the cache to find it by. */
   private url(text: string, voice: string | null): string {
-    // v=3: sentences cut off at the end made again (tts.ts); the browser keeps each answer a year under its address.
-    return `/api/tts?text=${encodeURIComponent(text)}&v=3${voice ? `&voice=${encodeURIComponent(voice)}` : ""}`;
+    // The browser keeps each answer a year under its address: v is raised when what the server has for a sentence
+    // changed. v=3: sentences cut off at the end made again (tts.ts). v=4: 92 of Sohee's that were Cherry's made again.
+    return `/api/tts?text=${encodeURIComponent(text)}&v=4${voice ? `&voice=${encodeURIComponent(voice)}` : ""}`;
   }
 
   /** [text] now, even if it was just said: for hearing a voice before choosing it. */
