@@ -223,7 +223,10 @@ const tracker = new Tracker();
 tracker.quiet = (g, r) =>
   (maneuverOf(r.provider, g) === "straight" && !straightMatters(g.text) && !facilityOf(g.text)) ||
   // TMAP's tunnels and bridges (121, 122), and the 졸음쉼터 and 휴게소 it passes (150, 151: the rest-area card shows them).
-  (r.provider === "tmap" && (g.turnType === 121 || g.turnType === 122 || g.turnType === 150 || g.turnType === 151));
+  (r.provider === "tmap" && (g.turnType === 121 || g.turnType === 122 || g.turnType === 150 || g.turnType === 151)) ||
+  // OSRM's (자체) merges: onto the motorway from its ramp, nothing to choose ("merge/slight left" was said as 왼쪽 방향
+  // where the ramp curls right); the 합류 구간 warning tells of it.
+  (r.provider === "korea" && typeof g.turnType === "string" && g.turnType.startsWith("merge"));
 // The car's own speed and odometer (server car/ → car-link.ts): in a tunnel, the marker goes as the car really went.
 const carLink = new CarLink();
 tracker.car = carLink.track;
@@ -1705,6 +1708,8 @@ function showTurn(shown: Shown) {
   const bent = TURN_WORDS_OK.has(m) || m === "arrive" ? null : bendOf(g);
   const plain = due.fallback ?? (bent ? turnPhrase(bent, due.rung) : undefined);
   voice.say(named ?? due.text, named ? due.text : plain, { key: `turn:${key}:${due.rung}`, turn: true });
+  // What was said, where, and from what: the record a "the voice said right where the line goes left" is read from.
+  log(`안내 "${named ?? due.text}" · ${Math.round(shown.nextGuide.inM)} m · ${m} · ${route.provider} ${g.turnType} "${g.text.replace(/\s*후\s.*$/, "").slice(0, 60)}"`);
   // A second turn close after this one, told with its "잠시 후" as TMAP does: "그리고 이백미터 앞에서 우회전입니다".
   if (due.rung <= TURN_NEAR_M && shown.thenGuide) {
     const gap = shown.thenGuide.inM - shown.nextGuide.inM;
@@ -1712,7 +1717,9 @@ function showTurn(shown: Shown) {
     // A 지하차도 or 고가차도 next says its own sentence ("잠시 후 고가차도 진입입니다"), which "오른쪽 방향" would not.
     const thenRoad = onMotorway.get(shown.thenGuide.guide) ? "fast" : "town";
     if (then !== "straight" && TURN_WORDS_OK.has(then) && !facilityOf(shown.thenGuide.guide.text) && gap <= (thenRoad === "fast" ? 500 : 300)) {
-      voice.say(thenPhrase(then as Turn, gap < 75 ? null : nearestOf(THEN_M, gap)), undefined, { key: `then:${key}`, turn: true });
+      const thenText = thenPhrase(then as Turn, gap < 75 ? null : nearestOf(THEN_M, gap));
+      voice.say(thenText, undefined, { key: `then:${key}`, turn: true });
+      log(`안내 "${thenText}" · 다음 ${Math.round(gap)} m · ${then} · "${shown.thenGuide.guide.text.replace(/\s*후\s.*$/, "").slice(0, 60)}"`);
       // Told already: its own sentences due within a few seconds of this one are not said again ("그리고 삼백미터
       // 앞에서 좌회전" and then "잠시 후 좌회전" three seconds on); one further off still comes, as a reminder.
       const thenKey = junction(shown.thenGuide.guide.at);
