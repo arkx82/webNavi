@@ -939,7 +939,8 @@ interface SharedPlace extends Place { id: number; sent: number; from: string | n
 let sharedPlaces: SharedPlace[] = [];
 /** The ones already shown as a card: a new one is, once. */
 const sharedSeen = new Set<number>();
-const SHARED_EVERY_MS = 30_000;
+/** Asked now and then too, in case the server's word (/api/share/events) was lost with a dropped link. */
+const SHARED_EVERY_MS = 60_000;
 async function pollShared() {
   if (document.hidden) return;
   try {
@@ -948,10 +949,10 @@ async function pollShared() {
     sharedPlaces = ((await a.json()) as { places: SharedPlace[] }).places;
   } catch { return; }
   drawShared();
-  // A new one while not driving: a card at once, to start from.
+  // A new one: a card at once, to start from (while driving, its 경로 보기 is 목적지 변경).
   const fresh = sharedPlaces.find((p) => !sharedSeen.has(p.id));
   for (const p of sharedPlaces) sharedSeen.add(p.id);
-  if (fresh && !route && Date.now() - fresh.sent < 10 * 60_000) showSharedCard(fresh);
+  if (fresh && Date.now() - fresh.sent < 10 * 60_000) showSharedCard(fresh);
 }
 function drawShared() {
   const ul = el<HTMLUListElement>("shared");
@@ -977,6 +978,7 @@ async function dismissShared(id: number) {
   await fetch("/api/share/dismiss", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) }).catch(() => {});
 }
 function showSharedCard(p: SharedPlace) {
+  el("shared-card-go").textContent = route ? "목적지 변경" : "경로 보기";
   el("shared-card-name").textContent = p.name;
   el("shared-card-addr").textContent = p.address;
   el("shared-card").hidden = false;
@@ -984,6 +986,12 @@ function showSharedCard(p: SharedPlace) {
 }
 el("shared-card-close").addEventListener("click", () => { el("shared-card").hidden = true; });
 setInterval(() => void pollShared(), SHARED_EVERY_MS);
+// The server says the moment a place is sent; EventSource comes back by itself when the link drops (and asks then).
+if (typeof EventSource !== "undefined") {
+  const told = new EventSource("/api/share/events");
+  told.addEventListener("shared", () => void pollShared());
+  told.addEventListener("open", () => void pollShared());
+}
 document.addEventListener("visibilitychange", () => { if (!document.hidden) void pollShared(); });
 void pollShared();
 

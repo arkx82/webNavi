@@ -1,3 +1,4 @@
+import type { ServerResponse } from "node:http";
 import type { FastifyInstance } from "fastify";
 import type { Db } from "./db.js";
 import type { KakaoSearch, Place } from "./search.js";
@@ -150,6 +151,22 @@ export async function resolveShare(text: string, search: Pick<KakaoSearch, "find
 const ok = (p: unknown): p is LonLat => Array.isArray(p) && p.length === 2 && p.every((v) => typeof v === "number" && Number.isFinite(v));
 
 export function registerShare(app: FastifyInstance, db: Db, search: KakaoSearch) {
+  // The car pages open for each account, told the moment a place is sent to it (a 30 s poll had the driver reloading).
+  const listening = new Map<number, Set<ServerResponse>>();
+  app.get("/api/share/events", async (request, reply) => {
+    const id = request.user!.id;
+    reply.hijack();
+    const res = reply.raw;
+    res.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache, no-transform", Connection: "keep-alive", "X-Accel-Buffering": "no" });
+    res.write(": open\n\n");
+    const mine = listening.get(id) ?? new Set<ServerResponse>();
+    mine.add(res);
+    listening.set(id, mine);
+    // A comment every 15 s: the tunnel and the browser keep a quiet stream open.
+    const beat = setInterval(() => res.write(": \n\n"), 15_000);
+    request.raw.on("close", () => { clearInterval(beat); mine.delete(res); if (mine.size === 0) listening.delete(id); });
+  });
+
   // Who a place can be sent to: every account on this server (its owner made them all).
   app.get("/api/share/users", async (request) => ({ me: request.user!.name, users: db.users().map((u) => u.name) }));
 
@@ -170,7 +187,8 @@ export function registerShare(app: FastifyInstance, db: Db, search: KakaoSearch)
     const p = request.body?.place;
     if (!to || !p || typeof p.name !== "string" || !ok(p.at)) return reply.code(400).send({ error: "to and place" });
     db.share(to.id, request.user!.id, { name: p.name.slice(0, 120), address: String(p.address ?? "").slice(0, 200), at: p.at });
-    return { ok: true, to: to.name };
+    for (const res of listening.get(to.id) ?? []) res.write("event: shared\ndata: {}\n\n");
+    return { ok: true, to: to.name, told: listening.get(to.id)?.size ?? 0 };
   });
 
   app.get("/api/share/inbox", async (request) => ({ places: db.inbox(request.user!.id, Date.now() - KEEP_MS) }));
