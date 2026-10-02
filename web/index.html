@@ -41,11 +41,6 @@
           <input id="q" type="search" placeholder="어디로 갈까요?" enterkeyhint="search" />
           <button type="submit" class="narrow">검색</button>
         </form>
-        <!-- Sent from a phone (/share): at the top, newest first, a day long. -->
-        <div id="shared-box" hidden>
-          <h4>폰에서 보낸 목적지</h4>
-          <ul id="shared" class="places"></ul>
-        </div>
         <!-- 집 and 회사, one tap away; unset, a tap asks where they are. -->
         <div class="saved-row">
           <button id="go-home" type="button" class="saved">
@@ -63,6 +58,11 @@
         <div id="fav-box" hidden>
           <h4>즐겨찾기</h4>
           <ul id="favs" class="places"></ul>
+        </div>
+        <!-- Sent from a phone (/share): over the recent ones, newest first, a day long. -->
+        <div id="shared-box" hidden>
+          <h4>공유받은 목적지</h4>
+          <ul id="shared" class="places"></ul>
         </div>
         <div id="recent-box" hidden>
           <h4>최근 목적지</h4>

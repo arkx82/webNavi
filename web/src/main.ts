@@ -310,7 +310,9 @@ function setCarMode(mode: GuideSettings["carData"]) {
 }
 /** The car's stream asked for, where the driver wants it here. */
 function startCarLink() {
-  if (carDataOn()) carLink.start();
+  // 켜기 on a device that does not look like the car: only once its own fix is good enough to set against the car's.
+  const comparable = !!gps.last && gps.last.accM <= 100;
+  if (carDataOn() && (guide.carData === "force" || IN_CAR || comparable || carNear)) carLink.start();
   else if (carLink.state !== "off") carLink.stop();
 }
 carLink.onState = (state) => { log(`차량 스트리밍: ${state}${carLink.name ? ` (${carLink.name})` : ""}`); drawCarBadge(); };
@@ -914,9 +916,22 @@ function recents(): Place[] {
   try { return JSON.parse(localStorage.getItem("nav-recent") ?? "[]"); } catch { return []; }
 }
 function remember(place: Place) {
-  const kept = [place, ...recents().filter((p) => p.name !== place.name)].slice(0, 6);
+  keepRecents([place, ...recents().filter((p) => p.name !== place.name)].slice(0, 6));
+}
+function keepRecents(kept: Place[]) {
   try { localStorage.setItem("nav-recent", JSON.stringify(kept)); } catch { /* private window */ }
   pushUserData("recents", kept);
+}
+/** An ✕ at a list row's right: [drop] it, the row's own tap not taken. */
+function withDelete(li: HTMLLIElement, title: string, drop: () => void) {
+  const del = document.createElement("button");
+  del.type = "button";
+  del.className = "del";
+  del.innerHTML = X;
+  del.title = title;
+  del.addEventListener("click", (e) => { e.stopPropagation(); drop(); });
+  // Before the words: floated right, it then sits at the row's top right, not under its last line.
+  li.prepend(del);
 }
 // -- 폰에서 보낸 목적지 (share.html → /api/share) --
 
@@ -945,13 +960,7 @@ function drawShared() {
     const ago = Math.max(1, Math.round((Date.now() - p.sent) / 60_000));
     const li = item(p.name, `${p.address} · ${p.from ?? "폰"} · ${ago < 60 ? `${ago}분 전` : `${Math.round(ago / 60)}시간 전`}`);
     li.addEventListener("click", () => useShared(p));
-    const del = document.createElement("button");
-    del.type = "button";
-    del.className = "del";
-    del.innerHTML = X;
-    del.title = "목록에서 빼기";
-    del.addEventListener("click", (e) => { e.stopPropagation(); void dismissShared(p.id); });
-    li.append(del);
+    withDelete(li, "목록에서 빼기", () => void dismissShared(p.id));
     ul.append(li);
   }
   el("shared-box").hidden = sharedPlaces.length === 0;
@@ -959,7 +968,7 @@ function drawShared() {
 function useShared(p: SharedPlace) {
   el("shared-card").hidden = true;
   void dismissShared(p.id);
-  openSearch(true);
+  // Straight to the place and its routes' card (choose shows it): no search box focused, no keyboard raised.
   void choose({ name: p.name, address: p.address, at: p.at });
 }
 async function dismissShared(id: number) {
@@ -985,6 +994,7 @@ function drawRecents() {
   for (const p of list) {
     const li = item(p.name, p.address);
     li.addEventListener("click", () => void choose(p));
+    withDelete(li, "최근 목적지에서 빼기", () => { keepRecents(recents().filter((r) => r.name !== p.name)); drawRecents(); });
     ul.append(li);
   }
   el("recent-box").hidden = list.length === 0;

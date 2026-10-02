@@ -43,3 +43,17 @@ test("a 카카오맵 link's place: its id through the redirects, and its page's 
   // The app's own page (no place in it): none.
   assert.equal(kakaoPlaceOf(`<meta property="og:title" content="카카오맵">`), null);
 });
+
+test("a shared way (출발 → 도착) means its end, not its start", async () => {
+  const text = "서울 노원구 노원로22길 34 → 강원 춘천시 석사동 732-9 (자동차 길찾기)";
+  assert.deepEqual(readShare(text), { name: null, address: "강원 춘천시 석사동 732-9", urls: [] });
+  assert.deepEqual(readShare("[카카오맵] 강남역 → 코엑스 (자동차 길찾기)\nhttps://kko.kakao.com/otznTfkVWV").name, "코엑스");
+  // The address searched for is the end's.
+  const asked: string[] = [];
+  const search = { find: async (q: string) => { asked.push(q); return [] as Place[]; }, findAddress: async (q: string) => { asked.push(q); return [127.73, 37.87] as [number, number]; } };
+  const p = await resolveShare(text, search);
+  assert.deepEqual(p?.at, [127.73, 37.87]);
+  assert.ok(asked.every((q) => q.startsWith("강원 춘천시")), asked.join(" | "));
+  // 카카오맵's way link ends in ep=lat,lng.
+  assert.deepEqual(coordsOf("https://m.map.kakao.com/scheme/route?ep=37.5423112,126.9524891&en=%EC%95%84"), [126.9524891, 37.5423112]);
+});

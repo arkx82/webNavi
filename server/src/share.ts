@@ -19,9 +19,17 @@ const ADDRESS_RE = /^(서울|부산|대구|인천|광주|대전|울산|세종|�
 /** The app's own tag before the place: "[네이버지도]", "[카카오맵]", "[TMAP]". */
 const TAG_RE = /^\s*\[[^\]]{1,20}\]\s*/;
 
+/** A shared way, not a place: "출발 → 도착 (자동차 길찾기)". The place is where it ends. */
+const ROUTE_ARROW = /\s*(?:→|->|➡|⇒)\s*/;
+/** The kind of way said after it: "(자동차 길찾기)", "(대중교통 길찾기)". */
+const ROUTE_KIND = /\s*\([^)]*(길찾기|경로|route)[^)]*\)\s*$/i;
+
 export function readShare(text: string): ShareText {
   const urls = [...text.matchAll(URL_RE)].map((m) => m[0].replace(/[),.]+$/, ""));
-  const lines = text.replace(URL_RE, "\n").split(/\r?\n/).map((l) => l.replace(TAG_RE, "").trim()).filter(Boolean);
+  const lines = text.replace(URL_RE, "\n").split(/\r?\n/).map((l) => l.replace(TAG_RE, "").trim()).filter(Boolean)
+    // A way shared: only its end is the place to go (its start is where the sender was).
+    .map((l) => (ROUTE_ARROW.test(l) ? l.split(ROUTE_ARROW).pop()!.replace(ROUTE_KIND, "").trim() : l.replace(ROUTE_KIND, "").trim()))
+    .filter(Boolean);
   let name: string | null = null, address: string | null = null;
   for (const line of lines) {
     // "이름 서울 강남구 …" on one line: split where the address starts.
@@ -72,6 +80,9 @@ export function coordsOf(url: string): LonLat | null {
   const num = (k: string) => { const v = Number(u.searchParams.get(k)); return Number.isFinite(v) && v !== 0 ? v : null; };
   const lon = num("lng") ?? num("lon") ?? num("x") ?? num("longitude"), lat = num("lat") ?? num("y") ?? num("latitude");
   if (lon != null && lat != null && lon > 124 && lon < 132 && lat > 33 && lat < 39) return [lon, lat];
+  // 카카오맵's shared way: its end as "ep=lat,lng" (m.map.kakao.com/scheme/route?ep=37.54,126.95&en=…).
+  const ep = (u.searchParams.get("ep") ?? "").split(",").map(Number);
+  if (ep.length === 2 && ep.every(Number.isFinite) && ep[1] > 124 && ep[1] < 132 && ep[0] > 33 && ep[0] < 39) return [ep[1], ep[0]];
   return null;
 }
 

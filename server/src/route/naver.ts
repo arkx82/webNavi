@@ -43,6 +43,9 @@ export class Naver implements RouteProvider {
     );
     const first = answer.route?.traoptimal?.[0];
     if (answer.code !== 0 || !first) throw new Error(`naver: ${answer.message}`);
+    // A way a few metres long comes with no guides and no sections at all.
+    first.guide ??= [];
+    first.section ??= [];
     const route: Route = {
       provider: this.name,
       distanceM: first.summary.distance,
