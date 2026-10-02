@@ -3,38 +3,36 @@ import type { Maneuver } from "./maneuver";
 
 /**
  * What the voice says for the next turn, and when: the car apps' fixed
- * sentences (server/src/phrases.ts, all rendered ahead of time) at a few
- * distances — 1 km and 500 m on a fast road, 500 m and 300 m in town — then
- * "잠시 후" close in. The provider's own guide text is only for the screen,
- * except for a manoeuvre the vocabulary has no word for.
+ * sentences (server/src/phrases.ts, all rendered ahead of time) at TMAP's
+ * own distances, then "잠시 후" close in. The provider's own guide text is
+ * only for the screen, except for a manoeuvre the vocabulary has no word for.
  */
 export { EVENTS };
 
-/** A far rung is said only this close to its distance: 500 m from 350 m out, not from 170. */
-const FAR_ENOUGH = 0.7;
-
-const FAST_RUNGS = [1000, 500, TURN_NEAR_M];
-const TOWN_RUNGS = [500, 300, TURN_NEAR_M];
-/**
- * On a fast road "잠시 후" comes this far out, not at TURN_NEAR_M: at 100 km/h 150 m is five seconds, the sentence
- * two of them. Kakao's SDK says it at 250 m on a motorway, 150 in town (KNVoiceDist).
- */
-const FAST_NEAR_AT_M = 250;
-
-/** The distances a turn is spoken at, for the speed the car is doing. */
-export function turnRungs(speedKmh: number): number[] {
-  return [...(speedKmh >= 70 ? FAST_RUNGS : TOWN_RUNGS)];
-}
+/** The road a turn is approached on: TMAP picks its distances by the road's class, not the car's speed. */
+export type RoadKind = "town" | "fast";
 
 /**
- * The set a junction's turn is said from is settled by its first sentence,
- * read back from what was said: a car doing 75 that dips to 65 and back
- * sticks with the fast road rungs without adding an extra 300m.
+ * One distance a turn is said at: the words ([m], or 잠시 후 for TURN_NEAR_M)
+ * and the window it is said in — once, as the turn first comes inside
+ * [from, to]. Past the window unsaid (a guide first known closer in, a
+ * re-route), it is not said at all: "500미터 앞" at 170 m is wrong.
  */
-function rungsFor(speedKmh: number, said: Set<number>): number[] {
-  if (said.has(1000)) return [...FAST_RUNGS];
-  if (said.has(300)) return [...TOWN_RUNGS];
-  return turnRungs(speedKmh);
+export interface Rung { m: number; from: number; to: number }
+
+/**
+ * TMAP's navigation engine's defaults (RGConfig in TmapNavigationEngine
+ * 11.0.0.1090, checked 2026-10-02 — its camera warnings there, 1 km on a
+ * motorway and 600 m in town, are what TMAP's own help page says the app
+ * does). 일반도로: 1 km, 500 m, 300 m, then 잠시 후 within 130 m.
+ * 고속국도 and 도시고속화도로: 2 km, 1 km, 600 m, then 잠시 후 within 220 m.
+ */
+const TOWN_RUNGS: Rung[] = [{ m: 1000, from: 950, to: 1050 }, { m: 500, from: 450, to: 550 }, { m: 300, from: 250, to: 350 }, { m: TURN_NEAR_M, from: 0, to: 130 }];
+const FAST_RUNGS: Rung[] = [{ m: 2000, from: 1950, to: 2050 }, { m: 1000, from: 950, to: 1050 }, { m: 600, from: 550, to: 699 }, { m: TURN_NEAR_M, from: 0, to: 220 }];
+
+/** The distances a turn is said at, on [road]. */
+export function turnRungs(road: RoadKind): Rung[] {
+  return road === "fast" ? FAST_RUNGS : TOWN_RUNGS;
 }
 
 const TURNS = new Set<Maneuver>([
@@ -48,8 +46,8 @@ const TURNS = new Set<Maneuver>([
  * said too: a guide first seen 120 m out is "잠시 후", not "300미터 앞" and
  * then "잠시 후" in one breath.
  */
-export function turnSpeech(maneuver: Maneuver, inM: number, speedKmh: number, said: Set<number>, guideText: string): string | null {
-  return turnSay(maneuver, inM, speedKmh, said, guideText)?.text ?? null;
+export function turnSpeech(maneuver: Maneuver, inM: number, road: RoadKind, said: Set<number>, guideText: string): string | null {
+  return turnSay(maneuver, inM, road, said, guideText)?.text ?? null;
 }
 
 /**
@@ -84,36 +82,28 @@ const TOLL = /톨게이트|요금소/;
 /** Onto a motorway or a 도시고속도로, as the words say it. */
 const ENTRY = /(도시)?고속도로\s*(입구|진입)|자동차전용도로\s*진입/;
 
-/** How far out rung [r] is said from: its own distance, but 잠시 후 sooner on a fast road. */
-export function rungReach(r: number, fast: boolean): number {
-  return r === TURN_NEAR_M && fast ? FAST_NEAR_AT_M : r;
-}
-
 /** The same, with the rung it was said at (a far one gets the junction's name and the side to move to). */
-export function turnSay(maneuver: Maneuver, inM: number, speedKmh: number, said: Set<number>, guideText: string): { text: string; rung: number; fallback?: string } | null {
+export function turnSay(maneuver: Maneuver, inM: number, road: RoadKind, said: Set<number>, guideText: string): { text: string; rung: number; fallback?: string } | null {
   if (maneuver === "depart") return null;
   const facility = maneuver === "arrive" ? null : facilityOf(guideText);
   // "잠시 후 직진" at every crossroads is noise: said only where the road gives a choice.
   if (!facility && maneuver === "straight" && !straightMatters(guideText)) return null;
-  let rungs = rungsFor(speedKmh, said);
-  const fast = rungs.includes(1000);
+  const all = turnRungs(road);
+  const near = all[all.length - 1];
+  let rungs = all;
   const action = guideText.replace(/\s*후\s.*$/, "");
   const toll = !facility && TOLL.test(action);
   // Onto a motorway with no side to take: a fixed sentence, not the provider's list of places.
   const entry = !facility && !toll && (maneuver === "straight" || maneuver === "other") && ENTRY.test(action);
   // Straight on, a toll gate, a motorway entry and the arrival are said once, close in.
-  if (!facility && (maneuver === "straight" || maneuver === "arrive" || toll || entry)) rungs = [TURN_NEAR_M];
-  // A 지하차도 or 고가차도 is a lane to be in, not a turn: the nearer far rung and 잠시 후 (three under 미사대로 are nine sentences otherwise).
-  if (facility) rungs = [fast ? 500 : 300, TURN_NEAR_M];
-  const inside = rungs.filter((r) => inM <= rungReach(r, fast));
-  if (inside.length === 0) return null;
-  const rung = Math.min(...inside);
-  if (said.has(rung)) return null;
-  // The further rungs of this set are said with it: none is owed after a nearer one.
-  for (const r of rungs) if (r >= rung) said.add(r);
-  // First seen well inside a far rung (just re-routed, or a guide that
-  // came late): "500미터 앞" at 170 m is wrong, so wait for 잠시 후 instead.
-  if (rung > TURN_NEAR_M && inM < rung * FAR_ENOUGH) return null;
+  if (!facility && (maneuver === "straight" || maneuver === "arrive" || toll || entry)) rungs = [near];
+  // A 지하차도 or 고가차도 is a lane to be in, not a turn: the last far rung and 잠시 후 (three under 미사대로 are nine sentences otherwise).
+  if (facility) rungs = all.slice(-2);
+  const at = rungs.find((r) => inM <= r.to && inM >= r.from);
+  if (!at || said.has(at.m)) return null;
+  // The further rungs are done with: none is owed after a nearer one.
+  for (const r of all) if (r.m >= at.m) said.add(r.m);
+  const rung = at.m;
   if (maneuver === "arrive") return { text: EVENTS.nearGoal, rung };
   if (toll) return { text: /하이패스/.test(guideText) ? TOLL_PHRASES.hipass : TOLL_PHRASES.plain, rung };
   if (entry) return { text: /도시고속도로/.test(action) ? ENTRY_PHRASES.city : ENTRY_PHRASES.motorway, rung };

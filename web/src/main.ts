@@ -26,7 +26,7 @@ import { GUIDE_LINES } from "../../server/src/phrases";
 import { ALERT_KINDS, alertPhrase, type AlertKind } from "../../server/src/phrases";
 import { Nearby } from "./nearby";
 import { autoZoom } from "./autozoom";
-import { EVENTS, facilityOf, rungReach, straightMatters, turnRungs, turnSay } from "./speech";
+import { EVENTS, facilityOf, straightMatters, turnRungs, turnSay } from "./speech";
 import { junctionKind, junctionOf, laneHint, motorwayAt, motorwaySides, namedTurnPhrase } from "./highway";
 import { CLOSEUP_CAR_AT, CLOSEUP_PITCH, CloseupHold, zoomToSee, type Closeup } from "./closeup";
 import { RerouteBackoff } from "./reroute-backoff";
@@ -1448,11 +1448,13 @@ function showTurn(shown: Shown) {
   const key = junction(g.at);
   const said = turnsSaid.get(key) ?? new Set<number>();
   turnsSaid.set(key, said);
-  const due = turnSay(m, shown.nextGuide.inM, shown.speedMps * 3.6, said, g.text);
-  if (!due || !guide.turns) return;
+  // TMAP's distances go by the road the turn is on (고속국도·도시고속화도로 or not), not the car's speed.
   const motorway = onMotorway.get(g) ?? false;
-  // On a motorway, a far rung names the junction and its way; the plain sentence is said if that cannot be had.
-  const named = motorway && guide.junctionNames && due.rung > TURN_NEAR_M ? namedFor(g, m, due.rung) : null;
+  const due = turnSay(m, shown.nextGuide.inM, motorway ? "fast" : "town", said, g.text);
+  if (!due || !guide.turns) return;
+  // On a motorway, 1 km and 600 m name the junction and its way (2 km is the plain sentence: each name is a new one to make);
+  // the plain sentence is said if the named one cannot be had.
+  const named = motorway && guide.junctionNames && NAMED_RUNGS.includes(due.rung) ? namedFor(g, m, due.rung) : null;
   // A guide said in its own words ("고속도로 출구") is made on the spot; if that fails, the fixed sentence for the road's bend.
   const bent = TURN_WORDS_OK.has(m) || m === "arrive" ? null : bendOf(g);
   const plain = due.fallback ?? (bent ? turnPhrase(bent, due.rung) : undefined);
@@ -1462,15 +1464,16 @@ function showTurn(shown: Shown) {
     const gap = shown.thenGuide.inM - shown.nextGuide.inM;
     const then = maneuverFor(shown.thenGuide.guide);
     // A 지하차도 or 고가차도 next says its own sentence ("잠시 후 고가차도 진입입니다"), which "오른쪽 방향" would not.
-    if (then !== "straight" && TURN_WORDS_OK.has(then) && !facilityOf(shown.thenGuide.guide.text) && gap <= (shown.speedMps * 3.6 < 70 ? 300 : 500)) {
+    const thenRoad = onMotorway.get(shown.thenGuide.guide) ? "fast" : "town";
+    if (then !== "straight" && TURN_WORDS_OK.has(then) && !facilityOf(shown.thenGuide.guide.text) && gap <= (thenRoad === "fast" ? 500 : 300)) {
       voice.say(thenPhrase(then as Turn, gap < 75 ? null : nearestOf(THEN_M, gap)), undefined, { key: `then:${key}`, turn: true });
       // Told already: its own sentences due within a few seconds of this one are not said again ("그리고 삼백미터
       // 앞에서 좌회전" and then "잠시 후 좌회전" three seconds on); one further off still comes, as a reminder.
       const thenKey = junction(shown.thenGuide.guide.at);
       const thenSaid = turnsSaid.get(thenKey) ?? new Set<number>();
-      const fast = shown.speedMps * 3.6 >= 70, away = shown.nextGuide.inM + gap;
-      for (const r of turnRungs(shown.speedMps * 3.6)) {
-        if ((away - rungReach(r, fast)) / Math.max(1, shown.speedMps) < THEN_LEAD_S) thenSaid.add(r);
+      const away = shown.nextGuide.inM + gap;
+      for (const r of turnRungs(thenRoad)) {
+        if ((away - r.to) / Math.max(1, shown.speedMps) < THEN_LEAD_S) thenSaid.add(r.m);
       }
       turnsSaid.set(thenKey, thenSaid);
     }
@@ -1478,17 +1481,20 @@ function showTurn(shown: Shown) {
   if (due.rung > TURN_NEAR_M && TURN_WORDS_OK.has(m)) {
     voice.prefetch(turnPhrase(m as Turn, TURN_NEAR_M));
   }
-  // The first far rung (a kilometre out): the guide line's colour where it is painted, else which side to be on.
-  const colour = due.rung > TURN_NEAR_M ? lineColour(g, m) : null;
+  // A kilometre out (or the first far rung inside it): the guide line's colour where it is painted, else which side to be on.
+  const colour = due.rung > TURN_NEAR_M && due.rung <= 1000 ? lineColour(g, m) : null;
   if (colour && guide.colorLines) {
     if (!linesSaid.has(key)) voice.say(GUIDE_LINES[colour], undefined, { key: `line:${key}`, turn: true });
     linesSaid.add(key);
   }
-  else if (motorway && guide.laneHints && due.rung >= 1000 && !lanesShown) {
+  else if (motorway && guide.laneHints && due.rung === 1000 && !lanesShown) {
     const hint = laneHint(m);
     if (hint) voice.say(hint, undefined, { key: `lane:${key}`, turn: true });
   }
 }
+
+/** The far rungs a motorway turn names its junction at. */
+const NAMED_RUNGS = [1000, 600];
 
 /** A second turn's own sentence due this soon after its "그리고" is left out: that told it. */
 const THEN_LEAD_S = 6;
@@ -1828,7 +1834,7 @@ function prepareHighway(r: Route) {
   for (const g of r.guides) {
     if (!onMotorway.get(g)) continue;
     const m = maneuverFor(g);
-    for (const rung of [1000, 500]) {
+    for (const rung of NAMED_RUNGS) {
       const text = namedFor(g, m, rung);
       if (text) voice.prefetch(text);
     }

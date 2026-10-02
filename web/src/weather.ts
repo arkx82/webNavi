@@ -14,7 +14,8 @@ interface Day { date: string; min?: number; max?: number; am: Sky; pm: Sky; pop?
 interface Air { station: string; pm10?: number; pm25?: number; pm10Grade?: Grade; pm25Grade?: Grade; time?: string; province?: boolean }
 type Grade = 1 | 2 | 3 | 4;
 const GRADE_WORDS: Record<Grade, string> = { 1: "좋음", 2: "보통", 3: "나쁨", 4: "매우 나쁨" };
-const GRADE_COLOURS: Record<Grade, string> = { 1: "#4fc3f7", 2: "#5cd65c", 3: "#ffb020", 4: "#e5484d" };
+/** The grades' colours are the theme's (style.css --grade-N): by day the bright ones could not be read on white. */
+const GRADE_COLOURS: Record<Grade, string> = { 1: "var(--grade-1)", 2: "var(--grade-2)", 3: "var(--grade-3)", 4: "var(--grade-4)" };
 
 interface Weather {
   place: string;

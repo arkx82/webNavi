@@ -30,7 +30,7 @@ const TURN_WORDS: Record<Turn, string> = {
 export const TURNS = Object.keys(TURN_WORDS) as Turn[];
 
 /** Where a turn is spoken from: far rungs in metres, then "잠시 후" close in. */
-export const TURN_FAR_M = [1000, 500, 300] as const;
+export const TURN_FAR_M = [2000, 1000, 600, 500, 300] as const;
 export const TURN_NEAR_M = 150;
 
 /**
@@ -259,7 +259,8 @@ export function fixedPhrases(): string[] {
   for (const m of FASTER_MINUTES) out.add(fasterPhrase(m));
   for (const g of Object.values(GUIDE_LINES)) out.add(g);
   for (const kind of FACILITY_KINDS) for (const how of FACILITY_HOWS) for (const side of FACILITY_SIDES) {
-    for (const r of [...TURN_FAR_M, TURN_NEAR_M]) out.add(facilityPhrase({ kind, how, side }, r));
+    // The last far rung of each road (600 m fast, 300 m in town) and 잠시 후 (web/src/speech.ts).
+    for (const r of [600, 300, TURN_NEAR_M]) out.add(facilityPhrase({ kind, how, side }, r));
   }
   for (const t of Object.values(TOLL_PHRASES)) out.add(t);
   for (const t of Object.values(ENTRY_PHRASES)) out.add(t);
