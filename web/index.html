@@ -241,6 +241,8 @@
     <!-- 안내 설정: what the voice says, and from how far; and, at its foot, where everything comes from. -->
     <aside id="guide" class="sheet" hidden>
       <header class="nb-head"><b>안내 설정</b><button id="guide-close" class="icon" type="button"><svg class="gl" viewBox="0 0 20 20" aria-hidden="true"><path d="M4.3 4.3a1 1 0 0 1 1.4 0L10 8.6l4.3-4.3a1 1 0 1 1 1.4 1.4L11.4 10l4.3 4.3a1 1 0 0 1-1.4 1.4L10 11.4l-4.3 4.3a1 1 0 0 1-1.4-1.4L8.6 10 4.3 5.7a1 1 0 0 1 0-1.4z"/></svg></button></header>
+      <!-- The header stays; only this scrolls. -->
+      <div id="guide-body">
       <div id="guide-rows"></div>
       <div class="row account"><span id="account-name"></span><button id="logout" type="button" class="narrow">로그아웃</button></div>
       <details id="licences">
@@ -266,6 +268,7 @@
         </dl>
         <p class="lic-note">공공데이터포털(data.go.kr)의 자료는 각 제공기관의 저작물이며, 공공누리 등 해당 데이터의 이용허락 조건에 따라 출처를 표시해 이용합니다. 자료는 제공기관의 갱신 주기에 따르며 실제와 다를 수 있습니다.</p>
       </details>
+      </div>
     </aside>
     <!-- 주변: kinds of place to put on the map, and the list of them. -->
     <aside id="nearby" hidden>
