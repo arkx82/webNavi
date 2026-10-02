@@ -88,7 +88,7 @@ details > * + * { margin-top: 8px; }
 #music-dock.closed #full { display: none; }
 /* Open, it is the whole right column — never over the trip panel on the left. */
 #music-dock:not(.closed) { top: 16px; z-index: 2; background: linear-gradient(180deg, var(--deep) 0%, rgba(20, 18, 28, 0.96) 62%); }
-#full { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 14px; padding: 16px 16px 6px; overflow: auto; }
+#full { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 14px; padding: 16px 16px 6px; overflow: auto; overscroll-behavior: contain; }
 
 .disc {
   flex: 0 0 auto; width: 46px; height: 46px; border-radius: 50%; background: radial-gradient(circle, #1a1a22 18%, transparent 19%), linear-gradient(135deg, #c7b8ff, #ffb3d9);
@@ -155,7 +155,9 @@ button.icon.main { width: 74px; height: 74px; background: var(--tint); color: #1
 .tabs.pills button.on { background: var(--tint); color: #1d1a2b; }
 
 #list-filter { flex: 0 0 auto; min-height: 42px; border-radius: 999px; padding: 0 16px; font-size: 15px; background: rgba(255,255,255,.08); }
-#music-lists, #music-found { list-style: none; margin: 0 -8px; padding: 0; flex: 1; min-height: 120px; overflow: auto; }
+/* The lists are part of the player's one scroll (#full): pushed up, the cover goes with it and the list has the
+   window — not a box of its own under the cover, a few rows tall (fewer still while playing, with the seek bar). */
+#music-lists, #music-found { list-style: none; margin: 0 -8px; padding: 0; flex: 0 0 auto; }
 #music-lists li, #music-found li { display: flex; align-items: center; gap: 12px; padding: 8px; border-radius: 16px; font-size: 15px; cursor: pointer; transition: background 0.2s, transform 0.2s cubic-bezier(.34,1.56,.64,1); }
 #music-lists li:active, #music-found li:active { transform: scale(0.97); background: rgba(255,255,255,.08); }
 #music-lists li .art.thumb, #music-found li .art.thumb { width: 46px; height: 46px; border-radius: 14px; }
