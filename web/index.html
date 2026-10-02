@@ -41,6 +41,11 @@
           <input id="q" type="search" placeholder="어디로 갈까요?" enterkeyhint="search" />
           <button type="submit" class="narrow">검색</button>
         </form>
+        <!-- Sent from a phone (/share): at the top, newest first, a day long. -->
+        <div id="shared-box" hidden>
+          <h4>폰에서 보낸 목적지</h4>
+          <ul id="shared" class="places"></ul>
+        </div>
         <!-- 집 and 회사, one tap away; unset, a tap asks where they are. -->
         <div class="saved-row">
           <button id="go-home" type="button" class="saved">
@@ -163,6 +168,16 @@
     <!-- On the map's right edge, the way the car apps stack them: which way
          up, what is around, how close; 현위치 by the player. -->
     <div id="controls">
+      <!-- T: the car's own data in use here (green), waiting or the car away (grey), off (struck); held, the choice. -->
+      <button id="car-badge" class="car-badge" type="button" hidden>T</button>
+      <div id="car-menu" hidden>
+        <div id="car-why"></div>
+        <div id="car-modes" hidden>
+          <button type="button" data-mode="auto">켜기<small>차가 가까이 있을 때만</small></button>
+          <button type="button" data-mode="force">강제 켜기<small>거리와 상관없이</small></button>
+          <button type="button" data-mode="off">끄기<small>받지 않음</small></button>
+        </div>
+      </div>
       <!-- The weather here: its icon and the temperature; the forecast when tapped. -->
       <button id="wx-open" class="ctl wx" type="button" title="날씨" hidden></button>
       <button id="view-mode" class="ctl" type="button" title="지도 방향">
@@ -238,6 +253,11 @@
       <header class="nb-head"><b>날씨</b><button id="wx-close" class="icon" type="button"><svg class="gl" viewBox="0 0 20 20" aria-hidden="true"><path d="M4.3 4.3a1 1 0 0 1 1.4 0L10 8.6l4.3-4.3a1 1 0 1 1 1.4 1.4L11.4 10l4.3 4.3a1 1 0 0 1-1.4 1.4L10 11.4l-4.3 4.3a1 1 0 0 1-1.4-1.4L8.6 10 4.3 5.7a1 1 0 0 1 0-1.4z"/></svg></button></header>
       <div id="wx-body"></div>
     </aside>
+    <!-- A place just sent from a phone, while not driving: one tap to its routes. -->
+    <div id="shared-card" hidden>
+      <div class="sc-words"><small>📱 폰에서 보낸 목적지</small><b id="shared-card-name"></b><span id="shared-card-addr"></span></div>
+      <div class="sc-buttons"><button id="shared-card-go" type="button" class="primary">경로 보기</button><button id="shared-card-close" type="button" class="narrow">닫기</button></div>
+    </div>
     <!-- 안내 설정: what the voice says, and from how far; and, at its foot, where everything comes from. -->
     <aside id="guide" class="sheet" hidden>
       <header class="nb-head"><b>안내 설정</b><button id="guide-close" class="icon" type="button"><svg class="gl" viewBox="0 0 20 20" aria-hidden="true"><path d="M4.3 4.3a1 1 0 0 1 1.4 0L10 8.6l4.3-4.3a1 1 0 1 1 1.4 1.4L11.4 10l4.3 4.3a1 1 0 0 1-1.4 1.4L10 11.4l-4.3 4.3a1 1 0 0 1-1.4-1.4L8.6 10 4.3 5.7a1 1 0 0 1 0-1.4z"/></svg></button></header>

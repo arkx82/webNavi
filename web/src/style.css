@@ -767,3 +767,52 @@ body.fast * { backdrop-filter: none !important; }
 
 /* No browser zoom on a double tap over the page, and no 300 ms wait before a tap counts: the map zooms by pinch and ±. */
 body, button, #hud, #controls { touch-action: manipulation; }
+
+/* ---- 폰에서 보낸 목적지: a card in the middle top of the map, the trip panel left alone ---- */
+#shared-card {
+  position: absolute; top: 84px; left: calc(var(--hud-edge, var(--hud-right)) + 16px); right: 96px; max-width: 460px; z-index: 3; box-sizing: border-box;
+  display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; border-radius: 14px; background: var(--panel-solid);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+}
+#shared-card .sc-words { display: flex; flex-direction: column; gap: 2px; }
+#shared-card small { font-size: 12px; color: var(--dim); }
+#shared-card b { font-size: 18px; }
+#shared-card span { font-size: 13px; color: var(--dim); }
+#shared-card .sc-buttons { display: flex; gap: 8px; }
+#shared-card .sc-buttons .primary { flex: 1; min-height: 48px; }
+
+/* ---- A phone held upright (under 600 px wide): the car's layout puts the 목적지 button right of the trip panel,
+   off the screen's edge, and the panel under the buttons on the right. Here the panel stops short of the right-hand
+   column and the button sits under it. The car's screen and a phone on its side are as they were. ---- */
+@media (max-width: 600px) {
+  #hud { width: auto; right: 92px; min-width: 0; max-width: none; }
+  body.hud-min #hud { width: auto; min-width: 0; max-width: none; right: 92px; }
+  #dest-open { left: 16px; top: calc(var(--hud-bottom, 120px) + 10px); }
+  #shared-card { left: 16px; right: 92px; top: calc(var(--hud-bottom, 120px) + 78px); }
+  #guide, #weather { left: 16px; right: 16px; width: auto; }
+  /* The 목적지 window under the panel, the screen's width, rather than a sliver right of it. */
+  #dest-panel { left: 16px; right: 16px; width: auto; max-width: none; top: calc(var(--hud-bottom, 120px) + 10px); max-height: calc(100% - var(--hud-bottom, 120px) - 26px); }
+  #music-dock:not(.compact), #music-dock:not(.closed) { left: 16px; width: auto; }
+}
+
+/* ---- T: the car's data, left of the weather button (#controls is the column it sits beside) ---- */
+.car-badge {
+  position: absolute; top: 13px; right: calc(100% + 8px); width: 34px; height: 34px; min-height: 34px; padding: 0;
+  border-radius: 50%; font-size: 16px; font-weight: 800; line-height: 34px; text-align: center;
+  background: var(--panel); color: var(--dim); box-shadow: 0 2px 8px rgba(0,0,0,.3); user-select: none; -webkit-user-select: none;
+}
+.car-badge[hidden] { display: none; }
+.car-badge.on { background: #1f9d55; color: #fff; }
+.car-badge.off { text-decoration: line-through; opacity: 0.75; }
+#car-menu {
+  position: absolute; top: 54px; right: calc(100% + 8px); width: 230px; z-index: 4; box-sizing: border-box;
+  padding: 10px; border-radius: 12px; background: var(--panel-solid); box-shadow: 0 6px 20px rgba(0,0,0,.35);
+  display: flex; flex-direction: column; gap: 8px;
+}
+#car-menu[hidden], #car-modes[hidden] { display: none; }
+#car-why { font-size: 13px; color: var(--ink); line-height: 1.35; }
+#car-modes { display: flex; flex-direction: column; gap: 6px; }
+#car-modes button { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-height: 48px; line-height: 1.2; padding: 8px 12px; text-align: left; background: var(--card); border: 2px solid transparent; font-size: 15px; color: var(--ink); }
+#car-modes button small { font-size: 12px; color: var(--dim); }
+#car-modes button.on { border-color: var(--accent); background: var(--sel); }
+

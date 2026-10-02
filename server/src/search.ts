@@ -51,4 +51,13 @@ export class KakaoSearch {
       distanceM: d.distance ? Number(d.distance) : undefined,
     }));
   }
+
+  /** Where an address is (Kakao's address search), or null. */
+  async findAddress(address: string): Promise<LonLat | null> {
+    const url = new URL("https://dapi.kakao.com/v2/local/search/address.json");
+    url.searchParams.set("query", address.replace(/\([^)]*\)/g, "").trim());
+    const answer = await askJson<{ documents: { x: string; y: string }[] }>(url.toString(), { headers: { Authorization: `KakaoAK ${this.restKey()}` } }, "kakao");
+    const d = answer.documents[0];
+    return d ? [Number(d.x), Number(d.y)] : null;
+  }
 }

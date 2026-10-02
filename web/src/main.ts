@@ -34,7 +34,7 @@ import { RerouteBackoff } from "./reroute-backoff";
 import { Stillness } from "./still";
 import { THEN_M, TURN_NEAR_M, fasterPhrase, thenPhrase, turnPhrase, warningPhrase, type Turn } from "../../server/src/phrases";
 import { SectionTracker, type ActiveSectionInfo } from "./section-tracker";
-import { drawGuide, loadGuide, shows, wants, type VoiceList } from "./guide-settings";
+import { drawGuide, loadGuide, saveGuide, shows, wants, type GuideSettings, type VoiceList } from "./guide-settings";
 import { currentUser, logout, push as pushUserData } from "./userdata";
 import { WeatherPanel } from "./weather";
 import { isFavourite, loadPlaces, samePlace, savePlaces, toggleFavourite } from "./places";
@@ -226,7 +226,94 @@ tracker.quiet = (g, r) =>
 // The car's own speed and odometer (server car/ → car-link.ts): in a tunnel, the marker goes as the car really went.
 const carLink = new CarLink();
 tracker.car = carLink.track;
-carLink.onState = (state) => log(`차량 스트리밍: ${state}${carLink.name ? ` (${carLink.name})` : ""}`);
+/**
+ * Whether the car's own data is used here. Where the car is decides (checkCarHere: its place against this device's
+ * fix); before the car has said where it is, whether this looks like the car's browser — whose Chromium says only
+ * "X11; Linux x86_64", no "Tesla". 강제 켜기 uses it whatever; 끄기 does not ask for it.
+ */
+const IN_CAR = /X11; Linux x86_64/.test(navigator.userAgent) && !/Android|Mobile/i.test(navigator.userAgent);
+function carDataOn(): boolean {
+  return guide.carData !== "off";
+}
+const CAR_AWAY_M = 1000;
+/** The car's place against this device's, as last measured: null until both are known. */
+let carNear: boolean | null = null;
+let carDistM: number | null = null;
+function carUsable(): boolean {
+  if (guide.carData === "force") return true;
+  if (guide.carData === "off") return false;
+  return carNear ?? IN_CAR;
+}
+/** Each second: the distance measured again, the tracker given the car or not, the badge told. */
+function checkCarHere() {
+  const est = carLink.track.lastEst, fix = gps.last;
+  if (est && fix && fix.accM <= 100 && Date.now() - carLink.track.lastEstAt < 60_000 && Date.now() - fix.t < 30_000) {
+    carDistM = metres(est.lon, est.lat, fix.lon, fix.lat);
+    const near = carDistM <= CAR_AWAY_M;
+    if (near !== carNear) log(near ? `차량 위치가 이 기기와 ${Math.round(carDistM)} m — 차량 데이터를 씁니다` : `차량 위치가 이 기기와 ${(carDistM / 1000).toFixed(1)} km 떨어져 있어 차량 데이터를 쓰지 않습니다`);
+    carNear = near;
+  }
+  if (!sim?.running) tracker.car = carUsable() ? carLink.track : null;
+  drawCarBadge();
+}
+
+// ---- T: whether the car's data is in use here, at the map's top right; held, the choice ----
+let carLinked = false;
+void fetch("/api/car/info").then((a) => (a.ok ? a.json() : null)).then((j: { linked?: boolean } | null) => { carLinked = !!j?.linked; drawCarBadge(); }).catch(() => {});
+function carStatus(): { state: "on" | "wait" | "off"; why: string } {
+  if (guide.carData === "off") return { state: "off", why: "끔 — 차량 데이터를 받지 않습니다" };
+  const where = carDistM == null ? "" : carDistM < 1000 ? ` · 차와 ${Math.round(carDistM)} m` : ` · 차와 ${(carDistM / 1000).toFixed(1)} km`;
+  const mode = guide.carData === "force" ? "강제 켜기" : "켜기";
+  if (!carUsable()) return { state: "wait", why: `${mode} · 차가 이 기기와 멀어 쓰지 않음${where}` };
+  if (carLink.state !== "streaming") return { state: "wait", why: `${mode} · 대기 (안내 중이거나 GPS가 약할 때 연결)${where}` };
+  return { state: "on", why: `${mode} · 사용 중${where}` };
+}
+function drawCarBadge() {
+  const b = el("car-badge");
+  b.hidden = !carLinked;
+  if (!carLinked) return;
+  const { state, why } = carStatus();
+  b.className = `car-badge ${state}`;
+  b.title = why;
+  el("car-why").textContent = why;
+  for (const o of el("car-menu").querySelectorAll<HTMLButtonElement>("button[data-mode]")) o.classList.toggle("on", o.dataset.mode === guide.carData);
+}
+function setCarMode(mode: GuideSettings["carData"]) {
+  guide.carData = mode;
+  saveGuide(guide);
+  applyGuide();
+  if (mode !== "off" && (route || (gps.last && (Date.now() - gps.last.t > 3_000 || gps.last.accM > 40)))) startCarLink();
+  checkCarHere();
+}
+{
+  const b = el("car-badge"), menu = el("car-menu");
+  let held: number | null = null, longPressed = false;
+  const open = (show: boolean, modes: boolean) => { menu.hidden = !show; el("car-modes").hidden = !modes; };
+  b.addEventListener("pointerdown", () => {
+    longPressed = false;
+    held = window.setTimeout(() => { held = null; longPressed = true; open(true, true); }, 500);
+  });
+  const cancel = () => { if (held != null) { clearTimeout(held); held = null; } };
+  b.addEventListener("pointerup", cancel);
+  b.addEventListener("pointerleave", cancel);
+  // A short tap: why it is as it is, for a few seconds.
+  b.addEventListener("click", () => {
+    if (longPressed) return;
+    open(menu.hidden, false);
+    window.setTimeout(() => { if (!longPressed) menu.hidden = true; }, 4000);
+  });
+  b.addEventListener("contextmenu", (e) => { e.preventDefault(); longPressed = true; open(true, true); });
+  for (const o of menu.querySelectorAll<HTMLButtonElement>("button[data-mode]")) {
+    o.addEventListener("click", () => { setCarMode(o.dataset.mode as GuideSettings["carData"]); menu.hidden = true; });
+  }
+  document.addEventListener("pointerdown", (e) => { if (!menu.hidden && !menu.contains(e.target as Node) && e.target !== b) menu.hidden = true; });
+}
+/** The car's stream asked for, where the driver wants it here. */
+function startCarLink() {
+  if (carDataOn()) carLink.start();
+  else if (carLink.state !== "off") carLink.stop();
+}
+carLink.onState = (state) => { log(`차량 스트리밍: ${state}${carLink.name ? ` (${carLink.name})` : ""}`); drawCarBadge(); };
 // Parked (P, or blank with no speed), the marker holds still whatever the fixes do (tracker.ts): the record of when.
 carLink.onGear = (g) => log(`차량 기어 ${g ?? "빈칸"}${carLink.track.parked() ? " · 주차로 봄" : ""}`);
 carLink.onFirst = (s) => log(`차량 첫 샘플: 속도 ${s.speedMps == null ? "없음" : Math.round(s.speedMps * 3.6) + " km/h"} · 오도미터 ${s.odoResM == null ? "없음" : `${s.odoResM.toFixed(1)} m 단위`} · 차 자체 위치 ${s.est ? "있음" : "없음"}`);
@@ -234,12 +321,13 @@ carLink.onFirst = (s) => log(`차량 첫 샘플: 속도 ${s.speedMps == null ? "
 // reckoning off the road, tracker.ts), and let go once they have been good for a minute. With one, startDrive opens it.
 let gpsGoodSince = 0;
 setInterval(() => {
+  checkCarHere();
   if (route || sim?.running) return;
   const f = gps.last;
   if (!f) return;
   if (Date.now() - f.t > 3_000 || f.accM > 40) {
     gpsGoodSince = 0;
-    carLink.start();
+    startCarLink();
   } else {
     gpsGoodSince ||= Date.now();
     if (Date.now() - gpsGoodSince > 60_000 && carLink.state !== "off") carLink.stop();
@@ -763,7 +851,12 @@ function openSearch(open: boolean) {
 // The 목적지 button hugs the trip panel's actual right edge: narrow before a route (the speed and the clock), and
 // pushed along as the panel grows with a notice or a drive. --hud-edge is in the panel's own layout pixels, as the
 // button's left is (both are zoomed alike by --ui).
-const hudEdge = () => document.documentElement.style.setProperty("--hud-edge", `${el("hud").offsetLeft + el("hud").offsetWidth}px`);
+const hudEdge = () => {
+  const hud = el("hud");
+  document.documentElement.style.setProperty("--hud-edge", `${hud.offsetLeft + hud.offsetWidth}px`);
+  // On a phone held upright the button goes under the panel instead (style.css, max-width 600px).
+  document.documentElement.style.setProperty("--hud-bottom", `${hud.offsetTop + hud.offsetHeight}px`);
+};
 new ResizeObserver(hudEdge).observe(el("hud"));
 hudEdge();
 el("dest-open").addEventListener("click", () => openSearch(true));
@@ -825,6 +918,66 @@ function remember(place: Place) {
   try { localStorage.setItem("nav-recent", JSON.stringify(kept)); } catch { /* private window */ }
   pushUserData("recents", kept);
 }
+// -- 폰에서 보낸 목적지 (share.html → /api/share) --
+
+interface SharedPlace extends Place { id: number; sent: number; from: string | null }
+let sharedPlaces: SharedPlace[] = [];
+/** The ones already shown as a card: a new one is, once. */
+const sharedSeen = new Set<number>();
+const SHARED_EVERY_MS = 30_000;
+async function pollShared() {
+  if (document.hidden) return;
+  try {
+    const a = await fetch("/api/share/inbox");
+    if (!a.ok) return;
+    sharedPlaces = ((await a.json()) as { places: SharedPlace[] }).places;
+  } catch { return; }
+  drawShared();
+  // A new one while not driving: a card at once, to start from.
+  const fresh = sharedPlaces.find((p) => !sharedSeen.has(p.id));
+  for (const p of sharedPlaces) sharedSeen.add(p.id);
+  if (fresh && !route && Date.now() - fresh.sent < 10 * 60_000) showSharedCard(fresh);
+}
+function drawShared() {
+  const ul = el<HTMLUListElement>("shared");
+  ul.replaceChildren();
+  for (const p of sharedPlaces) {
+    const ago = Math.max(1, Math.round((Date.now() - p.sent) / 60_000));
+    const li = item(p.name, `${p.address} · ${p.from ?? "폰"} · ${ago < 60 ? `${ago}분 전` : `${Math.round(ago / 60)}시간 전`}`);
+    li.addEventListener("click", () => useShared(p));
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "del";
+    del.innerHTML = X;
+    del.title = "목록에서 빼기";
+    del.addEventListener("click", (e) => { e.stopPropagation(); void dismissShared(p.id); });
+    li.append(del);
+    ul.append(li);
+  }
+  el("shared-box").hidden = sharedPlaces.length === 0;
+}
+function useShared(p: SharedPlace) {
+  el("shared-card").hidden = true;
+  void dismissShared(p.id);
+  openSearch(true);
+  void choose({ name: p.name, address: p.address, at: p.at });
+}
+async function dismissShared(id: number) {
+  sharedPlaces = sharedPlaces.filter((p) => p.id !== id);
+  drawShared();
+  await fetch("/api/share/dismiss", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) }).catch(() => {});
+}
+function showSharedCard(p: SharedPlace) {
+  el("shared-card-name").textContent = p.name;
+  el("shared-card-addr").textContent = p.address;
+  el("shared-card").hidden = false;
+  el("shared-card-go").onclick = () => useShared(p);
+}
+el("shared-card-close").addEventListener("click", () => { el("shared-card").hidden = true; });
+setInterval(() => void pollShared(), SHARED_EVERY_MS);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) void pollShared(); });
+void pollShared();
+
 function drawRecents() {
   const list = recents();
   const ul = el<HTMLUListElement>("recent");
@@ -1146,7 +1299,7 @@ function startDrive(r: Route) {
   tracker.setRoute(route);
   sim?.follow(route);
   // The car's own speed, for the tunnels on the way: asked for only while a route is driven.
-  carLink.start();
+  startCarLink();
   // What was said is kept across a re-route or a faster way to the same
   // place (the same camera, the same junction, once); a new place starts afresh.
   if (fresh || elsewhere) {
@@ -2443,6 +2596,8 @@ function themed(day: boolean) {
   nightCity?.setNight(!day);
 }
 function applyGuide() {
+  // 차량 데이터 turned off here: the stream let go and what it had forgotten (a stale "P" would hold the marker).
+  if (!carDataOn()) { if (carLink.state !== "off") carLink.stop(); carLink.track.clear(); }
   document.body.classList.toggle("layout-mini", guide.layout === "mini");
   themed(applyTheme(guide.theme, here()));
   hdLayer?.refresh();
@@ -2908,7 +3063,7 @@ function simEnded() {
   gps.start();
   // Back to where the car really is, at once: the drawn car forgets the pretend place, and the map goes to the last real fix.
   tracker.forget();
-  tracker.car = carLink.track;
+  tracker.car = carUsable() ? carLink.track : null;
   // The pretend speed is not left on the speedometer until a real fix comes.
   put("speed", "--");
   if (realFix) {
@@ -3069,6 +3224,8 @@ if (new URLSearchParams(location.search).has("debug")) {
     get watch() { return watch; },
     get sim() { return sim; },
     recheck: () => recheckRoute(),
+    /** The T badge as if this account had a car, for a desk without one. */
+    carLinked: (linked: boolean) => { carLinked = linked; drawCarBadge(); },
     /** Each guide of the route with the way it is shown and said as. */
     ways: () => route?.guides.map((g) => ({ text: g.text, name: g.name, code: g.turnType, m: maneuverFor(g) })) ?? [],
   };

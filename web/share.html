@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>WebNavi로 보내기</title>
+  <!-- A phone's page, not the car's: the share sheet of 네이버 지도, 카카오맵, 티맵 lands here (share.webmanifest). -->
+  <link rel="manifest" href="/share.webmanifest" />
+  <meta name="theme-color" content="#1a73e8" />
+  <link rel="icon" href="/share-icon-192.png" />
+</head>
+<body>
+  <main id="app">
+    <h1>WebNavi로 보내기</h1>
+    <section id="login" hidden>
+      <p class="hint">보내려면 로그인하세요 (차와 같은 서버의 계정).</p>
+      <form id="login-form">
+        <input id="name" autocomplete="username" placeholder="아이디" required />
+        <input id="password" type="password" autocomplete="current-password" placeholder="비밀번호" required />
+        <button type="submit">로그인</button>
+      </form>
+      <p id="login-msg" class="msg"></p>
+    </section>
+    <section id="send" hidden>
+      <label for="text">공유받은 내용 (네이버 지도 · 카카오맵 · 티맵의 공유를 붙여 넣어도 됩니다)</label>
+      <textarea id="text" rows="4" placeholder="[네이버지도] 장소 이름&#10;주소&#10;https://naver.me/…"></textarea>
+      <button id="find" type="button" class="secondary">장소 찾기</button>
+      <div id="place" class="place" hidden><b id="place-name"></b><span id="place-addr"></span></div>
+      <label for="to">받을 계정</label>
+      <select id="to"></select>
+      <button id="go" type="button" disabled>차로 보내기</button>
+      <p id="msg" class="msg"></p>
+    </section>
+  </main>
+  <script type="module" src="/src/share.ts"></script>
+</body>
+</html>

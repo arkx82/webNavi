@@ -1,0 +1,19 @@
+{
+  "name": "WebNavi로 보내기",
+  "short_name": "WebNavi",
+  "description": "네이버 지도 · 카카오맵 · 티맵에서 공유한 장소를 차의 목적지로 보냅니다",
+  "start_url": "/share",
+  "scope": "/share",
+  "display": "standalone",
+  "background_color": "#f5f6f8",
+  "theme_color": "#1a73e8",
+  "icons": [
+    { "src": "/share-icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/share-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ],
+  "share_target": {
+    "action": "/share",
+    "method": "GET",
+    "params": { "title": "title", "text": "text", "url": "url" }
+  }
+}

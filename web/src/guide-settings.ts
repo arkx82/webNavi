@@ -46,6 +46,12 @@ export interface GuideSettings {
   mapDpr: "auto" | "balanced" | "fast";
   /** 더 빠른 길: found by the recheck on the move — told and taken by itself after a moment, only asked, or not looked for. */
   fasterRoute: "auto" | "ask" | "off";
+  /**
+   * 차량 데이터 (Tesla): the car's own speed, gear and place (car-link.ts). 켜기 (auto): used where the car is where
+   * this device is (their places within 1 km; before the car has said where it is, if this looks like the car's
+   * browser). 강제 켜기 (force): used whatever. 끄기 (off): not asked for.
+   */
+  carData: "auto" | "force" | "off";
   /** The settings' revision, for one-time changes of a default already saved (migrate). */
   rev?: number;
   /** 안내 중 음악 줄이기: faded down and up round the voice, dropped at once, or left alone (voice.ts). */
@@ -92,7 +98,7 @@ export interface GuideSettings {
 export type Mode = "voice" | "show" | "off";
 
 export const DEFAULTS: GuideSettings = {
-  voice: true, voiceName: null, volume: 1, turns: true, junctionNames: true, laneHints: true, merges: true, closeups: true, sendLogs: true, layout: "classic", hdLanes: true, hdLanesWhen: "turns", laneGuide: true, colorLines: true, theme: "auto", nightCity: false, endOnArrive: true, mapDpr: "auto", followFps: "auto", ducking: "soft", fasterRoute: "ask", rev: 2, uiScale: 1, lightsOnMap: "route", camerasOnMap: "route", nextLight: true, flashSignals: true,
+  voice: true, voiceName: null, volume: 1, turns: true, junctionNames: true, laneHints: true, merges: true, closeups: true, sendLogs: true, layout: "classic", hdLanes: true, hdLanesWhen: "turns", laneGuide: true, colorLines: true, theme: "auto", nightCity: false, endOnArrive: true, mapDpr: "auto", followFps: "auto", ducking: "soft", fasterRoute: "ask", carData: "auto", rev: 2, uiScale: 1, lightsOnMap: "route", camerasOnMap: "route", nextLight: true, flashSignals: true,
   cameras: true, cameraFromM: 600, sections: true, schools: true,
   bumps: "show", curves: "show", accidents: "show", bikeAccidents: "show",
   overspeed: true, overspeedBy: 0,
@@ -101,11 +107,26 @@ export const DEFAULTS: GuideSettings = {
 
 const KEY = "nav-guide";
 
+/**
+ * 차량 데이터 is this device's own, not the account's: the car and a phone signed in to the same account each keep
+ * theirs (the account's copy of the rest comes down on every login and would carry the phone's choice to the car).
+ */
+const CAR_KEY = "nav-car-data";
+function carChoice(): GuideSettings["carData"] {
+  try {
+    const v = localStorage.getItem(CAR_KEY);
+    // "on" was 강제 켜기's first name.
+    return v === "force" || v === "on" ? "force" : v === "off" ? "off" : "auto";
+  } catch {
+    return "auto";
+  }
+}
+
 export function loadGuide(): GuideSettings {
   try {
-    return migrate({ ...DEFAULTS, ...(JSON.parse(localStorage.getItem(KEY) ?? "{}") as Partial<GuideSettings>) });
+    return migrate({ ...DEFAULTS, ...(JSON.parse(localStorage.getItem(KEY) ?? "{}") as Partial<GuideSettings>), carData: carChoice() });
   } catch {
-    return { ...DEFAULTS };
+    return { ...DEFAULTS, carData: carChoice() };
   }
 }
 
@@ -127,8 +148,9 @@ export function migrate(s: GuideSettings): GuideSettings {
 }
 
 export function saveGuide(s: GuideSettings) {
-  try { localStorage.setItem(KEY, JSON.stringify(s)); } catch { /* private window */ }
-  push("guide", s);
+  try { localStorage.setItem(KEY, JSON.stringify(s)); localStorage.setItem(CAR_KEY, s.carData); } catch { /* private window */ }
+  // The account's copy without this device's own choice.
+  push("guide", { ...s, carData: undefined });
 }
 
 /** The mode of a kind that has one; the rest are said or not by their switch. */
@@ -195,7 +217,7 @@ const GROUPS: Group[] = [
     { key: "volume", label: "안내 음량", kind: "slider" },
     { key: "ducking", label: "안내 중 음악 줄이기", kind: "choice", options: [["soft", "부드럽게"], ["quick", "바로"], ["off", "끔"]], sub: "음성이 나오는 동안 이 페이지의 음악을 50 %로. 부드럽게: 0.4초에 걸쳐 낮추고 1초에 걸쳐 되돌림" },
   ] },
-  { id: "drive", title: "주행 안내", sub: "회전 · 차로 · 더 빠른 길 · 도착", rows: [
+  { id: "drive", title: "주행 안내", sub: "회전 · 차로 · 더 빠른 길 · 차량 데이터", rows: [
     { key: "turns", label: "회전 안내", kind: "toggle", sub: "1킬로미터 · 500미터 · 300미터 앞, 잠시 후 (고속도로 2킬로미터 · 1킬로미터 · 600미터, TMAP 기준)" },
     { key: "junctionNames", label: "IC · JC 이름", kind: "toggle", sub: "고속도로에서 \"1킬로미터 앞 신갈JC에서 원주 방면\" (이름마다 처음 한 번 음성 합성)" },
     { key: "laneHints", label: "차로 미리 이동", kind: "toggle", sub: "고속도로 출구 · 분기 1km 앞, 나갈 쪽 차로로 (차로 정보가 아닌 방향 기준)" },
@@ -204,6 +226,7 @@ const GROUPS: Group[] = [
     { key: "merges", label: "합류 구간", kind: "toggle", sub: "고속도로 입구 · 분기 뒤 램프에서" },
     { key: "closeups", label: "분기점 확대", kind: "toggle", sub: "IC · JC · 출구 500m 앞(시내 250m)에서 지도가 기울어 분기점까지 보이게" },
     { key: "fasterRoute", label: "더 빠른 길", kind: "choice", options: [["ask", "물어보기"], ["auto", "20초 뒤 자동"], ["off", "끔"]], sub: "안내 중 6분마다 티맵·카카오·네이버·자체 경로를 다시 비교해 3분 이상 빠른 길이 있으면 알립니다. 물어보기: '바꾸기'를 눌러야 바뀜 · 자동: 20초 안에 '그대로'를 누르지 않으면 바뀜. 꺼도 지금 길의 교통 색과 남은 시간은 6분마다 새로 받음" },
+    { key: "carData", label: "차량 데이터 (테슬라)", kind: "choice", options: [["auto", "켜기"], ["force", "강제 켜기"], ["off", "끄기"]], sub: "터널 · 주차장에서 차의 속도 · 기어 · 위치로 화면의 차를 잇습니다. 켜기: 차의 위치가 이 기기와 1km 안일 때만 씀 (같은 계정의 폰이 집에 주차된 차를 따라 멈추지 않도록). 강제 켜기: 거리와 상관없이. 이 기기에만 저장되고, 지도 오른쪽 위 T 표시를 길게 눌러도 바꿀 수 있음" },
     { key: "endOnArrive", label: "도착하면 안내 종료", kind: "toggle", sub: "도착 안내 뒤 10초 뒤에 자동으로 검색 화면으로. 끄면 종료 버튼을 누를 때까지 그대로" },
   ] },
   { id: "enforce", title: "단속 · 경고", sub: "단속 카메라 · 구간 단속 · 과속 경고음", rows: [

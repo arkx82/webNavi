@@ -32,6 +32,7 @@ import { Db } from "./db.js";
 import { registerUsers } from "./users.js";
 import { RefusedUrl, fetchPublic, registerGuard } from "./guard.js";
 import { registerHdmap } from "./hdmap.js";
+import { registerShare } from "./share.js";
 import { registerCar } from "./car/index.js";
 import fastifyCompress from "@fastify/compress";
 import { Traffic } from "./road/traffic.js";
@@ -560,12 +561,16 @@ registerUsers(app, db, settings, admin.adminGuard, workDir);
 // The car's own speed for the tunnels (car/): Tesla linked on /admin, the samples to the car page.
 const car = registerCar(app, settings, db, admin.adminGuard, configDir, workDir);
 registerGuard(app);
+// Places sent from a phone (/share): read, found again, kept a day for the account chosen.
+registerShare(app, db, search);
 // 정밀도로지도 tiles, built into WORK_DIR by tools/hdmap/build.py.
 const hdTiles = registerHdmap(app, workDir);
 
 const webDir = env.WEB_DIR ?? resolve(root, "..", "web", "dist");
 if (existsSync(webDir)) {
   await app.register(fastifyStatic, { root: webDir, prefix: "/" });
+  // The phone's page for sending a place to a car (web/share.html), and the share sheet's way in.
+  app.get("/share", async (_request, reply) => reply.sendFile("share.html"));
   app.setNotFoundHandler((request, reply) => {
     if (request.url.startsWith("/api/")) return reply.code(404).send({ error: "no such call" });
     return reply.sendFile("index.html");

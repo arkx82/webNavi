@@ -57,7 +57,12 @@ export function registerCar(app: FastifyInstance, settings: Settings, db: Db, ad
   // ---- for Tesla: the app's public key, on the domain registered with it ----
   app.get(PUBLIC_KEY_PATH, async (_request, reply) => reply.type("application/x-pem-file").header("Cache-Control", "public, max-age=3600").send(key.publicPem()));
 
-  // ---- for the car page: its car's samples, as they come ----
+  // ---- for the car page: whether this account has a car at all (the T badge), and its car's samples, as they come ----
+  app.get("/api/car/info", async (request) => {
+    const car = hub.carsFor(request.user!.name)[0];
+    return car ? { linked: true, name: car.name } : { linked: false };
+  });
+
   app.get("/api/car/stream", async (request, reply) => {
     const car = hub.carsFor(request.user!.name)[0];
     // No car for this user: 204, which also tells EventSource not to try again.

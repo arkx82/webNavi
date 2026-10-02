@@ -55,11 +55,43 @@ export class Db {
         -- 1 once the sentence was asked again with its full stop (tts.ts): what came is what there is.
         repaired INTEGER NOT NULL DEFAULT 0
       );
+      -- A place sent from a phone (/share): to whom, by whom, kept a day.
+      CREATE TABLE IF NOT EXISTS shared (
+        id INTEGER PRIMARY KEY,
+        to_user INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        from_user INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        name TEXT NOT NULL,
+        address TEXT NOT NULL,
+        lon REAL NOT NULL,
+        lat REAL NOT NULL,
+        sent INTEGER NOT NULL,
+        dismissed INTEGER NOT NULL DEFAULT 0
+      );
       PRAGMA foreign_keys = ON;
     `);
     // A file from before the column: given it.
     const columns = this.db.prepare("PRAGMA table_info(tts)").all() as { name: string }[];
     if (!columns.some((c) => c.name === "repaired")) this.db.exec("ALTER TABLE tts ADD COLUMN repaired INTEGER NOT NULL DEFAULT 0");
+  }
+
+  // ---- places sent from a phone ----
+
+  share(to: number, from: number, place: { name: string; address: string; at: [number, number] }) {
+    this.db.prepare("INSERT INTO shared (to_user, from_user, name, address, lon, lat, sent) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(to, from, place.name, place.address, place.at[0], place.at[1], Date.now());
+    // Shown for a day (share.ts KEEP_MS); a week's kept, older ones go.
+    this.db.prepare("DELETE FROM shared WHERE sent < ?").run(Date.now() - 7 * 86_400_000);
+  }
+
+  /** The places sent to [userId] since [since], newest first, with who sent them. */
+  inbox(userId: number, since: number): { id: number; name: string; address: string; at: [number, number]; sent: number; from: string | null }[] {
+    const rows = this.db.prepare(`SELECT s.id, s.name, s.address, s.lon, s.lat, s.sent, u.name AS sender FROM shared s LEFT JOIN users u ON u.id = s.from_user
+      WHERE s.to_user = ? AND s.sent >= ? AND s.dismissed = 0 ORDER BY s.sent DESC LIMIT 5`).all(userId, since) as { id: number; name: string; address: string; lon: number; lat: number; sent: number; sender: string | null }[];
+    return rows.map((r) => ({ id: r.id, name: r.name, address: r.address, at: [r.lon, r.lat], sent: r.sent, from: r.sender }));
+  }
+
+  dismissShared(userId: number, id: number) {
+    this.db.prepare("UPDATE shared SET dismissed = 1 WHERE id = ? AND to_user = ?").run(id, userId);
   }
 
   // ---- users ----

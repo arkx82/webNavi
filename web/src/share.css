@@ -1,0 +1,18 @@
+[hidden] { display: none !important; }
+:root { --bg: #f5f6f8; --card: #fff; --ink: #16181d; --dim: #5f6570; --line: #d9dce2; --accent: #1a73e8; }
+@media (prefers-color-scheme: dark) { :root { --bg: #111; --card: #1e1f23; --ink: #f2f2f2; --dim: #9a9a9a; --line: #33343a; --accent: #4fc3f7; } }
+html, body { margin: 0; background: var(--bg); color: var(--ink); font-family: -apple-system, "Segoe UI", Roboto, "Noto Sans KR", sans-serif; }
+main { max-width: 480px; margin: 0 auto; padding: 20px 16px 40px; display: flex; flex-direction: column; gap: 12px; }
+h1 { font-size: 20px; margin: 4px 0 8px; }
+section, form { display: flex; flex-direction: column; gap: 10px; }
+label { font-size: 13px; color: var(--dim); margin-top: 6px; }
+input, textarea, select { font: inherit; font-size: 16px; padding: 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--card); color: var(--ink); }
+textarea { resize: vertical; }
+button { font: inherit; font-size: 17px; font-weight: 600; min-height: 50px; border: 0; border-radius: 12px; background: var(--accent); color: #fff; }
+button.secondary { background: var(--card); color: var(--ink); border: 1px solid var(--line); font-weight: 500; }
+button:disabled { opacity: 0.45; }
+.place { display: flex; flex-direction: column; gap: 4px; padding: 14px; border-radius: 12px; background: var(--card); border: 1px solid var(--line); }
+.place b { font-size: 17px; }
+.place span { font-size: 14px; color: var(--dim); }
+.msg { font-size: 14px; color: var(--dim); min-height: 20px; margin: 0; }
+.hint { font-size: 14px; color: var(--dim); margin: 0; }
