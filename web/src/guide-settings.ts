@@ -45,7 +45,7 @@ export interface GuideSettings {
   /** 지도 해상도: as the screen is, or one pixel per CSS pixel for a slow car computer (main.ts, before the maps are made). */
   mapDpr: "auto" | "balanced" | "fast";
   /** 더 빠른 길: found by the recheck on the move — told and taken by itself after a moment, only asked, or not looked for. */
-  fasterRoute: "auto" | "ask" | "off";
+  fasterRoute: "ask" | "off";
   /**
    * 차량 데이터 (Tesla): the car's own speed, gear and place (car-link.ts). 켜기 (auto): used where the car is where
    * this device is (their places within 1 km; before the car has said where it is, if this looks like the car's
@@ -139,11 +139,9 @@ export function migrate(s: GuideSettings): GuideSettings {
   }
   const lights = s.lightsOnMap as unknown;
   if (typeof lights === "boolean") s.lightsOnMap = lights ? "route" : "off";
-  // rev 2 (2026-10-01): 더 빠른 길 began as "자동" and was saved so with any other change; the owner wants it asked.
-  if ((s.rev ?? 1) < 2) {
-    if (s.fasterRoute === "auto") s.fasterRoute = "ask";
-    s.rev = 2;
-  }
+  // 더 빠른 길 is only ever taken on 바꾸기 (the 20-second "자동" is gone, 2026-10-03): one saved as 자동 is asked.
+  if ((s.fasterRoute as string) === "auto") s.fasterRoute = "ask";
+  if ((s.rev ?? 1) < 2) s.rev = 2;
   return s;
 }
 
@@ -225,7 +223,7 @@ const GROUPS: Group[] = [
     { key: "colorLines", label: "색깔 유도선", kind: "toggle", sub: "고속도로 분기점 · 나들목에서 \"분홍색 유도선을 따라가세요\" 와 갈림길 그림 (한국도로공사)" },
     { key: "merges", label: "합류 구간", kind: "toggle", sub: "고속도로 입구 · 분기 뒤 램프에서" },
     { key: "closeups", label: "분기점 확대", kind: "toggle", sub: "IC · JC · 출구 500m 앞(시내 250m)에서 지도가 기울어 분기점까지 보이게" },
-    { key: "fasterRoute", label: "더 빠른 길", kind: "choice", options: [["ask", "물어보기"], ["auto", "20초 뒤 자동"], ["off", "끔"]], sub: "안내 중 6분마다 티맵·카카오·네이버·자체 경로를 다시 비교해 3분 이상 빠른 길이 있으면 알립니다. 물어보기: '바꾸기'를 눌러야 바뀜 · 자동: 20초 안에 '그대로'를 누르지 않으면 바뀜. 꺼도 지금 길의 교통 색과 남은 시간은 6분마다 새로 받음" },
+    { key: "fasterRoute", label: "더 빠른 길", kind: "choice", options: [["ask", "알리기"], ["off", "끔"]], sub: "안내 중 6분마다 티맵·카카오·네이버·자체 경로를 다시 비교해 3분 이상 빠른 길이 있으면 알립니다. 지금 길이 우선 — '바꾸기'를 눌러야만 바뀌고, 누르지 않으면 2분 뒤 그대로. 꺼도 지금 길의 교통 색과 남은 시간은 6분마다 새로 받음" },
     { key: "carData", label: "차량 데이터 (테슬라)", kind: "choice", options: [["auto", "켜기"], ["force", "강제 켜기"], ["off", "끄기"]], sub: "터널 · 주차장에서 차의 속도 · 기어 · 위치로 화면의 차를 잇습니다. 켜기: 차의 위치가 이 기기와 1km 안일 때만 씀 (같은 계정의 폰이 집에 주차된 차를 따라 멈추지 않도록). 강제 켜기: 거리와 상관없이. 이 기기에만 저장되고, 지도 오른쪽 위 T 표시를 길게 눌러도 바꿀 수 있음" },
     { key: "endOnArrive", label: "도착하면 안내 종료", kind: "toggle", sub: "도착 안내 뒤 10초 뒤에 자동으로 검색 화면으로. 끄면 종료 버튼을 누를 때까지 그대로" },
   ] },

@@ -86,6 +86,17 @@ test("a lane that goes two ways is drawn as one arrow that forks; a plain lane a
   assert.equal((laneGlyph(["straight"]).match(/<path/g) ?? []).length, 1);
 });
 
+test("a U-turn lane that may go other ways too is one stem, not the arrows laid on one another", async () => {
+  const { laneGlyph } = await import("./lanes-strip.js");
+  const combos = [["uturn", "left"], ["uturn", "straight"], ["uturn", "left", "straight"], ["uturn", "right"], ["uturn", "straight", "right"], ["uturn", "left", "right"], ["uturn", "left", "straight", "right"]] as const;
+  for (const turns of combos) {
+    const g = laneGlyph([...turns]);
+    // One stem from the foot; the plain arrows (each its own stem from y 21) are not there.
+    assert.equal((g.match(/M16 22/g) ?? []).length, 1, turns.join("+"));
+    assert.ok(!/M1[02] 21/.test(g), turns.join("+"));
+  }
+});
+
 test("an entrance is drawn as driven: the ramp off to the side taken, joining the motorway on that side", async () => {
   const { junctionSvg } = await import("./lanes-strip");
   const right = junctionSvg({ kind: "enter", go: "right", toward: "남구리IC" });

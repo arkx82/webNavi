@@ -136,7 +136,9 @@ function drawArrow(m: Maneuver, size: number): string {
   let body: string;
   switch (m) {
     case "uturn":
-      body = `<path d="M8 21 V9 a4 4 0 0 1 8 0 V15" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/><path d="M12 14 L16 20 L20 14 Z" fill="#fff"/>`;
+      // Up the right, over to the left and down, the head pointing back the way the car came: a U-turn on a Korean
+      // road is to the left (drawn before the other way round, which read as a U-turn to the right).
+      body = `<path d="M16 21 V9 a4 4 0 0 0 -8 0 V15" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/><path d="M4 14 L8 20 L12 14 Z" fill="#fff"/>`;
       break;
     case "roundabout":
       body = `<circle cx="12" cy="13" r="5" fill="none" stroke="#fff" stroke-width="3"/><path d="M12 8 V2 M9 5 L12 2 L15 5" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/>`;

@@ -1488,10 +1488,9 @@ el("routes").addEventListener("click", async () => {
 /** Every few minutes on the way: a much quicker route from any provider wins. */
 /**
  * 더 빠른 길: the quicker way the recheck found, drawn faint beside the route
- * and offered in the panel — taken by itself after FASTER_AUTO_MS unless the
- * driver says 그대로 (안내 설정: 자동), or only on a tap (물어보기).
+ * and offered in the panel — taken only on 바꾸기; the way driven comes first,
+ * and an offer not taken in FASTER_ASK_MS counts as 그대로.
  */
-const FASTER_AUTO_MS = 20_000;
 const FASTER_ASK_MS = 120_000;
 let faster: { best: Route; to: Place; timer: number | null } | null = null;
 /** The duration of the way declined with 그대로: nothing slower than it by less than BETTER_BY_S is offered again this drive. */
@@ -1501,11 +1500,11 @@ function offerFaster(best: Route, to: Place, savedS: number) {
   const min = Math.max(1, Math.round(savedS / 60));
   routeLayer.show(route, [best]);
   el("faster-title").textContent = `${NAMES[best.provider]} 경로 · ${min}분 단축`;
-  el("faster-sub").textContent = guide.fasterRoute === "auto" ? "20초 안에 고르지 않으면 바꿉니다" : "바꾸기를 누르면 이 길로, 아니면 지금 길 그대로";
+  el("faster-sub").textContent = "바꾸기를 누르면 이 길로, 아니면 지금 길 그대로";
   el("faster").hidden = false;
   voice.say(fasterPhrase(min), undefined, { key: `faster:${best.provider}:${min}` });
-  // 자동: taken after a moment unless declined. 물어보기: the offer stands a couple of minutes, then counts as 그대로.
-  faster = { best, to, timer: window.setTimeout(guide.fasterRoute === "auto" ? takeFaster : keepRoute, guide.fasterRoute === "auto" ? FASTER_AUTO_MS : FASTER_ASK_MS) };
+  // The offer stands a couple of minutes, then counts as 그대로.
+  faster = { best, to, timer: window.setTimeout(keepRoute, FASTER_ASK_MS) };
 }
 function takeFaster() {
   const f = faster;

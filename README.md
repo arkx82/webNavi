@@ -163,7 +163,7 @@ unclassified), 연결로 → *_link, 링크마다 oneway·maxspeed·lanes·name�
 - **HTTPS 필수.** Geolocation, Wake Lock, AudioContext 자동 재생이 모두 secure context 에서만 된다.
 - **진행 방향은 연속 좌표로 계산한다.** 브라우저의 `coords.heading` 을 믿지 않고 `gps.ts` 가 둘 다 기록한다.
 - **3사 경로는 섞지 않고 견준다.** `provider=all` 로 동시에 묻고 카드로 고른다. 안내 중 6분마다 다시 물어
-  더 빠른 길이 나오면 알린다. 이탈(35 m·3초)은 즉시 재탐색.
+  더 빠른 길이 나오면 알린다(바꾸기를 눌러야만 바뀜). 이탈(35 m·3초)은 즉시 재탐색.
 - **재탐색은 클라이언트 타이머.** 서버는 상태가 없어 도커에서 그냥 재시작할 수 있다.
 
 ## 화면

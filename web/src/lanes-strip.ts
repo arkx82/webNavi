@@ -39,11 +39,31 @@ export function laneGlyph(turns: Turn[]): string {
   if (has("straight", "left", "right") && !set.has("uturn")) {
     return `<path d="M12 21V4"/><path d="M8 8l4-4 4 4"/><path d="M12 15H4"/><path d="M7 12l-3 3 3 3"/><path d="M12 15h8"/><path d="M17 12l3 3-3 3"/>`;
   }
-  if (has("uturn", "left") && set.size === 2) {
-    // A stem up the right that bends over and comes down (the U-turn), with a branch off the stem to the left.
-    return `<path d="M17 21V8a4 4 0 0 0-8 0v4"/><path d="M5 9l4 3 4-3"/><path d="M17 18H8"/><path d="M11 15l-3 3 3 3"/>`;
-  }
+  if (set.has("uturn") && set.size > 1) return uturnGlyph(set);
   return turns.map((t) => `<path d="${PATH[t]}"/>`).join("");
+}
+
+/**
+ * A U-turn lane that may go other ways too, as one arrow: the stem up the
+ * right, the U-turn bending over off it to the left and coming down, the
+ * other ways branching off the same stem below it — never two arrows laid
+ * on one another. Without 직진 the stem's top is itself the U-turn.
+ */
+function uturnGlyph(set: Set<Turn>): string {
+  const x = 16;
+  const out: string[] = [];
+  if (set.has("straight")) {
+    out.push(`<path d="M${x} 22V3"/>`, `<path d="M${x - 3.5} 6.5 ${x} 3l3.5 3.5"/>`);
+    // Off the stem's side, under the straight arrow's head.
+    out.push(`<path d="M${x} 13a3.5 3.5 0 0 0-7 0v1.5"/>`, `<path d="M${x - 9.5} 12l2.5 2.5 2.5-2.5"/>`);
+  } else {
+    out.push(`<path d="M${x} 22V8.5a3.5 3.5 0 0 0-7 0v3"/>`, `<path d="M${x - 9.5} 9l2.5 2.5 2.5-2.5"/>`);
+  }
+  // The other ways low on the stem, clear of the U-turn's head.
+  const y = 19.5;
+  if (set.has("left")) out.push(`<path d="M${x} ${y}H5"/>`, `<path d="M7.5 ${y - 2.5} 5 ${y}l2.5 2.5"/>`);
+  if (set.has("right")) out.push(`<path d="M${x} ${y}h5"/>`, `<path d="M19 ${y - 2.5}l2.5 2.5-2.5 2.5"/>`);
+  return out.join("");
 }
 
 /** "2차로", "1·2차로", "3~5차로": the lanes to be in, numbered from the left. */
