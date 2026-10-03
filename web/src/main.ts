@@ -1516,7 +1516,8 @@ el("routes").addEventListener("click", async () => {
  * and an offer not taken in FASTER_ASK_MS counts as 그대로.
  */
 const FASTER_ASK_MS = 120_000;
-let faster: { best: Route; to: Place; timer: number | null } | null = null;
+/** The quicker way offered, and when it was asked (its time is from then). */
+let faster: { best: Route; to: Place; timer: number | null; at: number } | null = null;
 /** The duration of the way declined with 그대로: nothing slower than it by less than BETTER_BY_S is offered again this drive. */
 let declinedS: number | null = null;
 /**
@@ -1534,7 +1535,7 @@ function offerFaster(best: Route, to: Place, savedS: number) {
   el("faster").hidden = false;
   voice.say(fasterPhrase(min), undefined, { key: `faster:${best.provider}:${min}` });
   // The offer stands a couple of minutes, then counts as 그대로.
-  faster = { best, to, timer: window.setTimeout(keepRoute, FASTER_ASK_MS) };
+  faster = { best, to, timer: window.setTimeout(keepRoute, FASTER_ASK_MS), at: Date.now() };
 }
 function takeFaster() {
   const f = faster;
@@ -1548,7 +1549,8 @@ function takeFaster() {
 function keepRoute() {
   if (faster) {
     declinedS = faster.best.durationS;
-    declinedAt = Date.now();
+    // Its time is from when it was found, not from the 그대로 two minutes on.
+    declinedAt = faster.at;
     log(`더 빠른 길 안 함: ${faster.best.provider} (그대로 또는 2분 지남)`);
   }
   clearFaster();
