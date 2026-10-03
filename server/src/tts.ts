@@ -27,6 +27,10 @@ export { fixedPhrases };
 const BASE = "https://dashscope-intl.aliyuncs.com";
 /** How long one render may take before it is given up: a service that never answers must not hold /api/tts for ever. */
 const RENDER_TIMEOUT_MS = 30_000;
+/** Renders asked of Model Studio at once; the rest wait their turn. */
+const RENDERS_AT_ONCE = 2;
+/** A render refused for the rate is tried again after these waits. */
+const THROTTLED_WAIT_MS = [2_000, 5_000, 10_000];
 
 export class Speaker {
   /** Which free allowances are gone (qwen-models.ts): a spent model is passed over for the next. */
@@ -64,8 +68,37 @@ export class Speaker {
     return wav;
   }
 
-  /** [text] on one model, as a WAV. Throws SpentError where that model's allowance is gone. */
+  /** Renders under way, and those waiting their turn (RENDERS_AT_ONCE). */
+  private rendering = 0;
+  private turn: (() => void)[] = [];
+  /** The waits after a refusal for the rate (a test shortens them). */
+  throttledWaitMs = THROTTLED_WAIT_MS;
+
+  /**
+   * [text] on one model, as a WAV — a few at a time, and a refusal for the rate (429 Throttling.RateQuota) waited
+   * out and tried again. A route's named sentences are asked all at once as it starts (warm, the page): 12 of them
+   * came back 502 on a pretend drive (2026-10-03), and on the road the junction would have gone unnamed.
+   * Throws SpentError where that model's allowance is gone.
+   */
   private async render(key: string, tier: Tier, text: string, asked: string): Promise<Buffer> {
+    if (this.rendering >= RENDERS_AT_ONCE) await new Promise<void>((go) => this.turn.push(go));
+    this.rendering++;
+    try {
+      for (let attempt = 0; ; attempt++) {
+        try {
+          return await this.renderOnce(key, tier, text, asked);
+        } catch (e) {
+          if (attempt >= this.throttledWaitMs.length || !/429|RateQuota|rate limit/i.test((e as Error).message)) throw e;
+          await new Promise((r) => setTimeout(r, this.throttledWaitMs[attempt]));
+        }
+      }
+    } finally {
+      this.rendering--;
+      this.turn.shift()?.();
+    }
+  }
+
+  private async renderOnce(key: string, tier: Tier, text: string, asked: string): Promise<Buffer> {
     const voice = tier === CLONED_TIER ? asked : voiceOn(tier, asked);
     if (tier.realtime) return wavOf(await realtime(key, tier.model, voice, text), 24_000);
     const answer = await fetch(`${BASE}/api/v1/services/aigc/multimodal-generation/generation`, {

@@ -68,7 +68,10 @@ test("straight on and the arrival are said once, close in", () => {
 test("provider text is made sayable for a manoeuvre with no word of its own", () => {
   assert.equal(spokenGuide("선릉역에서 강남구청 방면으로 좌회전 후 선릉로를 따라 15m 이동"), "선릉역에서 강남구청 방면으로 좌회전");
   assert.equal(spokenGuide("강남역에서 '역삼역' 방면으로 좌회전"), "강남역에서 역삼역 방면으로 좌회전");
-  assert.equal(turnSpeech("other", 120, "town", new Set(), "지정체 구간 진입"), "잠시 후 지정체 구간 진입");
+  assert.equal(turnSpeech("other", 120, "town", new Set(), "지정체 구간 진입"), "잠시 후 지정체 구간 진입입니다");
+  // 서울양양's toll gate, said once close in as any toll gate, not four times as "… 원톨링 진입" cut off (2026-10-03).
+  assert.equal(turnSpeech("other", 1000, "fast", new Set(), "원톨링 진입"), null);
+  assert.equal(turnSpeech("other", 200, "fast", new Set(), "원톨링 진입"), "잠시 후 톨게이트입니다");
   assert.equal(turnSpeech("other", 120, "town", new Set(), "톨게이트 통과"), "잠시 후 톨게이트입니다");
 });
 

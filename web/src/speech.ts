@@ -87,7 +87,8 @@ export function roundaboutHour(guideText: string): number | null {
   return /직진/.test(t) ? 12 : null;
 }
 
-const TOLL = /톨게이트|요금소/;
+/** A toll gate, as the providers name it — 서울양양's 원톨링 (one gate for both its owners) among them. */
+const TOLL = /톨게이트|요금소|원톨링/;
 /** Onto a motorway or a 도시고속도로, as the words say it. */
 const ENTRY = /(도시)?고속도로\s*(입구|진입)|자동차전용도로\s*진입/;
 
@@ -124,7 +125,9 @@ export function turnSay(maneuver: Maneuver, inM: number, road: RoadKind, said: S
   if (plain) return { text: plain, rung };
   const short = spokenGuide(guideText);
   if (!short) return null;
-  return { text: rung <= TURN_NEAR_M ? `잠시 후 ${short}` : `${distanceWords(rung)} 앞 ${short}`, rung };
+  // A sentence, not the provider's label: "잠시 후 지정체 구간 진입입니다", not "… 진입" cut off.
+  const sentence = /[다요]$/.test(short) ? short : `${short}입니다`;
+  return { text: rung <= TURN_NEAR_M ? `잠시 후 ${sentence}` : `${distanceWords(rung)} 앞 ${sentence}`, rung };
 }
 
 /**

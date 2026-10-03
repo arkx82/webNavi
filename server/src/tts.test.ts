@@ -85,6 +85,31 @@ function fakeSpeaker(dir: string, render: (text: string) => Buffer, asked: strin
   return speaker;
 }
 
+test("a route's sentences asked all at once: two renders at a time, a refusal for the rate waited out, none lost", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "webnavi-tts-"));
+  const speaker = new Speaker(() => "key", dir, () => "Cherry");
+  speaker.throttledWaitMs = [5, 5, 5];
+  let now = 0, most = 0, refused = 0;
+  const good = wavOf(Buffer.concat([tone(400, () => 1, 8000), tone(200, () => 0, 0)]), RATE);
+  (speaker as unknown as { renderOnce: (k: string, t: unknown, text: string) => Promise<Buffer> }).renderOnce = async (_k, _t, text) => {
+    now++;
+    most = Math.max(most, now);
+    await new Promise((r) => setTimeout(r, 5));
+    now--;
+    // The first try of every other sentence refused, as Model Studio does to a burst.
+    if (text.endsWith("다") && !text.startsWith("again:") && refused < 6) {
+      refused++;
+      throw new Error('dashscope qwen3-tts-flash 429: {"code":"Throttling.RateQuota"}');
+    }
+    return good;
+  };
+  const texts = Array.from({ length: 12 }, (_, i) => `${i}번째 IC에서 직진입니${i % 2 ? "다" : "까"}`);
+  const made = await Promise.allSettled(texts.map((t) => speaker.say(t)));
+  assert.deepEqual(made.map((m) => m.status), texts.map(() => "fulfilled"));
+  assert.ok(most <= 2, `at most two at once, ${most}`);
+  assert.equal(refused, 6);
+});
+
 test("a sentence cut off is asked once more with its full stop, and the ledger is told once", async () => {
   const dir = mkdtempSync(join(tmpdir(), "webnavi-tts-"));
   const asked: string[] = [];

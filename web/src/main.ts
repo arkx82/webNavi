@@ -1402,9 +1402,10 @@ function startDrive(r: Route) {
   showScreen("drive");
   setFollow(true);
   if (goal) remember(goal);
-  if (resuming) voice.say(EVENTS.resumed);
-  else if (fresh) voice.say(EVENTS.start);
-  else if (elsewhere) voice.say(EVENTS.changed);
+  // Said if it can be at once; never ahead of a turn that is near (its sound slow to come, 12.8 s on 2026-10-03).
+  if (resuming) voice.say(EVENTS.resumed, undefined, { withinS: 4 });
+  else if (fresh) voice.say(EVENTS.start, undefined, { withinS: 4 });
+  else if (elsewhere) voice.say(EVENTS.changed, undefined, { withinS: 4 });
   resuming = false;
   // Kept for a reopened page, once it is clear this is not the pretend drive (started just after).
   setTimeout(keepDrive, 0);
@@ -1518,6 +1519,12 @@ const FASTER_ASK_MS = 120_000;
 let faster: { best: Route; to: Place; timer: number | null } | null = null;
 /** The duration of the way declined with 그대로: nothing slower than it by less than BETTER_BY_S is offered again this drive. */
 let declinedS: number | null = null;
+/**
+ * When it was declined: the way declined is that much shorter by now, the car having driven on. Measured against its
+ * time then, the same way asked again six minutes on read six minutes quicker, and was offered again at every recheck
+ * (a pretend drive to 춘천, 2026-10-03: "네이버 경로 · 4분 단축" four times).
+ */
+let declinedAt = 0;
 function offerFaster(best: Route, to: Place, savedS: number) {
   clearFaster();
   const min = Math.max(1, Math.round(savedS / 60));
@@ -1541,6 +1548,7 @@ function takeFaster() {
 function keepRoute() {
   if (faster) {
     declinedS = faster.best.durationS;
+    declinedAt = Date.now();
     log(`더 빠른 길 안 함: ${faster.best.provider} (그대로 또는 2분 지남)`);
   }
   clearFaster();
@@ -1584,7 +1592,7 @@ async function recheckRoute() {
     // read 1시간 41분 against 카카오's 1시간 58분 — taken, it led round U-turns and off the road five times.
     const best = answer.routes.filter((r) => !(kept.same && r === fresh) && r.provider !== "korea").sort((a, b) => a.durationS - b.durationS)[0];
     // Quicker by enough — and, after a "그대로", by enough more than the way declined.
-    if (best && best.durationS < now - BETTER_BY_S && best.durationS < (declinedS ?? Infinity) - BETTER_BY_S) {
+    if (best && best.durationS < now - BETTER_BY_S && best.durationS < (declinedS == null ? Infinity : declinedS - (Date.now() - declinedAt) / 1000) - BETTER_BY_S) {
       offers = answer.routes;
       log(`더 빠른 길: ${best.provider} ${minutes(best.durationS)} (지금 ${minutes(now)})`);
       offerFaster(best, to, now - best.durationS);
@@ -1735,7 +1743,10 @@ function showTurn(shown: Shown) {
   // A guide said in its own words ("고속도로 출구") is made on the spot; if that fails, the fixed sentence for the road's bend.
   const bent = TURN_WORDS_OK.has(m) || m === "arrive" ? null : bendOf(g);
   const plain = due.fallback ?? (bent ? turnPhrase(bent, due.rung) : undefined);
-  voice.say(named ?? due.text, named ? due.text : plain, { key: `turn:${key}:${due.rung}`, turn: true });
+  // Said only while it is still ahead: a sentence that waited (another being said, its sound slow to come) past the
+  // turn is dropped, not said after it.
+  const aheadS = (m: number) => Math.max(2, Math.min(25, (m - 20) / Math.max(3, shown.speedMps)));
+  voice.say(named ?? due.text, named ? due.text : plain, { key: `turn:${key}:${due.rung}`, turn: true, withinS: aheadS(shown.nextGuide.inM) });
   // What was said, where, and from what: the record a "the voice said right where the line goes left" is read from.
   log(`안내 "${named ?? due.text}" · ${Math.round(shown.nextGuide.inM)} m · ${m} · ${route.provider} ${g.turnType} "${g.text.replace(/\s*후\s.*$/, "").slice(0, 60)}"`);
   // A second turn close after this one, told with its "잠시 후" as TMAP does: "그리고 이백미터 앞에서 우회전입니다".
@@ -1746,7 +1757,7 @@ function showTurn(shown: Shown) {
     const thenRoad = onMotorway.get(shown.thenGuide.guide) ? "fast" : "town";
     if (then !== "straight" && TURN_WORDS_OK.has(then) && !facilityOf(shown.thenGuide.guide.text) && gap <= (thenRoad === "fast" ? 500 : 300)) {
       const thenText = thenPhrase(then as Turn, gap < 75 ? null : nearestOf(THEN_M, gap));
-      voice.say(thenText, undefined, { key: `then:${key}`, turn: true });
+      voice.say(thenText, undefined, { key: `then:${key}`, turn: true, withinS: aheadS(shown.nextGuide.inM + 40) });
       log(`안내 "${thenText}" · 다음 ${Math.round(gap)} m · ${then} · "${shown.thenGuide.guide.text.replace(/\s*후\s.*$/, "").slice(0, 60)}"`);
       // Told already: its own sentences due within a few seconds of this one are not said again ("그리고 삼백미터
       // 앞에서 좌회전" and then "잠시 후 좌회전" three seconds on); one further off still comes, as a reminder.
@@ -2111,15 +2122,10 @@ function prepareHighway(r: Route) {
   closeup = null;
   onMotorway = new Map(r.guides.map((g) => [g, motorwayAt(r, line.project(g.at, 0, r.path.length).segment)]));
   junctionElsewhere = new WeakMap();
-  if (!guide.junctionNames || !guide.turns) return;
-  for (const g of r.guides) {
-    if (!onMotorway.get(g)) continue;
-    const m = maneuverFor(g);
-    for (const rung of NAMED_RUNGS) {
-      const text = namedFor(g, m, rung);
-      if (text) voice.prefetch(text);
-    }
-  }
+  // The junctions' named sentences are not all asked for here: the whole route's at once (춘천: fourteen, each new
+  // to the server, which Model Studio refused for the rate) held the browser's connections for seconds, and the
+  // drive's first sentences waited behind them — "잠시 후 우회전입니다" came 14.7 s late, past the turn (a pretend
+  // drive, 2026-10-03). holdAhead asks for them a few minutes ahead, two at a time.
 }
 
 /** A guide as the panel shows it: without TMAP's "… 후 영동 고속도로를 따라 121m 이동" tail. */

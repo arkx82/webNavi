@@ -18,6 +18,8 @@ const LEAD_S = 0.15;
 /** How long a queued sentence stays true: a turn's "잠시 후" a few seconds, a warning a little longer. */
 const TURN_WITHIN_S = 25;
 const WITHIN_S = 20;
+/** A sentence that is not a turn, its sound not come in this long, gives way to a turn queued behind it. */
+const GIVE_WAY_MS = 1500;
 const TAIL_S = 0.35;
 const FADE_S = 0.03;
 /**
@@ -224,8 +226,18 @@ export class Voice {
     try {
       let buffer: AudioBuffer;
       const asked = Date.now();
+      const sound = this.buffer(text);
+      // A warning or the like whose sound is slow to come gives way to a turn waiting behind it: dropped, not held.
+      if (!item.turn) {
+        const came = await Promise.race([sound.then(() => true, () => true), new Promise<boolean>((r) => setTimeout(() => r(false), GIVE_WAY_MS))]);
+        if (!came && this.queue.some((q) => q.turn)) {
+          this.onLate(text, (Date.now() - item.at) / 1000);
+          void this.next();
+          return;
+        }
+      }
       try {
-        buffer = await this.buffer(text);
+        buffer = await sound;
       } catch (e) {
         if (!item.fallback) throw e;
         this.onError(`${text}: ${(e as Error).message} — 대신 "${item.fallback}"`);
