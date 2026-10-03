@@ -1211,6 +1211,13 @@ el("pv-find").addEventListener("click", async () => {
   else el("pv-find").hidden = false;
 });
 
+/**
+ * Our own route (자체, OSRM over 표준노드링크) only on ?debug: a road with no live speed is taken as empty at its limit,
+ * so round a jam it finds a way over the hills — 2026-10-03 to 춘천 it went over 덕릉고개 to 별내 and back down to
+ * 퇴계원, read as 17 minutes quicker than 카카오. Not offered on the road until its times are seen to hold.
+ */
+const OWN_ROUTE = new URLSearchParams(location.search).has("debug");
+
 async function fetchOffers(): Promise<boolean> {
   if (!goal) return false;
   const to = goal;
@@ -1220,7 +1227,8 @@ async function fetchOffers(): Promise<boolean> {
     if (goal !== to) return false;
     for (const e of answer.errors) log(`경로 실패 ${e}`);
     if (answer.routes.length === 0) throw new Error(answer.errors.join("; ") || "경로 없음");
-    offers = answer.routes.sort((a, b) => a.durationS - b.durationS);
+    offers = answer.routes.filter((r) => OWN_ROUTE || r.provider !== "korea").sort((a, b) => a.durationS - b.durationS);
+    if (offers.length === 0) throw new Error(answer.errors.join("; ") || "경로 없음");
     // Keep the driven provider if it answered again, else the quickest.
     chosen = offers.find((r) => r.provider === (chosen ?? route)?.provider) ?? offers[0];
     // Without a fix the ways start from the map's middle, and say so.
@@ -1232,7 +1240,7 @@ async function fetchOffers(): Promise<boolean> {
     routeLayer.fit(...offers);
     log(`경로 ${offers.map((r) => `${r.provider} ${minutes(r.durationS)}`).join(", ")}`);
     // Our own route held back until this area's live speeds are in the router (half a minute): asked again then.
-    if (answer.pending?.includes("korea")) koreaLater(goal);
+    if (OWN_ROUTE && answer.pending?.includes("korea")) koreaLater(goal);
     return true;
   } catch (e) {
     el("pv-msg").textContent = `경로 실패: ${(e as Error).message}`;
@@ -1431,10 +1439,12 @@ async function resumeDrive() {
   log(`이전 안내 이어가기: ${s.to.name} (${s.provider})`);
   let next: Route | null = null;
   try {
+    // A drive left on our own route goes on with the quickest of the others, where that is not offered.
+    if (s.provider === "korea" && !OWN_ROUTE) throw new Error("자체 경로 꺼짐");
     next = await api.route(s.provider, here(), s.to.at);
   } catch {
     const answer = await api.routes(here(), s.to.at).catch(() => null);
-    next = answer?.routes.sort((a, b) => a.durationS - b.durationS)[0] ?? null;
+    next = answer?.routes.filter((r) => OWN_ROUTE || r.provider !== "korea").sort((a, b) => a.durationS - b.durationS)[0] ?? null;
   }
   if (!next || route) return;
   goal = s.to;
@@ -1632,7 +1642,7 @@ tracker.onOffRoute = async (at) => {
     } catch (e) {
       log(`재탐색 ${route.provider} 실패 ${(e as Error).message} — 전체로`);
       const answer = await api.routes(at, to.at);
-      const again = answer.routes.sort((a, b) => a.durationS - b.durationS);
+      const again = answer.routes.filter((r) => OWN_ROUTE || r.provider !== "korea").sort((a, b) => a.durationS - b.durationS);
       next = again.find((r) => r.provider === route!.provider) ?? again[0] ?? null;
       if (next) offers = again;
     }
