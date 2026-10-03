@@ -126,19 +126,32 @@ export function registerUsers(app: FastifyInstance, db: Db, settings: Settings, 
   const logDir = join(workDir, "client-logs");
   /** Made once, on the first log; made again only if that failed. */
   let logDirMade: Promise<unknown> | null = null;
-  app.post<{ Body: { lines?: unknown } }>("/api/me/log", async (request, reply) => {
-    const lines = Array.isArray(request.body?.lines) ? request.body!.lines.filter((l): l is string => typeof l === "string").slice(0, 2000) : [];
-    if (!lines.length) return { ok: true };
+  // Beside it the drive's trace (web/src/drive-trace.ts: fixes, the car's samples, the marker drawn, the routes), the
+  // same name with .trace, to be played again at a desk (tools/replay-trace.ts).
+  const TRACE_DAY_MAX = 40_000_000;
+  // A post with a route or two in its trace runs past Fastify's 1 MiB.
+  app.post<{ Body: { lines?: unknown; trace?: unknown } }>("/api/me/log", { bodyLimit: 8 * 1024 * 1024 }, async (request, reply) => {
+    const strings = (v: unknown, most: number) => (Array.isArray(v) ? v.filter((l): l is string => typeof l === "string").slice(0, most) : []);
+    const lines = strings(request.body?.lines, 2000);
+    const trace = strings(request.body?.trace, 20_000);
+    if (!lines.length && !trace.length) return { ok: true };
     try {
       await (logDirMade ??= mkdir(logDir, { recursive: true }));
     } catch (e) {
       logDirMade = null;
       throw e;
     }
-    const file = join(logDir, `${request.user!.name.replace(/[^\p{L}\p{N}._-]/gu, "_")}-${new Date(Date.now() + 9 * 3600_000).toISOString().slice(0, 10)}.log`);
-    const size = await stat(file).then((s) => s.size, () => 0);
-    if (size > LOG_DAY_MAX) return reply.code(413).send({ error: "today's log is full" });
-    await appendFile(file, lines.map((l) => l.replace(/[\r\n]+/g, " ").slice(0, 1000)).join("\n") + "\n");
+    const base = join(logDir, `${request.user!.name.replace(/[^\p{L}\p{N}._-]/gu, "_")}-${new Date(Date.now() + 9 * 3600_000).toISOString().slice(0, 10)}`);
+    const add = async (file: string, rows: string[], most: number, longest: number) => {
+      const size = await stat(file).then((s) => s.size, () => 0);
+      if (size > most) return false;
+      await appendFile(file, rows.map((l) => l.replace(/[\r\n]+/g, " ").slice(0, longest)).join("\n") + "\n");
+      return true;
+    };
+    const logged = !lines.length || (await add(`${base}.log`, lines, LOG_DAY_MAX, 1000));
+    // A route is a line of its own, its whole path: up to a long drive's.
+    if (trace.length) await add(`${base}.trace`, trace, TRACE_DAY_MAX, 600_000);
+    if (!logged) return reply.code(413).send({ error: "today's log is full" });
     return { ok: true };
   });
 

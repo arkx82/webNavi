@@ -105,10 +105,17 @@ test("the estimate frozen with the GPS but the heading turning: the speed summed
   assert.equal(p.heading, 90);
 });
 
-test("estimate and heading both frozen: not trusted, the car is held", () => {
+test("estimate and heading both frozen at a car park's pace: not trusted, the car is held", () => {
   const car = new CarTrack();
-  for (let s = 0; s <= 20; s++) at(car, { t: T0 + s * 1000, speedMps: 8, est: { lon: LON, lat: LAT, heading: 45 } });
+  for (let s = 0; s <= 20; s++) at(car, { t: T0 + s * 1000, speedMps: 4, est: { lon: LON, lat: LAT, heading: 45 } });
   assert.equal(car.freePath(T0 + 2_000, T0 + 18_000), null);
+});
+
+test("estimate and heading both frozen at a road's pace (a straight tunnel): straight on along the heading", () => {
+  const car = new CarTrack();
+  for (let s = 0; s <= 20; s++) at(car, { t: T0 + s * 1000, speedMps: 15, est: { lon: LON, lat: LAT, heading: 90 } });
+  const p = car.freePath(T0 + 2_000, T0 + 18_000)!;
+  assert.ok(Math.abs(p.dE - 240) < 2 && Math.abs(p.dN) < 1, `${p.dE} ${p.dN}`);
 });
 
 test("standing: nowhere, whatever the rest", () => {

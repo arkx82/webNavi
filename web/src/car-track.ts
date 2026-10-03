@@ -23,6 +23,9 @@ export interface CarSample {
   est?: { lon: number; lat: number; heading: number | null } | null;
   /** "P", "R", "N", "D"; null when the car leaves it blank (parked, asleep); undefined when this sample does not carry it. */
   gear?: "P" | "R" | "N" | "D" | null;
+  /** The battery, % and the power drawn, kW: only for the drive's trace. */
+  soc?: number | null;
+  powerKw?: number | null;
 }
 
 /** Past the last sample the speed is held this long; beyond it the answer stops, and the caller goes on its own way. */
@@ -51,6 +54,8 @@ export interface FreePath {
 }
 
 const M_PER_DEG = 111_320;
+/** With nothing turning or moving but the wheels, a speed this high (30 km/h) is a road, not a car park: straight on. */
+export const FREE_STRAIGHT_MPS = 8;
 /** Steps of the sum along a turning heading, ms. */
 const STEP_MS = 500;
 
@@ -194,7 +199,15 @@ export class CarTrack {
       }
     }
     const headings = [this.headingAt(a), ...inside.map((e) => e.heading)].filter((h): h is number => h != null);
-    if (headings.length < 2 || Math.max(...headings.map((h) => angleDiff(h, headings[0]))) < 3) return null;
+    if (headings.length < 2 || Math.max(...headings.map((h) => angleDiff(h, headings[0]))) < 3) {
+      // Neither the estimate nor the heading moved. In a car park, at a walking pace, that is a car whose figures
+      // froze with its GPS: held. At a road's pace it is a straight tunnel — the car goes on the way it pointed,
+      // not left at the mouth while it drives 400 m on (2026-10-03, off the route between 별내 and 세종포천).
+      const h = this.headingAt(end) ?? headings[0];
+      if (h == null || moved / ((end - a) / 1000) < FREE_STRAIGHT_MPS) return null;
+      const r = (h * Math.PI) / 180;
+      return { dE: moved * Math.sin(r), dN: moved * Math.cos(r), heading: h, through, by: "heading" };
+    }
     let dE = 0, dN = 0;
     for (let t = a; t < end; t += STEP_MS) {
       const dt = Math.min(STEP_MS, end - t);

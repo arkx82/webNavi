@@ -314,6 +314,18 @@ test("no route, the car's heading and estimate both frozen: held where it was, n
   assert.ok(metres(start[0], start[1], shown.at[0], shown.at[1]) < 2);
 });
 
+test("no route, heading and estimate frozen but the car at a road's pace (a straight tunnel): carried straight on, not left at the mouth", () => {
+  const tracker = new Tracker();
+  const car = new CarTrack();
+  for (let t = 0; t <= 30_000; t += 1000) car.add({ t, speedMps: 15, est: { lon: start[0], lat: start[1], heading: 0 } }, t + 300);
+  tracker.car = car;
+  tracker.feed(fix(start, 0, { speed: 15 }), 0);
+  const shown = tracker.frame(20_000)!;
+  assert.equal(shown.mode, "reckoning");
+  const ahead = offset(start, 0, 300);
+  assert.ok(metres(ahead[0], ahead[1], shown.at[0], shown.at[1]) < 10, `${metres(ahead[0], ahead[1], shown.at[0], shown.at[1])}`);
+});
+
 test("vague fixes while the car says it moves are not taken to hold it: the reckoning on the car's word goes on", () => {
   const tracker = new Tracker();
   tracker.setRoute(route);
@@ -431,4 +443,22 @@ test("guides that name no choice are passed over: the next shown is the turn tha
   assert.equal(shown.nextGuide?.guide.text, "오른쪽 출구");
   assert.ok(Math.abs(shown.nextGuide!.inM - 1100) < 5, `${shown.nextGuide!.inM}`);
   assert.equal(shown.thenGuide, undefined);
+});
+
+test("a new route while the fixes are away (a re-route, a quicker way taken): reckoned from where the car is on it, not as far along as it was on the old one", () => {
+  // 2026-10-03 on the road: the route changed between two of the car browser's sparse fixes, and the marker leapt
+  // 1583 m on along the new line — the old route's metres along, laid on the new one.
+  const tracker = new Tracker();
+  tracker.setRoute(route);
+  tracker.car = carFeed(() => 10, 0, 30_000);
+  const here = offset(start, 0, 1500);
+  tracker.feed(fix(here, 0, { speed: 10 }), 0);
+  tracker.frame(500);
+  // From where the car is, east for 2 km.
+  const east: Route = { ...route, path: Array.from({ length: 21 }, (_, i) => offset(here, 90, i * 100)), guides: [], segments: [] };
+  tracker.setRoute(east);
+  const shown = tracker.frame(5000)!;
+  assert.equal(shown.mode, "reckoning");
+  assert.ok(shown.alongM! < 80, `along the new route ${shown.alongM} m, the car having gone 50 m`);
+  assert.ok(metres(shown.at[0], shown.at[1], here[0], here[1]) < 80);
 });

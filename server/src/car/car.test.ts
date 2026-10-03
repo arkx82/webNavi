@@ -11,6 +11,8 @@ test("an owner streaming frame: mph and miles into metres, the car's own place k
   assert.equal(COLUMNS[0], "speed");
   // time,speed,odometer,soc,elevation,est_heading,est_lat,est_lng,power,shift_state,range,est_range,heading
   const s = parseFrame("1790000000123,45,12345.678,80,35,182,37.5012,127.0391,12,D,250,230,181")!;
+  assert.equal(s.soc, 80);
+  assert.equal(s.powerKw, 12);
   assert.equal(s.t, 1790000000123);
   assert.ok(Math.abs(s.speedMps! - 45 * MPH_MPS) < 1e-9);
   assert.ok(Math.abs(s.odoM! - 12345.678 * MILE_M) < 1e-6);

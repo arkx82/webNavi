@@ -81,3 +81,26 @@ test("the korea route's time is calibrated only where no live speed is on it; a 
   const blind = { ...route, legs: [{ steps: [street(60, 6), street(60, 6)] }] };
   assert.equal(calibrateDuration(blind as never), 192);
 });
+
+test("on the move, the route starts on the road the car goes along (bearings), and without it where none goes that way", async () => {
+  const asked: string[] = [];
+  const real = globalThis.fetch;
+  const ok = { code: "Ok", routes: [{ distance: 100, duration: 10, geometry: { coordinates: [[127, 37.5], [127, 37.501]] }, legs: [{ steps: [] }] }] };
+  globalThis.fetch = (async (url: string) => {
+    asked.push(String(url));
+    if (String(url).includes("bearings") && asked.length === 3) return new Response(JSON.stringify({ code: "NoSegment" }), { status: 400 });
+    return new Response(JSON.stringify(ok));
+  }) as typeof fetch;
+  try {
+    const osrm = new Osrm("http://osrm:5000", "korea", true);
+    await osrm.route({ start: [127, 37.5], goal: [127, 37.501] });
+    assert.ok(!asked[0].includes("bearings"), "standing: no bearing asked");
+    await osrm.route({ start: [127, 37.5], goal: [127, 37.501], heading: 181.6 });
+    assert.ok(asked[1].includes("&bearings=182,45;"), asked[1]);
+    await osrm.route({ start: [127, 37.5], goal: [127, 37.501], heading: 90 });
+    assert.equal(asked.length, 4, "refused that way, asked again");
+    assert.ok(!asked[3].includes("bearings"));
+  } finally {
+    globalThis.fetch = real;
+  }
+});

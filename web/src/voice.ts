@@ -45,8 +45,11 @@ export class Voice {
   private speaking = false;
   /** The sentence playing, held so no browser collects it half-way. */
   private playing: AudioBufferSourceNode | null = null;
-  /** Told how each sentence went: how long it waited in the queue, how much of it played, its length (the 진단 log). */
-  onSaid: (text: string, playedS: number, lengthS: number, waitedS: number) => void = () => {};
+  /**
+   * Told how each sentence went: how long it waited before it began, how much of it played, its length, and how much
+   * of the wait was its sound coming (not yet in the browser's cache: a slow link) rather than others said first.
+   */
+  onSaid: (text: string, playedS: number, lengthS: number, waitedS: number, fetchedS: number) => void = () => {};
   /** Told of a sentence dropped because its moment had passed while others were being said. */
   onLate: (text: string, waitedS: number) => void = () => {};
   /** When each sentence was last said, by its key: the same one again this soon is dropped. */
@@ -217,8 +220,10 @@ export class Voice {
       return;
     }
     this.speaking = true;
+    let fetchedS = 0;
     try {
       let buffer: AudioBuffer;
+      const asked = Date.now();
       try {
         buffer = await this.buffer(text);
       } catch (e) {
@@ -227,6 +232,7 @@ export class Voice {
         text = item.fallback;
         buffer = await this.buffer(text);
       }
+      fetchedS = (Date.now() - asked) / 1000;
       // Its moment may have passed while the sound was fetched (a cache miss on a slow link): then it stays unsaid.
       if (Date.now() > item.until) {
         this.onLate(text, (Date.now() - item.at) / 1000);
@@ -264,7 +270,7 @@ export class Voice {
         source.start();
       });
       this.playing = null;
-      this.onSaid(text, this.context.currentTime - began, buffer.duration, (Date.now() - item.at) / 1000 - buffer.duration);
+      this.onSaid(text, this.context.currentTime - began, buffer.duration, (Date.now() - item.at) / 1000 - buffer.duration, fetchedS);
     } catch (e) {
       this.onError(`${text}: ${(e as Error).message}`);
     }

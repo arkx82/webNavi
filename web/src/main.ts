@@ -6,6 +6,7 @@ import { Replay } from "./replay";
 import { Simulator } from "./simulate";
 import { CarLink } from "./car-link";
 import { CarTrack } from "./car-track";
+import { DriveTrace } from "./drive-trace";
 import { RouteLayer } from "./route-layer";
 import { OFF_M, Tracker, type Shown } from "./tracker";
 import { Line, bearing, lerpAngle, metres } from "./geo";
@@ -229,6 +230,9 @@ tracker.quiet = (g, r) =>
   (r.provider === "korea" && typeof g.turnType === "string" && g.turnType.startsWith("merge"));
 // The car's own speed and odometer (server car/ → car-link.ts): in a tunnel, the marker goes as the car really went.
 const carLink = new CarLink();
+/** The drive as it happened, sent with the 진단 log (drive-trace.ts): to be played again at a desk. */
+const trace = new DriveTrace();
+carLink.onSample = (s) => trace.car(s);
 tracker.car = carLink.track;
 /**
  * Whether the car's own data is used here. Where the car is decides (checkCarHere: its place against this device's
@@ -355,10 +359,10 @@ tracker.onReckonEnd = (r) => {
   log(`추측 항법 끝 ${Math.round(r.seconds)}초 · ${how} · GPS와 ${miss}${estOff}`);
 };
 const voice = new Voice();
-voice.onSaid = (text, playedS, lengthS, waitedS) => {
+voice.onSaid = (text, playedS, lengthS, waitedS, fetchedS) => {
   // Short of its length means the browser stopped it (another app took the audio, the page went to the back).
   if (playedS < lengthS - 0.2) log(`음성 끊김 ${playedS.toFixed(1)}/${lengthS.toFixed(1)}s ${text}`);
-  if (waitedS > 3) log(`음성 늦음 ${waitedS.toFixed(1)}s 기다림 ${text}`);
+  if (waitedS > 3) log(`음성 늦음 ${waitedS.toFixed(1)}s 기다림 (소리 받기 ${fetchedS.toFixed(1)}s) ${text}`);
 };
 voice.onLate = (text, waitedS) => log(`음성 지남 ${waitedS.toFixed(1)}s 뒤라 버림 ${text}`);
 voice.onError = (m) => {
@@ -391,6 +395,7 @@ setInterval(() => {
   if (state) line.textContent = state;
 }, 1000);
 gps.on(onFix);
+gps.on((f) => trace.fix(f));
 // Routes asked on the move start on the carriageway the car is on (Kakao and TMAP take the heading).
 setHeading(() => {
   const f = gps.last;
@@ -432,9 +437,15 @@ const MODES = { waiting: "대기", gps: "GPS", reckoning: "추측 항법", snapp
 const frameErrors = new Set<string>();
 /** When the camera last moved, for the 30 fps setting: a frame sooner than its share is drawn without moving the map. */
 let cameraMovedAt = 0;
+/** When the drawn marker was last put in the trace: once a second is enough to see where it went. */
+let tracedAt = 0;
 function frame() {
   try {
     const shown = tracker.frame();
+    if (shown && route && Date.now() - tracedAt >= 1000) {
+      tracedAt = Date.now();
+      trace.shown(shown);
+    }
     if (shown) {
       marker.setLngLat(shown.at);
       put("mode", MODES[shown.mode] + (shown.reckonBy === "car" ? " (차량 속도)" : "") + (tracker.car?.parked() ? " (주차)" : "") + (shown.offM != null ? ` · ${Math.round(shown.offM)} m` : ""));
@@ -1320,6 +1331,7 @@ el("pv-close").addEventListener("click", () => {
 function relined(r: Route) {
   routeLayer.show(r);
   tracker.setRoute(r);
+  trace.route(r);
   sim?.follow(r, true);
   routeLine = new Line(r.path);
   bends = new WeakMap();
@@ -1358,6 +1370,7 @@ function startDrive(r: Route) {
   drivingTo = goal;
   routeLayer.show(route);
   tracker.setRoute(route);
+  trace.route(route);
   sim?.follow(route);
   // The car's own speed, for the tunnels on the way: asked for only while a route is driven.
   startCarLink();
@@ -1510,12 +1523,16 @@ function takeFaster() {
   const f = faster;
   clearFaster();
   if (!f || !route || drivingTo !== f.to) return;
+  log(`더 빠른 길로 바꿈: ${f.best.provider} (바꾸기)`);
   voice.say(EVENTS.faster);
   goal = f.to;
   startDrive(f.best);
 }
 function keepRoute() {
-  if (faster) declinedS = faster.best.durationS;
+  if (faster) {
+    declinedS = faster.best.durationS;
+    log(`더 빠른 길 안 함: ${faster.best.provider} (그대로 또는 2분 지남)`);
+  }
   clearFaster();
   if (route) routeLayer.show(route);
 }
@@ -1553,7 +1570,9 @@ async function recheckRoute() {
     const kept = fresh ? freshTraffic(fresh) : { same: false, timed: false };
     const now = (kept.timed ? tracker.frame()?.remainingS : null) ?? current;
     // The same road asked again is not another way; the same provider gone another way is.
-    const best = answer.routes.filter((r) => !(kept.same && r === fresh)).sort((a, b) => a.durationS - b.durationS)[0];
+    // Our own (자체) route is not offered: its time is the limit's wherever ITS has no speed, and on 2026-10-03 it
+    // read 1시간 41분 against 카카오's 1시간 58분 — taken, it led round U-turns and off the road five times.
+    const best = answer.routes.filter((r) => !(kept.same && r === fresh) && r.provider !== "korea").sort((a, b) => a.durationS - b.durationS)[0];
     // Quicker by enough — and, after a "그대로", by enough more than the way declined.
     if (best && best.durationS < now - BETTER_BY_S && best.durationS < (declinedS ?? Infinity) - BETTER_BY_S) {
       offers = answer.routes;
@@ -3279,7 +3298,7 @@ if (new URLSearchParams(location.search).has("debug")) {
   const heard: { t: number; text: string; playedS: number; lengthS: number; waitedS: number }[] = [];
   const late: { t: number; text: string; waitedS: number }[] = [];
   const onSaid = voice.onSaid, onLate = voice.onLate;
-  voice.onSaid = (text, playedS, lengthS, waitedS) => { heard.push({ t: Date.now(), text, playedS, lengthS, waitedS }); onSaid(text, playedS, lengthS, waitedS); };
+  voice.onSaid = (text, playedS, lengthS, waitedS, fetchedS) => { heard.push({ t: Date.now(), text, playedS, lengthS, waitedS }); onSaid(text, playedS, lengthS, waitedS, fetchedS); };
   voice.onLate = (text, waitedS) => { late.push({ t: Date.now(), text, waitedS }); onLate(text, waitedS); };
   (window as unknown as { nav: unknown }).nav = {
     said, heard, late, voice, tracker, gps, map, lanesAsked,
@@ -3297,10 +3316,20 @@ if (new URLSearchParams(location.search).has("debug")) {
 
 // The log to the server every half-minute, and as the page goes to the back or away (a beacon, which outlives it).
 function sendLog(beacon = false) {
-  if (!unsent.length || typeof guide === "undefined" || !guide.sendLogs) return;
-  const body = JSON.stringify({ lines: unsent.splice(0, unsent.length) });
-  if (beacon && navigator.sendBeacon) navigator.sendBeacon("/api/me/log", new Blob([body], { type: "application/json" }));
-  else void fetch("/api/me/log", { method: "POST", headers: { "Content-Type": "application/json" }, body, keepalive: true }).catch(() => {});
+  if (typeof guide === "undefined" || !guide.sendLogs) return;
+  const rows = trace.take();
+  if (!unsent.length && !rows.length) return;
+  const lines = unsent.splice(0, unsent.length);
+  const body = JSON.stringify({ lines, trace: rows });
+  // A beacon and a keepalive fetch carry 64 KB at most: a route in the trace is often more, and goes by plain fetch.
+  const small = body.length < 60_000;
+  const post = (b: string, keepalive: boolean) =>
+    void fetch("/api/me/log", { method: "POST", headers: { "Content-Type": "application/json" }, body: b, keepalive }).catch(() => {});
+  if (beacon && navigator.sendBeacon && small) navigator.sendBeacon("/api/me/log", new Blob([body], { type: "application/json" }));
+  else if (beacon && navigator.sendBeacon) {
+    navigator.sendBeacon("/api/me/log", new Blob([JSON.stringify({ lines })], { type: "application/json" }));
+    post(JSON.stringify({ lines: [], trace: rows }), false);
+  } else post(body, small);
 }
 setInterval(() => sendLog(), 30_000);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") sendLog(true); });

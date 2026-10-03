@@ -1,4 +1,4 @@
-import { askJson, isMotorwayName, markMotorway, type Congestion, type LonLat, type Route, type RouteProvider, type RouteRequest, type Segment } from "./types.js";
+import { ProviderError, askJson, isMotorwayName, markMotorway, type Congestion, type LonLat, type Route, type RouteProvider, type RouteRequest, type Segment } from "./types.js";
 import type { LinkBook } from "../road/traffic.js";
 import { koreanNumbers } from "../phrases.js";
 
@@ -81,10 +81,17 @@ export class Osrm implements RouteProvider {
     return typeof this.on === "function" ? this.on() : this.on;
   }
 
-  async route({ start, goal }: RouteRequest): Promise<Route> {
+  async route({ start, goal, heading }: RouteRequest): Promise<Route> {
     const annotate = this.links ? "&annotations=nodes,speed,datasources" : "";
     const url = `${this.base}/route/v1/driving/${start[0]},${start[1]};${goal[0]},${goal[1]}?overview=full&geometries=geojson&steps=true${annotate}`;
-    const answer = await askJson<OsrmAnswer>(url, { headers: { "User-Agent": "WebNavi (personal)" } }, this.name);
+    const ask = (u: string) => askJson<OsrmAnswer>(u, { headers: { "User-Agent": "WebNavi (personal)" } }, this.name);
+    // On the move, from the road the car is on and the way it goes: without it a re-route on a divided road began
+    // on the other carriageway, and the first guide was a U-turn the car then drove past (2026-10-03, 덕릉로).
+    // No road that way near the start (a fix in a car park): asked again without.
+    const answer = heading == null ? await ask(url) : await ask(`${url}&bearings=${Math.round(heading)},${BEARING_RANGE_DEG};`).catch((e: unknown) => {
+      if (e instanceof ProviderError && e.status === 400) return ask(url); // OSRM's NoSegment / NoRoute that way
+      throw e;
+    });
     const first = answer.routes?.[0];
     if (answer.code !== "Ok" || !first) throw new Error(`osrm: ${answer.message ?? answer.code}`);
     const guides = first.legs.flatMap((leg) =>
@@ -142,6 +149,9 @@ export function motorwayRanges(steps: OsrmAnswer["routes"][number]["legs"][numbe
   }
   return out;
 }
+
+/** How far the road the route starts on may point from the car's heading, either way. */
+export const BEARING_RANGE_DEG = 45;
 
 /** The manoeuvre as a Korean phrase, the way the car apps say it. */
 export function korean(type: string, modifier?: string, exit?: number, road?: string): string {

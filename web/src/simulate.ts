@@ -4,9 +4,14 @@ import type { Fix, Gps } from "./gps";
 import type { Route } from "./types";
 
 /**
- * A pretend car driving the route: a fix a second, along the path at
- * the chosen speed, a few metres of jitter to the side the way a real
- * receiver wobbles. Two faults on demand — a tunnel (no fixes for a
+ * A pretend car driving the route: fixes along the path at the chosen
+ * speed, a few metres of jitter to the side the way a real receiver
+ * wobbles — and spaced as the car's browser spaces them ([gaps]): mostly a
+ * second apart, but now and then 2–10 s and once in a while 15–30 s with
+ * nothing, on an open road (the 진단 log of 2026-10-03's drive: the
+ * reckoning ran 1–31 s between fixes all the way). A fix every quarter
+ * second, as this gave before, never had the marker reckon outside a
+ * tunnel asked for, so what goes wrong then was never met at a desk. Two faults on demand — a tunnel (no fixes for a
  * while) and a wrong turn (60 m off to the side) — so the reckoning and
  * the re-route can be watched at a desk. And the car's own speed and
  * odometer, as the car streams them (car-track.ts), all the while: a
@@ -28,6 +33,11 @@ export class Simulator {
   private odoM = 50_000_000;
   /** Where the pretend car's own speed goes, as the car's streaming would bring it. */
   car: CarTrack | null = null;
+  /** Fixes spaced as the car's browser spaces them; false: one a second, never missed. */
+  gaps = true;
+  private nextFixAt = 0;
+  /** Drawn for each wait between fixes: [random] in 0..1 (a test passes its own). */
+  random: () => number = Math.random;
   onEnd: () => void = () => {};
 
   constructor(private gps: Gps, route: Route) {
@@ -77,6 +87,15 @@ export class Simulator {
     return this.jamFromMps;
   }
 
+  /** Seconds to the next fix: 1, or one of the car browser's silences. */
+  private waitS(): number {
+    if (!this.gaps) return 1;
+    const r = this.random();
+    if (r < 0.75) return 1;
+    if (r < 0.95) return 2 + ((r - 0.75) / 0.2) * 8;
+    return 15 + ((r - 0.95) / 0.05) * 15;
+  }
+
   /** Off the route to the right for [seconds]; the app should re-route. */
   stray(seconds = 8) {
     this.strayUntil = performance.now() + seconds * 1000;
@@ -105,6 +124,8 @@ export class Simulator {
       this.onEnd();
     }
     if (now < this.tunnelUntil) return; // in the dark: nothing arrives
+    if (now < this.nextFixAt) return;
+    this.nextFixAt = now + this.waitS() * 1000;
     const p = this.line.place(this.alongM);
     const wobble = (Math.random() - 0.5) * 6;
     const side = now < this.strayUntil ? 60 : wobble;

@@ -161,6 +161,12 @@ export class Tracker {
         this.guides.push({ guide: g, alongM: this.line.project(g.at, 0, this.line.path.length).alongM });
       }
       this.guides.sort((a, b) => a.alongM - b.alongM);
+      // The reckoning goes on from the last fix's place on this line, not the metres along the old one: a route
+      // changed between two of the car browser's sparse fixes had the marker leap 1583 m on (2026-10-03).
+      if (this.lastFix) {
+        this.lastProj = this.line.project([this.lastFix.lon, this.lastFix.lat], 0, this.line.path.length);
+        this.reckonAlong = this.lastProj.alongM;
+      }
     }
   }
 

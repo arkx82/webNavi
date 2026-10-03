@@ -44,6 +44,19 @@ test("five wrong passwords lock the account, whatever address the tunnel header 
   assert.equal((await login(app, "mina", "secret1", "4.4.4.4")).statusCode, 401, "another name from another address is only wrong");
 });
 
+test("the drive's trace goes beside the log, a route a line however long", async () => {
+  const { app, dir } = await site();
+  const cookie = (await login(app, "june", "secret1")).headers["set-cookie"] as string;
+  const route = `r,1,${JSON.stringify({ path: Array.from({ length: 20_000 }, (_, i) => [127 + i / 1e5, 37.5]) })}`;
+  const r = await app.inject({ method: "POST", url: "/api/me/log", payload: { lines: [], trace: ["f,1,1,127,37.5,5,10,90", route] }, headers: { cookie } });
+  assert.equal(r.statusCode, 200);
+  const files = readdirSync(join(dir, "client-logs"));
+  assert.deepEqual(files.map((f) => f.replace(/\d{4}-\d{2}-\d{2}/, "D")), ["june-D.trace"], "no empty log made");
+  const rows = readFileSync(join(dir, "client-logs", files[0]), "utf8").trim().split("\n");
+  assert.equal(rows.length, 2);
+  assert.equal(rows[1], route, "the route whole");
+});
+
 test("the page's log goes to a file a day, and is refused when the day's file is full", async () => {
   const { app, dir } = await site();
   const cookie = (await login(app, "june", "secret1")).headers["set-cookie"] as string;

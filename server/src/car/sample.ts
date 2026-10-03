@@ -14,6 +14,9 @@ export interface CarSample {
   est?: { lon: number; lat: number; heading: number | null } | null;
   /** The gear: "P", "R", "N", "D"; null when the car leaves it blank (as it does parked and asleep). Absent when this sample does not say. */
   gear?: Gear | null;
+  /** The battery, %, and the power drawn (kW, − charging back): for the drive's record of what it used. */
+  soc?: number | null;
+  powerKw?: number | null;
 }
 
 export type Gear = "P" | "R" | "N" | "D";

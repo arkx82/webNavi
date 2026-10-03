@@ -18,6 +18,8 @@ export class CarLink {
   onFirst: (s: CarSample) => void = () => {};
   /** The gear as the car said it, each time it changes (null: left blank). */
   onGear: (gear: CarSample["gear"]) => void = () => {};
+  /** Every sample, as it came (the drive's trace). */
+  onSample: (s: CarSample) => void = () => {};
   private gear: CarSample["gear"];
   private source: EventSource | null = null;
   private retry: number | null = null;
@@ -48,6 +50,7 @@ export class CarLink {
       if (this.lastT && s.t > this.lastT) this.gaps.push(s.t - this.lastT);
       this.lastT = Math.max(this.lastT, s.t);
       this.track.add(s);
+      this.onSample(s);
       if (s.gear !== undefined && s.gear !== this.gear) { this.gear = s.gear; this.onGear(s.gear); }
     };
     es.onerror = () => {

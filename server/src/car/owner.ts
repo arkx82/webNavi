@@ -195,6 +195,8 @@ export function parseFrame(value: string, odo = new OdoResolution()): CarSample 
     odoResM: miles == null ? odo.metres() : odo.feed(cell("odometer")),
     est: lat != null && lon != null && (lat !== 0 || lon !== 0) ? { lon, lat, heading: num("est_heading") } : null,
     gear,
+    soc: num("soc"),
+    powerKw: num("power"),
   };
 }
 
