@@ -396,7 +396,8 @@ export class Tracker {
       shown.alongM = along;
       shown.offM = this.lastProj?.offM;
       shown.remainingM = Math.max(0, this.line.lengthM - along);
-      shown.remainingS = this.route.durationS * (shown.remainingM / Math.max(1, this.line.lengthM));
+      // Never less than nothing, whatever a provider's fresh time made of durationS (main.ts freshTraffic).
+      shown.remainingS = Math.max(0, this.route.durationS * (shown.remainingM / Math.max(1, this.line.lengthM)));
       const i = this.guides.findIndex((g) => g.alongM > along + 5);
       if (i >= 0) {
         shown.nextGuide = { guide: this.guides[i].guide, inM: this.guides[i].alongM - along };

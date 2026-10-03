@@ -1617,7 +1617,7 @@ function freshTraffic(fresh: Route): { same: boolean; timed: boolean } {
   const r = repaint(route, fresh, shown.alongM);
   if (!r.same) return { same: false, timed: false };
   // The tracker scales durationS by the distance left: set so that, from here, it is the fresh answer's.
-  const timed = r.matched / r.ahead >= 0.9;
+  const timed = r.matched / r.ahead >= 0.9 && fresh.durationS > 0;
   if (timed) route.durationS = fresh.durationS * (routeLine?.lengthM ?? route.distanceM) / Math.max(1, shown.remainingM);
   if (r.changed > 0) routeLayer.show(route);
   log(`교통 정보 갱신: 앞 ${r.ahead}점 중 ${r.changed}점 색 바뀜 · 남은 ${minutes(fresh.durationS)}`);
