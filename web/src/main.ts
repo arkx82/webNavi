@@ -1379,7 +1379,10 @@ function startDrive(r: Route) {
   routeLayer.show(route);
   tracker.setRoute(route);
   trace.route(route);
-  sim?.follow(route);
+  // A re-route or a quicker way taken: the pretend car goes on from where it is — the new route starts at the last
+  // fix, which with the car browser's spacing (simulate.ts gaps) is often some way behind, and a real car does not
+  // go back to it. A new place starts it from the new route's start.
+  sim?.follow(route, !fresh && !elsewhere);
   // The car's own speed, for the tunnels on the way: asked for only while a route is driven.
   startCarLink();
   // What was said is kept across a re-route or a faster way to the same
