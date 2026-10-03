@@ -135,8 +135,8 @@ export function cameraRungs(firstM: number): number[] {
 
 /** Posted limits a camera can come with. */
 export const LIMITS = [30, 40, 50, 60, 70, 80, 90, 100, 110];
-/** A school zone's: 30 almost everywhere, a few 40 or 50 where the road is wide. */
-export const SCHOOL_LIMITS = [30, 40, 50];
+/** A school zone's, as its cameras give it (server/src/safety/index.ts zoneLimits): 30 mostly, 40 or 50 on wide roads, a few 20 or 60. */
+export const SCHOOL_LIMITS = [20, 30, 40, 50, 60];
 
 export function warningPhrase(kind: Warning, rungM: number, limit?: number): string {
   // "600미터 앞에 …가 있습니다", not "600미터 앞 …": the bare 앞 at a phrase's edge is what the voice

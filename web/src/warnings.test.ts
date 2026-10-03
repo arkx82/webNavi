@@ -233,3 +233,47 @@ test("the sentences ahead are every rung of every warning said within the horizo
   // Fetching ahead says nothing: the camera's rungs are all still to come.
   assert.equal(watch.due(250).length, 1);
 });
+
+test("a school zone's limit is the one its camera on the route says — 50 on a wide road — and none is guessed", () => {
+  const watch = new RouteWatch(route);
+  watch.add([
+    // At 700 m, the server knowing no limit for it (cameras round it disagree), a 50 camera of the zone on the route.
+    { id: "wide", kind: "school-zone", ...lonLat(offset(offset(start, 0, 700), 90, 60)) },
+    { id: "cam", kind: "speed", ...lonLat(offset(start, 0, 760)), limit: 50, zone: "school" },
+    // On the east leg, no camera and no limit known.
+    { id: "quiet", kind: "school-zone", ...lonLat(offset(offset(corner, 90, 600), 0, 60)) },
+  ]);
+  const [due] = watch.due(260).filter((d) => d.feature.id === "wide");
+  assert.equal(phraseFor(due), "삼백미터 앞부터 어린이 보호구역입니다, 제한 속도 오십입니다");
+  assert.deepEqual(watch.limitAt(600), { limit: 50, why: "school" });
+  const [quiet] = watch.due(1000 + 600 - 150 - 200).filter((d) => d.feature.id === "quiet");
+  assert.equal(phraseFor(quiet), "삼백미터 앞부터 어린이 보호구역입니다");
+  assert.equal(watch.limitAt(1600), null, "no 30 guessed");
+});
+
+test("a two-way 구간 단속: this carriageway's start to its end; the other's cameras (its end by our start, its start by our end) unsaid", () => {
+  const watch = new RouteWatch(route);
+  const at = (m: number) => lonLat(m <= 1000 ? offset(start, 0, m) : offset(corner, 90, m - 1000));
+  watch.add([
+    { id: "ours-start", kind: "section-start", ...at(100), limit: 60, direction: "1" },
+    { id: "theirs-end", kind: "section-end", ...at(115), direction: "2" },
+    { id: "theirs-start", kind: "section-start", ...at(1785), limit: 60, direction: "02" },
+    { id: "ours-end", kind: "section-end", ...at(1800), direction: "01" },
+  ]);
+  assert.deepEqual(watch.sections().map((s) => [s.feature.id, Math.round(s.alongM), Math.round(s.endM)]), [["ours-start", 100, 1800]]);
+  assert.deepEqual(watch.ahead(0, 2100).map((a) => a.feature.id), ["ours-start", "ours-end"]);
+  assert.deepEqual(watch.limitAt(1000), { limit: 60, why: "section" });
+  assert.equal(watch.limitAt(1900), null);
+});
+
+test("two 구간 단속 one after another the same way are both kept", () => {
+  const watch = new RouteWatch(route);
+  const at = (m: number) => lonLat(m <= 1000 ? offset(start, 0, m) : offset(corner, 90, m - 1000));
+  watch.add([
+    { id: "a", kind: "section-start", ...at(100), limit: 80, direction: "1" },
+    { id: "b", kind: "section-end", ...at(700), direction: "1" },
+    { id: "c", kind: "section-start", ...at(1200), limit: 100, direction: "1" },
+  ]);
+  assert.deepEqual(watch.sections().map((s) => s.feature.id), ["a", "c"]);
+  assert.deepEqual(watch.ahead(0, 2100).map((a) => a.feature.id), ["a", "b", "c"]);
+});

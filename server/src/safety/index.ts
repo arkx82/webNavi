@@ -21,6 +21,8 @@ export interface Feature {
   limit?: number;
   /** Free text the source gave for the road direction ("상행", "동쪽" …); no bearing is published. */
   direction?: string;
+  /** A camera inside a 보호구역 (경찰청's 보호구역구분: 2 어린이, 1 노인): what tells a school zone its limit. */
+  zone?: "school" | "senior";
   name?: string;
   /** For an area rather than a point (an accident hotspot, a school zone): how far round the centre it reaches. */
   radiusM?: number;
@@ -59,6 +61,7 @@ export class SafetyIndex {
   }
 
   build(): this {
+    zoneLimits(this.features);
     if (this.features.length === 0) {
       this.tree = null;
       return this;
@@ -84,6 +87,49 @@ export class SafetyIndex {
     }
     return out.sort((a, b) => a.distanceM - b.distanceM);
   }
+}
+
+/** 경찰청's 보호구역구분 — "2" (or "02", or the words) 어린이, "1" 노인·장애인 — as a zone; undefined outside one. */
+export function zoneOf(code: string | undefined): Feature["zone"] {
+  const c = (code ?? "").trim().replace(/^0+/, "");
+  if (c === "2" || /어린이/.test(c)) return "school";
+  if (c === "1" || /노인|장애인/.test(c)) return "senior";
+  return undefined;
+}
+
+/** A zone's own cameras are looked for this far round it. */
+export const ZONE_CAMERA_M = 300;
+/** The limits a zone's camera can give it: a 60 or an 80 is the road beside it, not the zone. */
+const ZONE_LIMITS = new Set([20, 30, 40, 50, 60]);
+
+/**
+ * Each 보호구역's limit, from the enforcement cameras inside one (보호구역구분) round it — not 30 for every school:
+ * of the 9,871 school zones with a camera within 300 m, 866 are 40, 50, 60 or 20 (2026-10-04). Where the cameras
+ * round it disagree (a 50 arterial at one side of the school, a 30 lane at the other) or there is none, the zone
+ * says no limit: the page takes it from a zone camera on its route (web/src/warnings.ts), or says none.
+ */
+export function zoneLimits(features: Feature[]): void {
+  const cell = (lon: number, lat: number) => `${Math.floor(lon * 200)},${Math.floor(lat * 200)}`;
+  const cams = new Map<string, Feature[]>();
+  for (const f of features) {
+    if (!f.zone || !f.limit || !ZONE_LIMITS.has(f.limit)) continue;
+    const k = cell(f.lon, f.lat);
+    cams.set(k, [...(cams.get(k) ?? []), f]);
+  }
+  features.forEach((f, i) => {
+    const zone = f.kind === "school-zone" ? "school" : f.kind === "senior-zone" ? "senior" : null;
+    if (!zone) return;
+    const near: { d: number; limit: number }[] = [];
+    const [x, y] = [Math.floor(f.lon * 200), Math.floor(f.lat * 200)];
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
+      for (const c of cams.get(`${x + dx},${y + dy}`) ?? []) {
+        const d = metres(f.lon, f.lat, c.lon, c.lat);
+        if (c.zone === zone && d <= ZONE_CAMERA_M) near.push({ d, limit: c.limit! });
+      }
+    }
+    const limits = new Set(near.map((n) => n.limit));
+    features[i] = { ...f, limit: limits.size === 1 ? near[0].limit : undefined };
+  });
 }
 
 /** Equirectangular distance; fine under a few kilometres. */
@@ -131,6 +177,7 @@ export function featuresOf(rows: Record<string, string | undefined>[], source: s
       limit: Number.isFinite(limit) && limit > 0 ? limit : undefined,
       direction: row["도로노선방향"] || undefined,
       name: row["도로노선명"] || row["도로명"] || row["설치장소"] || undefined,
+      ...(zoneOf(row["보호구역구분"]) ? { zone: zoneOf(row["보호구역구분"]) } : {}),
     });
   });
   return out;
@@ -153,7 +200,6 @@ export function cameraKind(code: string | undefined, zone: string | undefined, s
   const signal = parts.has("2") || /신호/.test(text);
   if (/구간.*시/.test(text)) return "section-start";
   if (/구간.*종/.test(text)) return "section-end";
-  if (zone && /어린이/.test(zone) && speed) return "school";
   if (speed && signal) return "speed-signal";
   if (speed) return "speed";
   if (signal) return "signal";

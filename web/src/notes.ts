@@ -62,7 +62,8 @@ export function schoolNote(a: Ahead, alongM: number): Note {
     badge: "어린이 보호구역",
     title: [a.feature.name, a.feature.detail].filter(Boolean).join(" · ") || "어린이 보호구역",
     where: inside ? "구역 안" : km(a.inM),
-    lines: [`제한 속도 ${a.feature.limit ?? 30}`],
+    // Its limit where its cameras say one; none is guessed (a school on a wide road is 50, not the 30 most are).
+    lines: a.feature.limit ? [`제한 속도 ${a.feature.limit}`] : [],
   };
 }
 

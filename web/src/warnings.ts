@@ -40,6 +40,10 @@ export interface Feature {
   rest?: RestInfo;
   /** A traffic light's flashing hours: "00:00-05:00" (KST), or "always". */
   flash?: string;
+  /** The road direction code the source gives (경찰청's 도로노선방향: 1, 2, 3 …): a 구간 단속's start and end share it. */
+  direction?: string;
+  /** A camera inside a 보호구역 (school or senior zone): its limit is the zone's. */
+  zone?: "school" | "senior";
 }
 
 export interface Ahead {
@@ -93,8 +97,15 @@ function mergeCameras(a: Feature, b: Feature): Feature {
   const speed = a.kind !== "signal" || b.kind !== "signal";
   const signal = a.kind !== "speed" || b.kind !== "speed";
   const kind: Kind = speed && signal ? "speed-signal" : speed ? "speed" : "signal";
-  return { ...a, kind, limit: a.limit ?? b.limit };
+  return { ...a, kind, limit: a.limit ?? b.limit, zone: a.zone ?? b.zone };
 }
+
+/** A 구간 단속 camera's direction code, "01" and "1" alike; "" where the source gives none. */
+const directionOf = (f: Feature) => (f.direction ?? "").trim().replace(/^0+/, "");
+/** A start and an end of two different directions this close together are the two carriageways' cameras at one place. */
+const SECTION_TWIN_M = 300;
+/** The limits a zone camera can give its zone. */
+const ZONE_LIMITS = new Set([20, 30, 40, 50, 60]);
 
 export class RouteWatch {
   private line: Line;
@@ -167,20 +178,67 @@ export class RouteWatch {
    * SECTION_MAX_M at most, not to the destination. Kept until the features change: asked every frame.
    */
   sections(): { feature: Feature; alongM: number; endM: number }[] {
+    return this.sectionPlan().sections;
+  }
+
+  /**
+   * The 구간 단속 stretches, and the section cameras that are the other carriageway's. A two-way road has both
+   * directions' cameras on it: where this one's starts, the other's ends (beside it), and where this one ends, the
+   * other's starts. Paired start-then-end in order along the route, the other's end closed this one's stretch at
+   * once, and its start at the far end was said as "구간 단속이 시작됩니다" as the car left the stretch. A start
+   * and end share their direction code: paired by it, ours run start → end along the route and the other's end →
+   * start; those, and an end standing by a start of another direction, are not said.
+   */
+  private sectionPlan(): { sections: { feature: Feature; alongM: number; endM: number }[]; silent: Set<string> } {
     if (this.sectionsOf === this.onRoute) return this.sectionsKnown;
-    const out: { feature: Feature; alongM: number; endM: number }[] = [];
-    let open: { feature: Feature; alongM: number; endM: number } | null = null;
-    for (const f of this.onRoute) {
-      if (f.feature.kind === "section-start" && !open) open = { feature: f.feature, alongM: f.alongM, endM: Math.min(this.line.lengthM, f.alongM + SECTION_MAX_M) };
-      else if (f.feature.kind === "section-end" && open) { open.endM = f.alongM; out.push(open); open = null; }
+    const sections: { feature: Feature; alongM: number; endM: number }[] = [];
+    const silent = new Set<string>();
+    const cams = this.onRoute.filter((f) => f.feature.kind === "section-start" || f.feature.kind === "section-end");
+    const used = new Set<(typeof cams)[number]>();
+    for (const end of cams) {
+      if (end.feature.kind !== "section-end") continue;
+      // The nearest start before it of its direction, not yet closed.
+      const start = cams.filter((s) => s.feature.kind === "section-start" && !used.has(s) && directionOf(s.feature) === directionOf(end.feature)
+        && s.alongM < end.alongM && end.alongM - s.alongM <= SECTION_MAX_M).pop();
+      if (!start) continue;
+      used.add(start); used.add(end);
+      sections.push({ feature: start.feature, alongM: start.alongM, endM: end.alongM });
     }
-    if (open) out.push(open);
+    for (const f of cams) {
+      if (used.has(f)) continue;
+      const dir = directionOf(f.feature);
+      if (f.feature.kind === "section-start") {
+        // An end of its direction behind it, left unpaired: the two are the other carriageway's, driven the other way.
+        const reversed = dir !== "" && cams.some((e) => e.feature.kind === "section-end" && !used.has(e) && directionOf(e.feature) === dir && e.alongM < f.alongM - SECTION_TWIN_M && f.alongM - e.alongM <= SECTION_MAX_M);
+        if (reversed) { silent.add(f.feature.id); continue; }
+        sections.push({ feature: f.feature, alongM: f.alongM, endM: Math.min(this.line.lengthM, f.alongM + SECTION_MAX_M) });
+      } else {
+        // An end with no start before it: the other carriageway's, beside a start of another direction or with its
+        // start further on — or this one's, the car having joined the stretch partway (then it is said).
+        const twin = cams.some((s) => s.feature.kind === "section-start" && directionOf(s.feature) !== dir && Math.abs(s.alongM - f.alongM) <= SECTION_TWIN_M);
+        const reversed = dir !== "" && cams.some((s) => s.feature.kind === "section-start" && !used.has(s) && directionOf(s.feature) === dir && s.alongM > f.alongM + SECTION_TWIN_M && s.alongM - f.alongM <= SECTION_MAX_M);
+        if (twin || reversed) silent.add(f.feature.id);
+      }
+    }
+    sections.sort((a, b) => a.alongM - b.alongM);
     this.sectionsOf = this.onRoute;
-    this.sectionsKnown = out;
-    return out;
+    this.sectionsKnown = { sections, silent };
+    return this.sectionsKnown;
   }
   private sectionsOf: unknown = null;
-  private sectionsKnown: { feature: Feature; alongM: number; endM: number }[] = [];
+  private sectionsKnown: { sections: { feature: Feature; alongM: number; endM: number }[]; silent: Set<string> } = { sections: [], silent: new Set() };
+
+  /**
+   * A 보호구역's limit on this route: a camera of that zone on the route within it (or just by it) says it — the
+   * road this route takes past the school, not the 50 arterial at its front when the route goes by the 30 lane at
+   * its back. Without one, the server's (its cameras round it, all agreeing), or none.
+   */
+  private zoneLimit(z: { feature: Feature; alongM: number; endM: number }): number | undefined {
+    const zone = z.feature.kind === "school-zone" ? "school" : z.feature.kind === "senior-zone" ? "senior" : null;
+    if (!zone) return z.feature.limit;
+    const cam = this.onRoute.find((f) => f.feature.zone === zone && f.feature.limit && ZONE_LIMITS.has(f.feature.limit) && f.alongM >= z.alongM - 50 && f.alongM <= z.endM + 50);
+    return cam?.feature.limit ?? z.feature.limit;
+  }
 
   /** The 구간 단속 the car is currently inside, if any. */
   currentSection(alongM: number): { feature: Feature; startAlongM: number; endAlongM: number; limit: number } | null {
@@ -200,11 +258,15 @@ export class RouteWatch {
   /** Everything ahead of [alongM] within [horizonM], nearest first; an area stays while the car is in it. */
   ahead(alongM: number, horizonM = 1000): Ahead[] {
     const out: Ahead[] = [];
+    const silent = this.sectionPlan().silent;
     for (const f of this.onRoute) {
       const inM = f.alongM - alongM;
       if (inM < -10 && f.endM < alongM) continue;
       if (inM > horizonM) break;
-      out.push({ feature: f.feature, alongM: f.alongM, endM: f.endM, inM });
+      // The other carriageway's 구간 단속 cameras are not ahead of this car, whatever the line they project onto.
+      if (silent.has(f.feature.id)) continue;
+      const zone = f.feature.kind === "school-zone" || f.feature.kind === "senior-zone";
+      out.push({ feature: zone ? { ...f.feature, limit: this.zoneLimit(f) } : f.feature, alongM: f.alongM, endM: f.endM, inM });
     }
     return out;
   }
@@ -259,18 +321,14 @@ export class RouteWatch {
    * the car apps turn the speed red. Null where no camera says.
    */
   limitAt(alongM: number): { limit: number; why: "section" | "camera" | "school"; inM?: number; id?: string } | null {
-    let section: number | null = null;
+    const section: number | null = this.currentSection(alongM)?.limit ?? null;
     let school: number | null = null;
     const prefs = this.prefs();
     for (const f of this.onRoute) {
       if (f.alongM > alongM) break;
-      // Past its start by more than a section can be long: its end camera is not on this route (sections()).
-      if (f.feature.kind === "section-start" && f.feature.limit) section = alongM - f.alongM <= SECTION_MAX_M ? f.feature.limit : null;
-      if (f.feature.kind === "section-end") section = null;
-      // Inside a school zone the limit holds whatever a camera says.
-      if ((f.feature.kind === "school-zone" || f.feature.kind === "senior-zone") && f.feature.limit && f.endM >= alongM && (prefs.shows?.(f.feature.kind) ?? true)) {
-        school = Math.min(school ?? Infinity, f.feature.limit);
-      }
+      // Inside a school zone the limit holds whatever a camera says — the zone's own, where it has one.
+      const limit = f.feature.kind === "school-zone" || f.feature.kind === "senior-zone" ? this.zoneLimit(f) : undefined;
+      if (limit && f.endM >= alongM && (prefs.shows?.(f.feature.kind) ?? true)) school = Math.min(school ?? Infinity, limit);
     }
     if (school != null) return { limit: school, why: "school" };
     const from = this.prefs().cameraFromM;

@@ -34,7 +34,9 @@ test("the police CSV is read by column name, in either byte order", () => {
   assert.equal(features[0].kind, "speed");
   assert.equal(features[0].limit, 60);
   assert.equal(features[0].direction, "상행");
-  assert.equal(features[1].kind, "school");
+  // A camera in a school zone is still a speed camera (said as one, with its limit), marked as the zone's.
+  assert.equal(features[1].kind, "speed");
+  assert.equal(features[1].zone, "school");
 });
 
 test("the camera API's English fields read as the CSV's Korean ones", async () => {
@@ -56,4 +58,23 @@ test("the camera API's English fields read as the CSV's Korean ones", async () =
     ["police-api:626-17", "section-end", 80],
     ["police-api:626-18", "speed-signal", 60],
   ]);
+});
+
+test("a school zone's limit is its cameras': 50 where they say 50, none where they disagree or there are none", async () => {
+  const { zoneLimits } = await import("./index.js");
+  const school = (id: string, lon: number) => ({ id, kind: "school-zone" as const, lon, lat: 37.5, limit: 30, radiusM: 200 });
+  const cam = (id: string, lon: number, limit: number, zone: "school" | "senior" | null = "school") => ({ id, kind: "speed" as const, lon, lat: 37.5005, limit, ...(zone ? { zone } : {}) });
+  const features = [
+    school("wide", 127.0), cam("c1", 127.0005, 50), cam("c2", 127.001, 50),
+    school("both", 127.1), cam("c3", 127.1005, 50), cam("c4", 127.0995, 30),
+    school("none", 127.2), cam("c5", 127.2005, 60, null),
+    school("lane", 127.3), cam("c6", 127.3008, 30),
+  ];
+  zoneLimits(features);
+  const limit = (id: string) => features.find((f) => f.id === id)!.limit;
+  assert.equal(limit("wide"), 50);
+  assert.equal(limit("both"), undefined, "a 50 road one side and a 30 lane the other: the route's own camera decides");
+  assert.equal(limit("none"), undefined, "a camera that is not the zone's says nothing of it");
+  assert.equal(limit("lane"), 30);
+  assert.equal(limit("c1"), 50, "the cameras keep theirs");
 });

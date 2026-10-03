@@ -237,7 +237,7 @@ const GROUPS: Group[] = [
     { key: "flashSignals", label: "점멸 신호 경고", kind: "toggle", sub: "밤에 점멸로 바뀌는 교차로 앞에서 (전국신호등표준데이터 — 서울은 동작구만)" },
   ] },
   { id: "road", title: "도로 정보", sub: "보호구역 · 방지턱 · 돌발 · 휴게소 · 기상특보", rows: [
-    { key: "schoolZones", label: "어린이 보호구역", kind: "choice", options: MODES, sub: "들어서기 전에 알리고, 안에서는 제한 속도 30 표시" },
+    { key: "schoolZones", label: "어린이 보호구역", kind: "choice", options: MODES, sub: "들어서기 전에 알리고, 안에서는 그 구역의 제한 속도 표시 (구역 단속 카메라가 말하는 값 — 30이 대부분, 큰길은 40·50)" },
     { key: "seniorZones", label: "노인 · 장애인 보호구역", kind: "choice", options: MODES, sub: "경로 위 구간을 주황색으로 (전국노인장애인보호구역표준데이터 활용신청 필요)" },
     { key: "bumps", label: "과속 방지턱", kind: "choice", options: MODES, sub: "표시만: 오른쪽 위 팝업, 누르면 닫히고 지나가면 사라짐" },
     { key: "curves", label: "급커브", kind: "choice", options: MODES, sub: "이어지는 굽이는 한 번만" },

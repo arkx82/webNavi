@@ -41,7 +41,10 @@ type Page = { header?: { resultCode?: string; resultMsg?: string }; body?: { ite
 export interface KeptCameras {
   at: number;
   features: Feature[];
+  /** What the kept list carries: 2 marks each camera's 보호구역 (zone); a list without is asked again. */
+  v?: number;
 }
+export const CAMERAS_VERSION = 2;
 
 export function keptCameras(dir: string): KeptCameras | null {
   const file = join(dir, "cameras.json");
@@ -83,7 +86,7 @@ export async function fetchCameras(key: string, dir: string): Promise<KeptCamera
   const features = featuresOf(rows, "police-api");
   // An empty list is a failure to say so, not a week's answer to keep.
   if (features.length === 0) throw new Error("cameras: the API answered no cameras");
-  const kept: KeptCameras = { at: Date.now(), features };
+  const kept: KeptCameras = { at: Date.now(), features, v: CAMERAS_VERSION };
   writeFileSync(join(dir, "cameras.json"), JSON.stringify(kept));
   return kept;
 }

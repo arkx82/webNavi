@@ -10,7 +10,7 @@ import { Osrm } from "./route/osrm.js";
 import { sayMissedTurns } from "./route/missed.js";
 import { ProviderError, type LonLat, type Provider, type Route, type RouteProvider } from "./route/types.js";
 import { SafetyIndex } from "./safety/index.js";
-import { CAMERAS_MAX_AGE_MS, fetchCameras, keptCameras } from "./safety/cameras.js";
+import { CAMERAS_MAX_AGE_MS, CAMERAS_VERSION, fetchCameras, keptCameras } from "./safety/cameras.js";
 import { Hotspots } from "./safety/hotspots.js";
 import { BUMPS, DATASET_MAX_AGE_MS, LIGHTS, SCHOOL_ZONES, SENIOR_ZONES, SEOUL_LIGHTS, kept, refresh, type Dataset, type KeptSet } from "./safety/datasets.js";
 import { Incidents } from "./road/incidents.js";
@@ -141,7 +141,7 @@ async function refreshSets() {
 }
 async function refreshCameras() {
   const key = settings.get("dataGoKrKey");
-  if (!key || (cameras && Date.now() - cameras.at < CAMERAS_MAX_AGE_MS)) return;
+  if (!key || (cameras && cameras.v === CAMERAS_VERSION && Date.now() - cameras.at < CAMERAS_MAX_AGE_MS)) return;
   try {
     cameras = await fetchCameras(key, configDir);
     safety = buildSafety();
