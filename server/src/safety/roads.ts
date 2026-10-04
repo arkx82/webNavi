@@ -25,10 +25,14 @@ const HEADINGS = [0, 45, 90, 135, 180, 225, 270, 315];
 const AT_ONCE = 8;
 
 export interface CameraWay {
-  /** The heading the road runs, ±23°. */
+  /** The heading the road runs, ±23°; -1 for a 보호구역's street (any way). */
   deg: number;
   /** The camera put on that road. */
   at: [number, number];
+  /** A 보호구역's street: its lanes one way, by 정밀도로지도 (null where the map has none there). */
+  lanes?: number | null;
+  /** A 보호구역's street: its name ("양재대로"; "" unnamed). */
+  name?: string;
 }
 
 type Kept = Record<string, CameraWay[] | null>;
@@ -37,7 +41,7 @@ export class CameraRoads {
   private kept: Kept = {};
   private running = false;
 
-  constructor(private dir: string, private base: () => string | undefined, private log: (m: string) => void = () => {}) {
+  constructor(private dir: string, private base: () => string | undefined, private log: (m: string) => void = () => {}, private lanesAt: (at: [number, number]) => number | null | undefined = () => undefined) {
     const file = join(dir, "camera-roads.json");
     if (existsSync(file)) try { this.kept = JSON.parse(readFileSync(file, "utf8")) as Kept; } catch { /* asked again */ }
   }
@@ -54,8 +58,13 @@ export class CameraRoads {
   private async waysOf(base: string, f: Feature): Promise<CameraWay[] | null> {
     if (ZONES.has(f.kind)) {
       const res = await fetch(`${base}/nearest/v1/driving/${f.lon},${f.lat}?number=1`, { signal: AbortSignal.timeout(5000) });
-      const w = ((await res.json()) as { waypoints?: { location: [number, number]; distance: number }[] }).waypoints?.[0];
-      return w && w.distance <= ZONE_SNAP_MAX_M ? [{ deg: -1, at: [Number(w.location[0].toFixed(6)), Number(w.location[1].toFixed(6))] }] : null;
+      const w = ((await res.json()) as { waypoints?: { location: [number, number]; distance: number; name?: string }[] }).waypoints?.[0];
+      if (!w || w.distance > ZONE_SNAP_MAX_M) return null;
+      const at: [number, number] = [Number(w.location[0].toFixed(6)), Number(w.location[1].toFixed(6))];
+      // Lanes counted where the lane map is up; not yet (the server starting), asked again on the next round.
+      const lanes = this.lanesAt(at);
+      const name = w.name ?? "";
+      return [lanes === undefined ? { deg: -1, at, name } : { deg: -1, at, lanes, name }];
     }
     const found: { deg: number; at: [number, number]; d: number }[] = [];
     for (const deg of HEADINGS) {
@@ -73,7 +82,8 @@ export class CameraRoads {
   async fill(features: Feature[]): Promise<boolean> {
     const base = this.base();
     if (!base || this.running) return false;
-    const todo = features.filter((f) => KINDS.has(f.kind) && !(f.id in this.kept));
+    // A zone put on its street before its lanes were counted (lanes undefined) is asked again.
+    const todo = features.filter((f) => KINDS.has(f.kind) && (!(f.id in this.kept) || (ZONES.has(f.kind) && this.kept[f.id]?.[0] && (this.kept[f.id]![0].lanes === undefined || this.kept[f.id]![0].name === undefined))));
     if (!todo.length) return false;
     this.running = true;
     let done = 0, failed = 0;

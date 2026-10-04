@@ -62,10 +62,14 @@ export class HdTiles {
   }
 }
 
+/** The lane index, once registered: what else on the server asks of the lanes (safety/roads.ts). */
+export let hdLanes: LaneIndex | null = null;
+
 export function registerHdmap(app: FastifyInstance, workDir: string) {
   const tiles = new HdTiles(join(workDir, "hdmap", "hdmap.mbtiles"));
   // The lane links' index, built beside them when a new links file comes (checked hourly).
   const lanes = new LaneIndex(join(workDir, "hdmap", "links.geojsons"), join(workDir, "hdmap", "lanes.db"), (m) => app.log.info(m));
+  hdLanes = lanes;
   const refresh = () => void lanes.refresh().catch((e) => app.log.warn({ err: (e as Error).message }, "lanes index"));
   refresh();
   setInterval(refresh, 3_600_000).unref();

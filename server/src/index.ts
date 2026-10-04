@@ -33,7 +33,7 @@ import { registerMusic } from "./music.js";
 import { Db } from "./db.js";
 import { registerUsers } from "./users.js";
 import { RefusedUrl, fetchPublic, registerGuard } from "./guard.js";
-import { registerHdmap } from "./hdmap.js";
+import { hdLanes, registerHdmap } from "./hdmap.js";
 import { registerShare } from "./share.js";
 import { registerCar } from "./car/index.js";
 import fastifyCompress from "@fastify/compress";
@@ -85,7 +85,7 @@ const dataDir = env.DATA_DIR ?? join(root, "data");
 const configDir = env.CONFIG_DIR ?? join(root, "config");
 let cameras = keptCameras(configDir);
 /** Each camera on its own road (safety/roads.ts), asked of our road graph once a camera. */
-const cameraRoads = new CameraRoads(configDir, () => env.KOREA_OSRM_URL, (m) => app.log.info(m));
+const cameraRoads = new CameraRoads(configDir, () => env.KOREA_OSRM_URL, (m) => app.log.info(m), (at) => (hdLanes?.ready ? hdLanes.laneCount(at) : undefined));
 async function fillCameraRoads() {
   const zones = [...sets.values()].flatMap((k) => k.features.filter((f) => f.kind === "school-zone" || f.kind === "senior-zone"));
   if (cameras && (await cameraRoads.fill([...cameras.features, ...zones]).catch(() => false))) safety = buildSafety();

@@ -47,7 +47,7 @@ export interface Feature {
   /** A 구간 단속 camera's other end (server/src/safety/index.ts sectionPairs). */
   pair?: LonLat;
   /** The carriageways the camera stands on, the way each runs (server/src/safety/roads.ts). */
-  ways?: { deg: number; at: LonLat }[];
+  ways?: { deg: number; at: LonLat; lanes?: number | null; name?: string }[];
 }
 
 export interface Ahead {
@@ -67,6 +67,8 @@ export const OTHER_WAY_M = 30;
 export const AGAINST_DEG = 110;
 /** A 보호구역's street (the road nearest its school) this near the route is the route. */
 export const ZONE_ROAD_M = 15;
+/** A road this many lanes one way (정밀도로지도) is a main road: a 보호구역 on it shows by its cameras. */
+export const WIDE_LANES = 3;
 /**
  * Kinds placed further off than a camera: a rest area sits beside the
  * carriageway, and ITS puts an incident on its link's line, which can be
@@ -196,11 +198,17 @@ export class RouteWatch {
    * A zone the server could not put on a road is taken as before.
    */
   private zoneHere(z: { feature: Feature; alongM: number; endM: number }): boolean {
-    const road = z.feature.ways?.[0]?.at;
-    if (!road) return true;
-    if (this.line.project(road, 0, this.line.path.length).offM <= ZONE_ROAD_M) return true;
+    const way = z.feature.ways?.[0];
+    if (!way) return true;
     const zone = z.feature.kind === "school-zone" ? "school" : "senior";
-    return this.onRoute.some((f) => f.feature.zone === zone && f.alongM >= z.alongM - 50 && f.alongM <= z.endM + 50);
+    const camera = () => this.onRoute.some((f) => f.feature.zone === zone && f.alongM >= z.alongM - 50 && f.alongM <= z.endM + 50);
+    if (this.line.project(way.at, 0, this.line.path.length).offM > ZONE_ROAD_M) return camera();
+    // Its street the route — but the road graph has no alleys, and a school by a main road is put on it whatever
+    // street its gate is on (예지어린이집 by 양재대로, on the 2-lane side road over its underpass): on a 대로 (by the
+    // road-name rules eight lanes and more) or a road of WIDE_LANES one way, only a camera of the zone on the route
+    // says the zone is the road's.
+    const main = /대로$/.test(way.name ?? "") || (way.lanes ?? 0) >= WIDE_LANES;
+    return main ? camera() : true;
   }
 
   /**

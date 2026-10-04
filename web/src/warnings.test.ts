@@ -343,3 +343,18 @@ test("a school zone whose school is on a side street is not the route's, unless 
   assert.notEqual(watch.limitAt(400)?.why, "school", "no school limit by the side street's zone (the camera ahead may give one)");
   assert.deepEqual(watch.limitAt(800), { limit: 30, why: "school" });
 });
+
+test("a school by a wide road (3 lanes one way and more) is the road's zone only with a camera of it on the route", () => {
+  const watch = new RouteWatch(route);
+  const at = (m: number, side: number) => offset(offset(start, 0, m), 90, side);
+  watch.add([
+    { id: "wide", kind: "school-zone", ...lonLat(at(300, 36)), ways: [{ deg: -1, at: at(300, 8), lanes: 5 }] },
+    { id: "narrow", kind: "school-zone", ...lonLat(at(700, 30)), ways: [{ deg: -1, at: at(700, 3), lanes: 1 }] },
+    // Two lanes here (a side road over an underpass) but a 대로.
+    { id: "daero", kind: "school-zone", ...lonLat(at(900, 30)), ways: [{ deg: -1, at: at(900, 3), lanes: 2, name: "양재대로" }] },
+    { id: "unknown", kind: "school-zone", ...lonLat(offset(corner, 90, 400)), ways: [{ deg: -1, at: offset(corner, 90, 400), lanes: null }] },
+  ]);
+  assert.deepEqual(watch.ahead(0, 2100).filter((a) => a.feature.kind === "school-zone").map((a) => a.feature.id), ["narrow", "unknown"]);
+  watch.add([{ id: "cam", kind: "speed", ...lonLat(at(330, 6)), limit: 50, zone: "school" }]);
+  assert.deepEqual(watch.ahead(0, 2100).filter((a) => a.feature.kind === "school-zone").map((a) => a.feature.id), ["wide", "narrow", "unknown"]);
+});

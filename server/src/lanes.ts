@@ -342,6 +342,27 @@ export class LaneIndex {
    * The route's line is moved onto it: on a road drawn with both ways'
    * lanes, the line then runs on the side the car is on.
    */
+  /**
+   * How many lanes the carriageway nearest [at] has (the nearest lane and its neighbours by l, r), or null where the
+   * map has no lane within [reachM]: a 보호구역's street read as a lane or two, or as a wide road.
+   */
+  laneCount(at: LonLat, reachM = 25): number | null {
+    const db = this.open();
+    if (!db) return null;
+    const d = reachM / M, k = d / Math.cos((at[1] * Math.PI) / 180);
+    const near = db.near.all(at[0] + k, at[0] - k, at[1] + d, at[1] - d) as unknown as Link[];
+    let best: { l: Link; off: number } | null = null;
+    for (const l of near) {
+      const hit = nearestOn(at, JSON.parse(l.coords) as LonLat[]);
+      if (hit && hit.off <= reachM && (!best || hit.off < best.off)) best = { l, off: hit.off };
+    }
+    if (!best) return null;
+    let n = 1;
+    for (let id = best.l.l, guard = 0; id && guard < 12; guard++, n++) id = this.byId(db, id)?.l ?? null;
+    for (let id = best.l.r, guard = 0; id && guard < 12; guard++, n++) id = this.byId(db, id)?.r ?? null;
+    return n;
+  }
+
   snap(points: LonLat[], headings: number[], biases?: number[]): (LonLat | null)[] {
     const db = this.open();
     if (!db) return points.map(() => null);
