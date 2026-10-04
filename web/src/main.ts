@@ -227,7 +227,16 @@ tracker.quiet = (g, r) =>
   (r.provider === "tmap" && (g.turnType === 121 || g.turnType === 122 || g.turnType === 150 || g.turnType === 151)) ||
   // OSRM's (자체) merges: onto the motorway from its ramp, nothing to choose ("merge/slight left" was said as 왼쪽 방향
   // where the ramp curls right); the 합류 구간 warning tells of it.
-  (r.provider === "korea" && typeof g.turnType === "string" && g.turnType.startsWith("merge"));
+  (r.provider === "korea" && typeof g.turnType === "string" && g.turnType.startsWith("merge")) ||
+  // NAVER's bare "도시고속도로 진입" just after the ramp it named ("'동부간선도로(청담대교)' 방면으로 오른쪽 고가차도
+  // 진입", 216 m before at 수서IC): the same way on, said twice — TMAP and Kakao give the one.
+  (r.provider === "naver" && g.turnType === 52 && !/방면/.test(g.text) && nearAfterAnother(g, r, 300));
+/** Whether a guide of [r]'s comes no more than [m] before [g] (as the crow flies: guides that close lie on one road). */
+function nearAfterAnother(g: Guide, r: Route, m: number): boolean {
+  const i = r.guides.indexOf(g);
+  const before = i > 0 ? r.guides[i - 1] : null;
+  return !!before && metres(before.at[0], before.at[1], g.at[0], g.at[1]) <= m;
+}
 // The car's own speed and odometer (server car/ → car-link.ts): in a tunnel, the marker goes as the car really went.
 const carLink = new CarLink();
 /** The drive as it happened, sent with the 진단 log (drive-trace.ts): to be played again at a desk. */
@@ -2957,8 +2966,9 @@ let pausedAt: number | null = null;
 function logTrackChange(state: NowPlaying) {
   if (!state.playing) { pausedAt ??= Date.now(); return; }
   if (state.trackId && heardTrack && state.trackId !== heardTrack.id) {
-    const gap = pausedAt != null ? Date.now() - pausedAt : Date.now() - heardTrack.at;
-    log(`음악 다음 곡 · 끊김 ${(gap / 1000).toFixed(1)}초${pausedAt != null ? " (멈춤으로 보고됨)" : ""}`);
+    // A pause reported between the two is the gap the car could fill with its own sound; none, the change was seamless
+    // (the time since the last state is not a gap: a radio stream says nothing between its titles).
+    log(pausedAt != null ? `음악 다음 곡 · 멈춤으로 보고된 ${((Date.now() - pausedAt) / 1000).toFixed(1)}초` : "음악 다음 곡 · 멈춤 없이");
   }
   if (state.trackId) heardTrack = { id: state.trackId, at: Date.now() };
   pausedAt = null;
