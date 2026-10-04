@@ -1,0 +1,94 @@
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import type { Feature } from "./index.js";
+
+/**
+ * Each enforcement camera put on its own carriageway: for each of eight
+ * headings, the nearest road of our own graph (표준노드링크, one-way links,
+ * the osrm service's /nearest with a bearing) — the heading whose road the
+ * camera stands on is the way its traffic goes. Kept by camera id in
+ * camera-roads.json beside the cameras. The page then takes a camera as the
+ * route's only where one of its ways runs with the route and on it
+ * (web/src/warnings.ts): on 2026-10-04 a camera on 강변북로 westbound, 19 m
+ * from the route east onto 청담대교, was warned of on the ramp ("제한 속도 팔십").
+ */
+const KINDS = new Set(["speed", "signal", "speed-signal", "section-start", "section-end"]);
+/** A camera further than this from any road of the graph is left as it is. */
+const SNAP_MAX_M = 25;
+/** Ways within this of the nearest are the camera's too: a two-way street, a camera at a crossing. */
+const SAME_M = 4;
+const HEADINGS = [0, 45, 90, 135, 180, 225, 270, 315];
+const AT_ONCE = 8;
+
+export interface CameraWay {
+  /** The heading the road runs, ±23°. */
+  deg: number;
+  /** The camera put on that road. */
+  at: [number, number];
+}
+
+type Kept = Record<string, CameraWay[] | null>;
+
+export class CameraRoads {
+  private kept: Kept = {};
+  private running = false;
+
+  constructor(private dir: string, private base: () => string | undefined, private log: (m: string) => void = () => {}) {
+    const file = join(dir, "camera-roads.json");
+    if (existsSync(file)) try { this.kept = JSON.parse(readFileSync(file, "utf8")) as Kept; } catch { /* asked again */ }
+  }
+
+  /** [features] with their ways, where known. */
+  apply(features: Feature[]): Feature[] {
+    return features.map((f) => {
+      const ways = this.kept[f.id];
+      return ways ? { ...f, ways } : f;
+    });
+  }
+
+  /** The camera's ways, asked of the graph; null where no road is near; throws where the graph cannot be asked. */
+  private async waysOf(base: string, f: Feature): Promise<CameraWay[] | null> {
+    const found: { deg: number; at: [number, number]; d: number }[] = [];
+    for (const deg of HEADINGS) {
+      const res = await fetch(`${base}/nearest/v1/driving/${f.lon},${f.lat}?number=1&bearings=${deg},23`, { signal: AbortSignal.timeout(5000) });
+      const body = (await res.json()) as { code?: string; waypoints?: { location: [number, number]; distance: number }[] };
+      const w = body.waypoints?.[0];
+      if (w) found.push({ deg, at: [Number(w.location[0].toFixed(6)), Number(w.location[1].toFixed(6))], d: w.distance });
+    }
+    const nearest = Math.min(...found.map((w) => w.d));
+    if (!Number.isFinite(nearest) || nearest > SNAP_MAX_M) return null;
+    return found.filter((w) => w.d <= nearest + SAME_M).map(({ deg, at }) => ({ deg, at }));
+  }
+
+  /** Asks the graph for the cameras not yet put on a road; true when any was. */
+  async fill(features: Feature[]): Promise<boolean> {
+    const base = this.base();
+    if (!base || this.running) return false;
+    const todo = features.filter((f) => KINDS.has(f.kind) && !(f.id in this.kept));
+    if (!todo.length) return false;
+    this.running = true;
+    let done = 0, failed = 0;
+    try {
+      let next = 0;
+      const work = async () => {
+        while (next < todo.length) {
+          const f = todo[next++];
+          try {
+            this.kept[f.id] = await this.waysOf(base, f);
+            done++;
+          } catch {
+            failed++;
+            // The graph not up (a restart): left for the next round.
+            if (failed > 50 && done === 0) return;
+          }
+        }
+      };
+      await Promise.all(Array.from({ length: AT_ONCE }, work));
+      writeFileSync(join(this.dir, "camera-roads.json"), JSON.stringify(this.kept));
+      this.log(`camera roads: ${done} cameras put on their carriageway${failed ? `, ${failed} not asked` : ""}`);
+      return done > 0;
+    } finally {
+      this.running = false;
+    }
+  }
+}

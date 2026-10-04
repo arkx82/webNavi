@@ -41,10 +41,10 @@ type Page = { header?: { resultCode?: string; resultMsg?: string }; body?: { ite
 export interface KeptCameras {
   at: number;
   features: Feature[];
-  /** What the kept list carries: 2 marks each camera's 보호구역 (zone); a list without is asked again. */
+  /** What the kept list carries: 2 marks each camera's 보호구역 (zone), 3 a 구간 단속 camera's site; an older list is asked again. */
   v?: number;
 }
-export const CAMERAS_VERSION = 2;
+export const CAMERAS_VERSION = 3;
 
 export function keptCameras(dir: string): KeptCameras | null {
   const file = join(dir, "cameras.json");

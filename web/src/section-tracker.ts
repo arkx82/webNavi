@@ -47,6 +47,12 @@ export class SectionTracker {
   /** When a section was last reported: a gap shorter than GRACE_MS is held through. */
   private seenAt = 0;
   private lastAvgKmh = 0;
+  /**
+   * The most driven of it so far: it never goes back. Held through a re-route whose line no longer has the section
+   * (its start behind the new route's), the metres along the new line read as none driven, and the drive left the
+   * stretch "최종 평균 0km/h" (2026-10-04).
+   */
+  private drivenM = 0;
 
   /**
    * Update tracker state with current vehicle progress.
@@ -83,6 +89,7 @@ export class SectionTracker {
         justExited = { id: this.activeId, limit: this.limit, avgKmh: this.lastAvgKmh };
       }
       this.activeId = section.id;
+      this.drivenM = 0;
       // If entered past the start point (e.g. 300 km/h fast simulation or GPS leap),
       // back-calculate the exact start timestamp so driven distance and elapsed time match
       const offsetM = Math.max(0, alongM - section.startAlongM);
@@ -102,7 +109,8 @@ export class SectionTracker {
   private measure(alongM: number, now: number, overspeedBy: number): ActiveSectionInfo {
     const elapsedS = Math.max(0.05, (now - this.startTime) / 1000);
     const totalM = Math.max(10, this.endAlongM - this.startAlongM);
-    const drivenM = Math.max(0, Math.min(totalM, alongM - this.startAlongM));
+    const drivenM = Math.max(this.drivenM, Math.max(0, Math.min(totalM, alongM - this.startAlongM)));
+    this.drivenM = drivenM;
     const remainM = Math.max(0, this.endAlongM - alongM);
 
     const rawAvg = (drivenM / elapsedS) * 3.6;
@@ -145,5 +153,6 @@ export class SectionTracker {
     this.startTime = 0;
     this.seenAt = 0;
     this.lastAvgKmh = 0;
+    this.drivenM = 0;
   }
 }

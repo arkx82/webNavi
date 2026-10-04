@@ -2938,6 +2938,7 @@ function showNow(state: NowPlaying) {
   heart.setAttribute("aria-pressed", String(!!state.liked));
   heart.innerHTML = state.liked ? ICONS.heartOn : ICONS.heart;
   tellMediaSession(state);
+  logTrackChange(state);
   drawProgress();
   if (state.note !== undefined || lastNote !== undefined) {
     if (state.note !== lastNote) musicSay(state.note ?? "", state.noteBad);
@@ -2950,6 +2951,18 @@ let lastNote: string | undefined;
  * The OS's own media controls (and a keyboard's play key) in step with the
  * player: MediaSession, where the browser has it.
  */
+/** The track last heard playing, and when: a change of track is logged with how long the sound was gone. */
+let heardTrack: { id: string; at: number } | null = null;
+let pausedAt: number | null = null;
+function logTrackChange(state: NowPlaying) {
+  if (!state.playing) { pausedAt ??= Date.now(); return; }
+  if (state.trackId && heardTrack && state.trackId !== heardTrack.id) {
+    const gap = pausedAt != null ? Date.now() - pausedAt : Date.now() - heardTrack.at;
+    log(`음악 다음 곡 · 끊김 ${(gap / 1000).toFixed(1)}초${pausedAt != null ? " (멈춤으로 보고됨)" : ""}`);
+  }
+  if (state.trackId) heardTrack = { id: state.trackId, at: Date.now() };
+  pausedAt = null;
+}
 let sessionWired = false;
 function tellMediaSession(state: NowPlaying) {
   const ms = (navigator as Navigator & { mediaSession?: MediaSession }).mediaSession;

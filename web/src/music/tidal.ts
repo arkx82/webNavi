@@ -37,6 +37,11 @@ interface RawPlaylistItem {
   image?: string;
 }
 
+/** The next track's stream is asked this long before the current one ends… */
+const PREPARE_NEXT_S = 20;
+/** …and used at the change if it is no older than this (TIDAL's addresses last longer). */
+const STREAM_FRESH_MS = 5 * 60_000;
+
 export class TidalSource implements MusicSource {
   readonly id = "tidal" as const;
   readonly label = "TIDAL";
@@ -55,16 +60,26 @@ export class TidalSource implements MusicSource {
   private liked = new Set<string>();
   private failure: string | undefined;
   private failedInRow = 0;
+  /**
+   * Between one track and the next: the element pauses as a track ends and as its source is changed, and a page
+   * that said "paused" then let the car take its own sound back — the car's radio or app played for a second or
+   * two before the next track (2026-10-04). Through the change the player stays "playing".
+   */
+  private switching = false;
+  /** The next track's stream, asked a little before this one ends: no round trip to TIDAL at the change. */
+  private nextStream: { id: string; url: string; at: number } | null = null;
 
   constructor() {
     this.audio = new Audio();
     this.audio.preload = "auto";
 
     this.audio.addEventListener("ended", () => {
+      this.switching = true;
       void this.advance();
     });
 
     this.audio.addEventListener("playing", () => {
+      this.switching = false;
       this.playing = true;
       this.failure = undefined;
       this.failedInRow = 0;
@@ -72,11 +87,15 @@ export class TidalSource implements MusicSource {
     });
 
     this.audio.addEventListener("pause", () => {
+      // The pause of a track ending, or of its source changed for the next: not the listener's.
+      if (this.switching || this.audio.ended) return;
       this.playing = false;
       this.emitNow();
     });
 
     this.audio.addEventListener("timeupdate", () => {
+      const left = this.audio.duration - this.audio.currentTime;
+      if (Number.isFinite(left) && left < PREPARE_NEXT_S) void this.prepareNext();
       this.emitNow();
     });
 
@@ -294,30 +313,59 @@ export class TidalSource implements MusicSource {
     this.at++;
     const track = this.queue[this.at];
     if (!track) {
+      this.switching = false;
       this.playing = false;
       this.emitNow();
       return;
     }
 
     const load = ++this.load;
+    this.switching = true;
+    const ready = this.nextStream?.id === track.id && Date.now() - this.nextStream.at < STREAM_FRESH_MS ? this.nextStream.url : null;
     try {
-      this.audio.src = `/api/music/tidal/track/${encodeURIComponent(track.id)}/audio`;
+      this.nextStream = null;
+      this.audio.src = ready ?? `/api/music/tidal/track/${encodeURIComponent(track.id)}/audio`;
       await this.audio.play();
       if (load !== this.load) return;
       this.failure = undefined;
     } catch (e) {
+      if (load === this.load) this.switching = false;
       // A newer load took the element (the next button twice): its play() is the one that counts. Taking this
       // for a failure skipped a track for each tap, the two chains interrupting each other.
       if (load !== this.load || (e as Error)?.name === "AbortError") return;
+      // The address asked ahead refused (gone stale): the same track by the usual way, not a skip.
+      if (ready) {
+        this.at--;
+        return this.advance(skips);
+      }
       if (skips < 3 && this.queue[this.at + 1]) {
         return this.advance(skips + 1);
       }
       this.failure = "재생 실패: 다음 곡으로 넘어갈 수 없습니다";
+      this.playing = false;
+      this.emitNow();
       throw e;
     }
 
     this.emitNow();
   }
+
+  /** The next track's stream address, once a track (it is TIDAL's own, good for some minutes). */
+  private async prepareNext(): Promise<void> {
+    const next = this.queue[this.at + 1];
+    if (!next || this.nextStream?.id === next.id || this.preparing === next.id) return;
+    this.preparing = next.id;
+    try {
+      const res = await fetch(`/api/music/tidal/track/${encodeURIComponent(next.id)}/stream`);
+      const body = (await res.json().catch(() => ({}))) as { url?: string };
+      if (res.ok && body.url && this.queue[this.at + 1]?.id === next.id) this.nextStream = { id: next.id, url: body.url, at: Date.now() };
+    } catch {
+      /* asked at the change instead */
+    } finally {
+      this.preparing = null;
+    }
+  }
+  private preparing: string | null = null;
 
   async shuffle(on: boolean): Promise<void> {
     this.shuffled = on;

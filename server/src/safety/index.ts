@@ -23,6 +23,12 @@ export interface Feature {
   direction?: string;
   /** A camera inside a 보호구역 (경찰청's 보호구역구분: 2 어린이, 1 노인): what tells a school zone its limit. */
   zone?: "school" | "senior";
+  /** A 구간 단속 camera's other end (the start's end, the end's start): which way along a road its stretch runs. */
+  pair?: [number, number];
+  /** A 구간 단속 camera's 설치장소, which names its stretch ("…종점(이촌동, 성수JC→원효대교)", "…서울방향 시점"). */
+  site?: string;
+  /** The carriageways the camera stands on: the way each runs and the camera put on it (safety/roads.ts). */
+  ways?: { deg: number; at: [number, number] }[];
   name?: string;
   /** For an area rather than a point (an accident hotspot, a school zone): how far round the centre it reaches. */
   radiusM?: number;
@@ -62,6 +68,7 @@ export class SafetyIndex {
 
   build(): this {
     zoneLimits(this.features);
+    sectionPairs(this.features);
     if (this.features.length === 0) {
       this.tree = null;
       return this;
@@ -132,6 +139,53 @@ export function zoneLimits(features: Feature[]): void {
   });
 }
 
+/** The stretch a 구간 단속 camera's site names: "성수JC→원효대교" of "…(이촌동, 성수JC→원효대교)", "서울방향" of "…256.8k 서울방향 시점". */
+export function stretchOf(f: Feature): string | null {
+  const site = f.site ?? "";
+  const arrow = site.match(/\(([^()]*→[^()]*)\)/)?.[1];
+  if (arrow) return arrow.replace(/^[^,]*,\s*/, "").replace(/\s+/g, "");
+  const toward = site.match(/(\S+방향)/)?.[1];
+  return toward ? `${f.name ?? ""}:${toward.replace(/^\d+(\.\d+)?[kK]/, "")}` : null;
+}
+
+/** The shortest a 구간 단속 runs: a start and end nearer than this are the two carriageways' cameras at one place. */
+const SECTION_MIN_M = 500;
+const SECTION_LONGEST_M = 40_000;
+
+/**
+ * Each 구간 단속 camera given its other end, so the page can tell which way the stretch runs: a two-way road has
+ * one stretch each way, the start of one by the end of the other, and the data says no bearing. A start's end is
+ * the nearest end of its direction code, limit and road (where both name one), at least SECTION_MIN_M off.
+ */
+export function sectionPairs(features: Feature[]): void {
+  const code = (f: Feature) => (f.direction ?? "").trim().replace(/^0+/, "");
+  const of = (kind: Kind) => features.filter((f) => f.kind === kind).map((f) => ({ f, key: stretchOf(f) }));
+  const starts = of("section-start"), ends = of("section-end");
+  const pairs = new Map<Feature, [number, number]>();
+  // Each camera finds its own other end (an end its start, as a start its end): a pair given only from the starts'
+  // side left an end with whichever start took it first. Where the sites name the stretch, one of the same name:
+  // Seoul gives every stretch on a road one direction code, and the nearest end of it was another stretch's
+  // (서강대교's start paired with 이촌동's end). A camera whose site names none is paired among those that name none.
+  for (const [mine, theirs] of [[starts, ends], [ends, starts]] as const) {
+    for (const { f, key } of mine) {
+      let pool = theirs.filter(({ f: o }) => code(o) === code(f) && (o.limit ?? 0) === (f.limit ?? 0) && !(f.name && o.name && f.name !== o.name));
+      const same = pool.filter((o) => o.key === key);
+      if (same.length) pool = same;
+      let best: { f: Feature; d: number } | null = null;
+      for (const { f: o } of pool) {
+        const d = metres(f.lon, f.lat, o.lon, o.lat);
+        if (d < SECTION_MIN_M || d > SECTION_LONGEST_M || (best && d >= best.d)) continue;
+        best = { f: o, d };
+      }
+      if (best) pairs.set(f, [best.f.lon, best.f.lat]);
+    }
+  }
+  features.forEach((f, i) => {
+    const pair = pairs.get(f);
+    if (pair) features[i] = { ...f, pair };
+  });
+}
+
 /** Equirectangular distance; fine under a few kilometres. */
 export function metres(lon1: number, lat1: number, lon2: number, lat2: number): number {
   const x = (lon2 - lon1) * M_PER_DEG_LAT * Math.cos(((lat1 + lat2) / 2) * (Math.PI / 180));
@@ -178,6 +232,7 @@ export function featuresOf(rows: Record<string, string | undefined>[], source: s
       direction: row["도로노선방향"] || undefined,
       name: row["도로노선명"] || row["도로명"] || row["설치장소"] || undefined,
       ...(zoneOf(row["보호구역구분"]) ? { zone: zoneOf(row["보호구역구분"]) } : {}),
+      ...(kind === "section-start" || kind === "section-end") && row["설치장소"] ? { site: row["설치장소"] } : {},
     });
   });
   return out;

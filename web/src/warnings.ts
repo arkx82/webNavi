@@ -44,6 +44,10 @@ export interface Feature {
   direction?: string;
   /** A camera inside a 보호구역 (school or senior zone): its limit is the zone's. */
   zone?: "school" | "senior";
+  /** A 구간 단속 camera's other end (server/src/safety/index.ts sectionPairs). */
+  pair?: LonLat;
+  /** The carriageways the camera stands on, the way each runs (server/src/safety/roads.ts). */
+  ways?: { deg: number; at: LonLat }[];
 }
 
 export interface Ahead {
@@ -58,6 +62,9 @@ export interface Ahead {
 
 /** Features more than this far from the route are on another road. */
 export const ON_ROUTE_M = 25;
+/** A camera's carriageways (Feature.ways) this near the route and all running against it (the graph is asked in 45° steps, ±23°): the other way's. */
+export const OTHER_WAY_M = 30;
+export const AGAINST_DEG = 110;
 /**
  * Kinds placed further off than a camera: a rest area sits beside the
  * carriageway, and ITS puts an incident on its link's line, which can be
@@ -104,6 +111,7 @@ function mergeCameras(a: Feature, b: Feature): Feature {
 const directionOf = (f: Feature) => (f.direction ?? "").trim().replace(/^0+/, "");
 /** A start and an end of two different directions this close together are the two carriageways' cameras at one place. */
 const SECTION_TWIN_M = 300;
+const metresBetween = (a: LonLat, b: LonLat) => Math.hypot((b[0] - a[0]) * 111_320 * Math.cos(((a[1] + b[1]) / 2) * Math.PI / 180), (b[1] - a[1]) * 111_320);
 /** The limits a zone camera can give its zone. */
 const ZONE_LIMITS = new Set([20, 30, 40, 50, 60]);
 
@@ -148,6 +156,13 @@ export class RouteWatch {
       return;
     }
     if (p.offM > Math.max(REACH_M[f.kind] ?? ON_ROUTE_M, f.radiusM ?? 0)) return;
+    // The other way's camera — every carriageway it stands on runs against the route (강변북로 westbound, beside
+    // the ramp east onto 청담대교, 2026-10-04) — is not the route's. A camera at a crossing put on the cross street
+    // says nothing either way, and is kept.
+    if (f.ways?.length && f.ways.every((w) => {
+      const q = this.line.project(w.at, Math.max(0, p.segment - 5), 12);
+      return q.offM <= OTHER_WAY_M && angleBetween(q.bearing, w.deg) >= AGAINST_DEG;
+    })) return;
     // One camera, one warning: a 신호·과속 camera the lists give as two rows (a speed one and a signal one,
     // or the same one from two sources) was said twice at once, "과속 단속 … 오십" and "신호 단속" together.
     if (MERGED_CAMERAS.has(f.kind)) {
@@ -182,22 +197,29 @@ export class RouteWatch {
   }
 
   /**
-   * The 구간 단속 stretches, and the section cameras that are the other carriageway's. A two-way road has both
-   * directions' cameras on it: where this one's starts, the other's ends (beside it), and where this one ends, the
-   * other's starts. Paired start-then-end in order along the route, the other's end closed this one's stretch at
-   * once, and its start at the far end was said as "구간 단속이 시작됩니다" as the car left the stretch. A start
-   * and end share their direction code: paired by it, ours run start → end along the route and the other's end →
-   * start; those, and an end standing by a start of another direction, are not said.
+   * The 구간 단속 stretches, and the section cameras that are the other way's. A two-way road has one stretch each
+   * way, the start of one by the end of the other: a stretch begins at a start camera only where the route heads
+   * for that camera's end (Feature.pair, the server's pairing) and runs to it — to the end camera where the route
+   * passes it, or where the route comes nearest it and turns off. On 2026-10-04 the start camera of 동부간선's
+   * northbound stretch (면목, its end at 상계 6 km north) was passed going south, and the stretch ran on for the
+   * route's last 20 km. A camera with no pair is read by direction code and order, as before.
    */
   private sectionPlan(): { sections: { feature: Feature; alongM: number; endM: number }[]; silent: Set<string> } {
     if (this.sectionsOf === this.onRoute) return this.sectionsKnown;
     const sections: { feature: Feature; alongM: number; endM: number }[] = [];
     const silent = new Set<string>();
     const cams = this.onRoute.filter((f) => f.feature.kind === "section-start" || f.feature.kind === "section-end");
+    const dist = (along: number, to: LonLat) => metresBetween(this.line.place(Math.max(0, Math.min(this.line.lengthM, along))).at, to);
+    /** Whether the route at [along] goes toward [to] (+1), away from it (-1), or neither clearly. */
+    const heading = (along: number, to: LonLat) => {
+      const step = Math.min(500, Math.max(100, dist(along, to) / 3));
+      const before = dist(along - step, to), after = dist(along + step, to);
+      return after < before - step * 0.3 ? 1 : after > before + step * 0.3 ? -1 : 0;
+    };
+    // First the stretches the route drives whole: a start, then the end of its direction code after it.
     const used = new Set<(typeof cams)[number]>();
     for (const end of cams) {
       if (end.feature.kind !== "section-end") continue;
-      // The nearest start before it of its direction, not yet closed.
       const start = cams.filter((s) => s.feature.kind === "section-start" && !used.has(s) && directionOf(s.feature) === directionOf(end.feature)
         && s.alongM < end.alongM && end.alongM - s.alongM <= SECTION_MAX_M).pop();
       if (!start) continue;
@@ -206,18 +228,32 @@ export class RouteWatch {
     }
     for (const f of cams) {
       if (used.has(f)) continue;
-      const dir = directionOf(f.feature);
+      const dir = directionOf(f.feature), pair = f.feature.pair;
       if (f.feature.kind === "section-start") {
-        // An end of its direction behind it, left unpaired: the two are the other carriageway's, driven the other way.
+        // Its end not on the route. Its pair behind (the other way's stretch — 동부간선 northbound's start passed going
+        // south on 2026-10-04, which ran on for the route's last 20 km), or an end of its direction behind it: unsaid.
+        const away = pair ? heading(f.alongM, pair) === -1 : false;
         const reversed = dir !== "" && cams.some((e) => e.feature.kind === "section-end" && !used.has(e) && directionOf(e.feature) === dir && e.alongM < f.alongM - SECTION_TWIN_M && f.alongM - e.alongM <= SECTION_MAX_M);
-        if (reversed) { silent.add(f.feature.id); continue; }
-        sections.push({ feature: f.feature, alongM: f.alongM, endM: Math.min(this.line.lengthM, f.alongM + SECTION_MAX_M) });
+        if (away || reversed) { silent.add(f.feature.id); continue; }
+        // To where the route comes nearest its end and turns off; without a pair, SECTION_MAX_M at most.
+        let endM = Math.min(this.line.lengthM, f.alongM + SECTION_MAX_M);
+        if (pair) {
+          let nearest = Infinity;
+          const last = endM;
+          for (let m = f.alongM; m <= last; m += 25) {
+            const d = dist(m, pair);
+            if (d < nearest) { nearest = d; endM = m; }
+            else if (d > nearest + 2000) break;
+          }
+        }
+        sections.push({ feature: f.feature, alongM: f.alongM, endM });
       } else {
-        // An end with no start before it: the other carriageway's, beside a start of another direction or with its
-        // start further on — or this one's, the car having joined the stretch partway (then it is said).
+        // An end with no start before it: the other way's — its start ahead, or beside a start of another direction —
+        // or this one's, the car having joined the stretch partway (then it is said).
+        const toward = pair ? heading(f.alongM, pair) === 1 : false;
         const twin = cams.some((s) => s.feature.kind === "section-start" && directionOf(s.feature) !== dir && Math.abs(s.alongM - f.alongM) <= SECTION_TWIN_M);
         const reversed = dir !== "" && cams.some((s) => s.feature.kind === "section-start" && !used.has(s) && directionOf(s.feature) === dir && s.alongM > f.alongM + SECTION_TWIN_M && s.alongM - f.alongM <= SECTION_MAX_M);
-        if (twin || reversed) silent.add(f.feature.id);
+        if (toward || twin || reversed) silent.add(f.feature.id);
       }
     }
     sections.sort((a, b) => a.alongM - b.alongM);

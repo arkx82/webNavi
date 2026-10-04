@@ -10,6 +10,7 @@ import { Osrm } from "./route/osrm.js";
 import { sayMissedTurns } from "./route/missed.js";
 import { ProviderError, type LonLat, type Provider, type Route, type RouteProvider } from "./route/types.js";
 import { SafetyIndex } from "./safety/index.js";
+import { CameraRoads } from "./safety/roads.js";
 import { CAMERAS_MAX_AGE_MS, CAMERAS_VERSION, fetchCameras, keptCameras } from "./safety/cameras.js";
 import { Hotspots } from "./safety/hotspots.js";
 import { BUMPS, DATASET_MAX_AGE_MS, LIGHTS, SCHOOL_ZONES, SENIOR_ZONES, SEOUL_LIGHTS, kept, refresh, type Dataset, type KeptSet } from "./safety/datasets.js";
@@ -83,6 +84,11 @@ const dataDir = env.DATA_DIR ?? join(root, "data");
 // and asked again weekly. The index is rebuilt whole when that comes.
 const configDir = env.CONFIG_DIR ?? join(root, "config");
 let cameras = keptCameras(configDir);
+/** Each camera on its own road (safety/roads.ts), asked of our road graph once a camera. */
+const cameraRoads = new CameraRoads(configDir, () => env.KOREA_OSRM_URL, (m) => app.log.info(m));
+async function fillCameraRoads() {
+  if (cameras && (await cameraRoads.fill(cameras.features).catch(() => false))) safety = buildSafety();
+}
 // Speed bumps and school zones, the same way: the whole country, kept a week.
 const DATASETS: Dataset[] = [BUMPS, SCHOOL_ZONES, LIGHTS, SEOUL_LIGHTS, SENIOR_ZONES];
 const sets = new Map<Dataset["name"], KeptSet>();
@@ -96,7 +102,7 @@ const hdPoints = new HdPoints(join(workDir, "hdmap"), (m) => app.log.info(m));
 let safety = buildSafety();
 function buildSafety(): SafetyIndex {
   const index = SafetyIndex.fromDirectory(dataDir);
-  if (cameras) index.add(cameras.features);
+  if (cameras) index.add(cameraRoads.apply(cameras.features));
   index.add(hdPoints.features);
   for (const k of sets.values()) index.add(hdPoints.without(k.features));
   return index.build();
@@ -604,8 +610,8 @@ await app.listen({ port, host: "0.0.0.0" });
 // the page's own 고정 멘트 렌더링 button, or the next start.
 // The cameras now, and again each hour: a week-old list is asked again,
 // and a refusal (the 활용신청 not yet through) is retried soon after.
-void refreshCameras().then(() => refreshSets());
-setInterval(() => void refreshCameras().then(() => refreshSets()), 3_600_000);
+void refreshCameras().then(() => fillCameraRoads()).then(() => refreshSets());
+setInterval(() => void refreshCameras().then(() => fillCameraRoads()).then(() => refreshSets()), 3_600_000);
 
 // Then the kept sentences that end cut off: taken out, and the ones still said made again.
 async function repairVoice() {

@@ -277,3 +277,50 @@ test("two 구간 단속 one after another the same way are both kept", () => {
   assert.deepEqual(watch.sections().map((s) => s.feature.id), ["a", "c"]);
   assert.deepEqual(watch.ahead(0, 2100).map((a) => a.feature.id), ["a", "b", "c"]);
 });
+
+test("a stretch's start camera passed the other way (its end behind, 동부간선 southbound 2026-10-04) opens no stretch", () => {
+  const watch = new RouteWatch(route);
+  // The route goes north then east. The other way's start at 900 m, its end back at the route's start, 1 km south.
+  const end = offset(start, 180, 200);
+  watch.add([{ id: "theirs", kind: "section-start", ...lonLat(offset(start, 0, 900)), limit: 80, direction: "1", pair: end }]);
+  assert.deepEqual(watch.sections(), []);
+  assert.deepEqual(watch.ahead(0, 2100).map((a) => a.feature.id), []);
+  assert.equal(watch.limitAt(1500), null);
+});
+
+test("a stretch the route takes runs from its start to where the route leaves for good, not 25 km on", () => {
+  const watch = new RouteWatch(route);
+  // Start at 200 m going north, its end 3 km further north; the route turns east at 1 km.
+  const end = offset(start, 0, 4000);
+  watch.add([{ id: "ours", kind: "section-start", ...lonLat(offset(start, 0, 200)), limit: 60, direction: "2", pair: end }]);
+  const [s] = watch.sections();
+  assert.equal(s.feature.id, "ours");
+  assert.ok(Math.abs(s.endM - 1000) < 30, `${s.endM}`);
+  assert.equal(watch.limitAt(1500), null);
+});
+
+test("an end camera the route comes to from the far side is the other way's, and unsaid", () => {
+  const watch = new RouteWatch(route);
+  // An end at 500 m whose start is 2 km further north: going north the car meets the end before the start.
+  watch.add([{ id: "end", kind: "section-end", ...lonLat(offset(start, 0, 500)), direction: "1", pair: offset(start, 0, 2500) }]);
+  assert.deepEqual(watch.ahead(0, 2100).map((a) => a.feature.id), []);
+});
+
+test("the other way's camera (its carriageway against the route) is not the route's; one at a crossing is", () => {
+  const watch = new RouteWatch(route);
+  // The route runs north here.
+  const at = (m: number, side: number) => offset(offset(start, 0, m), 90, side);
+  watch.add([
+    // The other way's, on the far carriageway (강변북로 westbound by the ramp east, 2026-10-04).
+    { id: "other-way", kind: "speed", ...lonLat(at(500, 12)), limit: 80, ways: [{ deg: 180, at: at(500, 12) }] },
+    // Our way, but a road beside the route, 20 m off.
+    { id: "beside", kind: "speed", ...lonLat(at(600, 19)), limit: 80, ways: [{ deg: 0, at: at(600, 20) }] },
+    // Ours, on a two-way street, and one at a crossing with the cross street the nearer.
+    { id: "ours", kind: "speed", ...lonLat(at(700, 6)), limit: 80, ways: [{ deg: 0, at: at(700, 3) }, { deg: 180, at: at(700, 3) }] },
+    { id: "crossing", kind: "signal", ...lonLat(at(800, 8)), ways: [{ deg: 90, at: at(800, 9) }, { deg: 0, at: at(800, 4) }] },
+    // Not put on a road (the server could not ask): as before.
+    { id: "unknown", kind: "speed", ...lonLat(at(900, 10)), limit: 80 },
+  ]);
+  // "beside" runs our way, 20 m off: a carriageway of ours drawn apart, or a road beside — kept, as before.
+  assert.deepEqual(watch.ahead(0).map((a) => a.feature.id), ["beside", "ours", "crossing", "unknown"]);
+});
