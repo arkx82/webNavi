@@ -2305,6 +2305,9 @@ function sentencesOf(g: Guide, next: Guide | null, alongM: number): string[] {
   return [...out];
 }
 
+/** The road ahead is looked at this often at most (watchRoad), and when it last was. */
+const ROAD_EVERY_MS = 300;
+let roadCheckedAt = 0;
 async function watchRoad(fix: Fix) {
   const w = watch, r = route;
   if (!w || !r) return;
@@ -2325,6 +2328,12 @@ async function watchRoad(fix: Fix) {
   if (!incidentsAt || Date.now() - incidentsAt.t > INCIDENTS_EVERY_MS || metres(incidentsAt.at[0], incidentsAt.at[1], fix.lon, fix.lat) > 8000) {
     void placeIncidents(w, [fix.lon, fix.lat]);
   }
+  // The warnings, the limit, the cards and the map's bands a few times a second, not at every fix: the car's browser
+  // gives ten a second (2026-10-04), and all this ten times a second slowed the page through a long drive. The car on
+  // the map still moves at every fix and every frame.
+  const now = performance.now();
+  if (now - roadCheckedAt < ROAD_EVERY_MS) return;
+  roadCheckedAt = now;
   const along = tracker.frame()?.alongM;
   if (along == null) return;
   for (const due of w.due(along)) {

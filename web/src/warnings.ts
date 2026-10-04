@@ -100,6 +100,8 @@ const ALL: WatchPrefs = { wants: () => true, cameraFromM: 600 };
 
 /** Cameras this close along the route are one camera. */
 const CAMERA_TWIN_M = 40;
+/** No feature that begins more than this before the car is about it any more (an area runs a few hundred metres). */
+const BEHIND_M = 3000;
 /** The longest a 구간 단속 is taken to run past its start camera when its end camera is not on the route. */
 export const SECTION_MAX_M = 25_000;
 const MERGED_CAMERAS = new Set<Kind>(["speed", "signal", "speed-signal"]);
@@ -197,7 +199,32 @@ export class RouteWatch {
    * off 양재대로 has its zone on the lane its gate is on, not on the eight lanes of 양재대로 (2026-10-04, warned twice).
    * A zone the server could not put on a road is taken as before.
    */
+  /**
+   * The first feature that can still be about [alongM]: none that begins more than BEHIND_M before it ends after it
+   * (a zone, a hotspot: a few hundred metres). Asked ten times a second, from the route's start the scan grew with
+   * every kilometre driven — thousands of lights and bumps behind the car — and the page slowed through a long drive.
+   */
+  private firstNear(alongM: number): number {
+    const from = alongM - BEHIND_M;
+    let lo = 0, hi = this.onRoute.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (this.onRoute[mid].alongM < from) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  }
+
+  /** zoneHere's answers, kept while the features stay the same (it projects onto the whole line). */
+  private zonesKnown = new Map<string, boolean>();
+  private zonesOf: unknown = null;
   private zoneHere(z: { feature: Feature; alongM: number; endM: number }): boolean {
+    if (this.zonesOf !== this.onRoute) { this.zonesKnown.clear(); this.zonesOf = this.onRoute; }
+    let here = this.zonesKnown.get(z.feature.id);
+    if (here === undefined) this.zonesKnown.set(z.feature.id, (here = this.zoneHereNow(z)));
+    return here;
+  }
+  private zoneHereNow(z: { feature: Feature; alongM: number; endM: number }): boolean {
     const way = z.feature.ways?.[0];
     if (!way) return true;
     const zone = z.feature.kind === "school-zone" ? "school" : "senior";
@@ -319,7 +346,8 @@ export class RouteWatch {
   ahead(alongM: number, horizonM = 1000): Ahead[] {
     const out: Ahead[] = [];
     const silent = this.sectionPlan().silent;
-    for (const f of this.onRoute) {
+    for (let i = this.firstNear(alongM); i < this.onRoute.length; i++) {
+      const f = this.onRoute[i];
       const inM = f.alongM - alongM;
       if (inM < -10 && f.endM < alongM) continue;
       if (inM > horizonM) break;
@@ -385,7 +413,8 @@ export class RouteWatch {
     const section: number | null = this.currentSection(alongM)?.limit ?? null;
     let school: number | null = null;
     const prefs = this.prefs();
-    for (const f of this.onRoute) {
+    for (let i = this.firstNear(alongM); i < this.onRoute.length; i++) {
+      const f = this.onRoute[i];
       if (f.alongM > alongM) break;
       // Inside a school zone the limit holds whatever a camera says — the zone's own, where it has one.
       const limit = (f.feature.kind === "school-zone" || f.feature.kind === "senior-zone") && this.zoneHere(f) ? this.zoneLimit(f) : undefined;
