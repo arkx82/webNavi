@@ -2351,7 +2351,10 @@ async function watchRoad(fix: Fix) {
     if (same && metres(same.at[0], same.at[1], f.lon, f.lat) < SAME_PLACE_M && Date.now() - same.t < 20_000) continue;
     spokenAt.set(phrase, { at: [f.lon, f.lat], t: Date.now() });
     log(`경고 ${phrase}`);
-    voice.say(phrase, undefined, { key: `warn:${f.id}:${due.rungM}` });
+    // Said while its distance still holds — until the car is 30 % nearer than it says: "육백미터 앞" said fourteen seconds
+    // late, behind another, was 400 m out (a pretend drive, 2026-10-05).
+    const mps = Math.max(5, speedOf(fix) ?? 0);
+    voice.say(phrase, undefined, { key: `warn:${f.id}:${due.rungM}`, withinS: Math.max(3, Math.min(20, (due.inM - due.rungM * 0.7) / mps)) });
   }
   showSectionHud(tracker.frame());
   showLimit(w.limitAt(along), speedOf(fix));

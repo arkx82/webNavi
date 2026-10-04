@@ -350,7 +350,9 @@ export class Tracker {
         // On the road the car is kept moving at its speed, frame by frame, and steered toward where the last fix
         // says it should be by now — the fix's place plus the way travelled since. A glide that ran from fix to fix
         // stopped dead at each one and jumped when the next came late; this never stops while the car moves.
-        const dt = this.lastFrameAt ? Math.min(0.25, (now - this.lastFrameAt) / 1000) : 0;
+        // The time since the last frame, whole up to a second: held to a quarter, a page drawing four frames a second or
+        // fewer (a busy car computer) moved the car less than it went, and the lag grew to 40 m at 110 km/h (2026-10-05).
+        const dt = this.lastFrameAt ? Math.min(1, (now - this.lastFrameAt) / 1000) : 0;
         const predicted = this.glideToAlong + this.speedMps * Math.min(PREDICT_S, (now - this.lastFixAt) / 1000);
         let along = this.shownAlong ?? predicted;
         // Past PREDICT_S the place it is steered to stands: the car is carried no further than that, not crept on
