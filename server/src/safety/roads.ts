@@ -75,7 +75,8 @@ export class CameraRoads {
           const f = todo[next++];
           try {
             this.kept[f.id] = await this.waysOf(base, f);
-            done++;
+            // Kept as it goes: the whole list is twenty minutes, and a restart should not start it over.
+            if (++done % 2000 === 0) writeFileSync(join(this.dir, "camera-roads.json"), JSON.stringify(this.kept));
           } catch {
             failed++;
             // The graph not up (a restart): left for the next round.
