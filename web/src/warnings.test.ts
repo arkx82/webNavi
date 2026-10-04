@@ -324,3 +324,22 @@ test("the other way's camera (its carriageway against the route) is not the rout
   // "beside" runs our way, 20 m off: a carriageway of ours drawn apart, or a road beside — kept, as before.
   assert.deepEqual(watch.ahead(0).map((a) => a.feature.id), ["beside", "ours", "crossing", "unknown"]);
 });
+
+test("a school zone whose school is on a side street is not the route's, unless a camera of the zone stands on the route", () => {
+  const watch = new RouteWatch(route);
+  const at = (m: number, side: number) => offset(offset(start, 0, m), 90, side);
+  watch.add([
+    // 36 m off the route, its gate on a lane 50 m off (양재대로's 예지어린이집).
+    { id: "side", kind: "school-zone", ...lonLat(at(400, 36)), ways: [{ deg: -1, at: at(400, 50) }] },
+    // The same, but a school camera of the zone on the route by it: the zone is the route's.
+    { id: "cam-zone", kind: "school-zone", ...lonLat(at(800, 40)), ways: [{ deg: -1, at: at(800, 55) }] },
+    { id: "cam", kind: "speed", ...lonLat(at(820, 6)), limit: 30, zone: "school" },
+    // Its street the route itself.
+    { id: "on", kind: "school-zone", ...lonLat(offset(corner, 90, 500)), ways: [{ deg: -1, at: offset(corner, 90, 500) }] },
+  ]);
+  const ids = watch.ahead(0, 2100).map((a) => a.feature.id);
+  assert.ok(!ids.includes("side"), ids.join(","));
+  assert.ok(ids.includes("cam-zone") && ids.includes("on"), ids.join(","));
+  assert.notEqual(watch.limitAt(400)?.why, "school", "no school limit by the side street's zone (the camera ahead may give one)");
+  assert.deepEqual(watch.limitAt(800), { limit: 30, why: "school" });
+});

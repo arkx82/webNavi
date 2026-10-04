@@ -87,7 +87,8 @@ let cameras = keptCameras(configDir);
 /** Each camera on its own road (safety/roads.ts), asked of our road graph once a camera. */
 const cameraRoads = new CameraRoads(configDir, () => env.KOREA_OSRM_URL, (m) => app.log.info(m));
 async function fillCameraRoads() {
-  if (cameras && (await cameraRoads.fill(cameras.features).catch(() => false))) safety = buildSafety();
+  const zones = [...sets.values()].flatMap((k) => k.features.filter((f) => f.kind === "school-zone" || f.kind === "senior-zone"));
+  if (cameras && (await cameraRoads.fill([...cameras.features, ...zones]).catch(() => false))) safety = buildSafety();
 }
 // Speed bumps and school zones, the same way: the whole country, kept a week.
 const DATASETS: Dataset[] = [BUMPS, SCHOOL_ZONES, LIGHTS, SEOUL_LIGHTS, SENIOR_ZONES];
@@ -104,7 +105,7 @@ function buildSafety(): SafetyIndex {
   const index = SafetyIndex.fromDirectory(dataDir);
   if (cameras) index.add(cameraRoads.apply(cameras.features));
   index.add(hdPoints.features);
-  for (const k of sets.values()) index.add(hdPoints.without(k.features));
+  for (const k of sets.values()) index.add(cameraRoads.apply(hdPoints.without(k.features)));
   return index.build();
 }
 // The HD points read when their files come or change (build.py writes them whole), the index rebuilt then.

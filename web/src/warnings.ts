@@ -65,6 +65,8 @@ export const ON_ROUTE_M = 25;
 /** A camera's carriageways (Feature.ways) this near the route and all running against it (the graph is asked in 45° steps, ±23°): the other way's. */
 export const OTHER_WAY_M = 30;
 export const AGAINST_DEG = 110;
+/** A 보호구역's street (the road nearest its school) this near the route is the route. */
+export const ZONE_ROAD_M = 15;
 /**
  * Kinds placed further off than a camera: a rest area sits beside the
  * carriageway, and ITS puts an incident on its link's line, which can be
@@ -184,7 +186,21 @@ export class RouteWatch {
 
   /** The protected zones on the route (school, senior), each as the stretch of it they cover. */
   zones(): { feature: Feature; alongM: number; endM: number }[] {
-    return this.onRoute.filter((f) => f.feature.kind === "school-zone" || f.feature.kind === "senior-zone");
+    return this.onRoute.filter((f) => (f.feature.kind === "school-zone" || f.feature.kind === "senior-zone") && this.zoneHere(f));
+  }
+
+  /**
+   * Whether a 보호구역 near the route is on it: its school's street is the route (the road nearest the school,
+   * Feature.ways, within ZONE_ROAD_M of the line), or a camera of the zone stands on the route by it. A 어린이집 36 m
+   * off 양재대로 has its zone on the lane its gate is on, not on the eight lanes of 양재대로 (2026-10-04, warned twice).
+   * A zone the server could not put on a road is taken as before.
+   */
+  private zoneHere(z: { feature: Feature; alongM: number; endM: number }): boolean {
+    const road = z.feature.ways?.[0]?.at;
+    if (!road) return true;
+    if (this.line.project(road, 0, this.line.path.length).offM <= ZONE_ROAD_M) return true;
+    const zone = z.feature.kind === "school-zone" ? "school" : "senior";
+    return this.onRoute.some((f) => f.feature.zone === zone && f.alongM >= z.alongM - 50 && f.alongM <= z.endM + 50);
   }
 
   /**
@@ -302,6 +318,7 @@ export class RouteWatch {
       // The other carriageway's 구간 단속 cameras are not ahead of this car, whatever the line they project onto.
       if (silent.has(f.feature.id)) continue;
       const zone = f.feature.kind === "school-zone" || f.feature.kind === "senior-zone";
+      if (zone && !this.zoneHere(f)) continue;
       out.push({ feature: zone ? { ...f.feature, limit: this.zoneLimit(f) } : f.feature, alongM: f.alongM, endM: f.endM, inM });
     }
     return out;
@@ -363,7 +380,7 @@ export class RouteWatch {
     for (const f of this.onRoute) {
       if (f.alongM > alongM) break;
       // Inside a school zone the limit holds whatever a camera says — the zone's own, where it has one.
-      const limit = f.feature.kind === "school-zone" || f.feature.kind === "senior-zone" ? this.zoneLimit(f) : undefined;
+      const limit = (f.feature.kind === "school-zone" || f.feature.kind === "senior-zone") && this.zoneHere(f) ? this.zoneLimit(f) : undefined;
       if (limit && f.endM >= alongM && (prefs.shows?.(f.feature.kind) ?? true)) school = Math.min(school ?? Infinity, limit);
     }
     if (school != null) return { limit: school, why: "school" };

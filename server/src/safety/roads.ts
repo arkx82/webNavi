@@ -12,9 +12,13 @@ import type { Feature } from "./index.js";
  * (web/src/warnings.ts): on 2026-10-04 a camera on 강변북로 westbound, 19 m
  * from the route east onto 청담대교, was warned of on the ramp ("제한 속도 팔십").
  */
-const KINDS = new Set(["speed", "signal", "speed-signal", "section-start", "section-end"]);
+const KINDS = new Set(["speed", "signal", "speed-signal", "section-start", "section-end", "school-zone", "senior-zone"]);
+/** A 보호구역 is put on the one road nearest its school (deg -1: any way): the street its gate is on. */
+const ZONES = new Set(["school-zone", "senior-zone"]);
 /** A camera further than this from any road of the graph is left as it is. */
 const SNAP_MAX_M = 25;
+/** A school further than this from any road says nothing of which. */
+const ZONE_SNAP_MAX_M = 150;
 /** Ways within this of the nearest are the camera's too: a two-way street, a camera at a crossing. */
 const SAME_M = 4;
 const HEADINGS = [0, 45, 90, 135, 180, 225, 270, 315];
@@ -48,6 +52,11 @@ export class CameraRoads {
 
   /** The camera's ways, asked of the graph; null where no road is near; throws where the graph cannot be asked. */
   private async waysOf(base: string, f: Feature): Promise<CameraWay[] | null> {
+    if (ZONES.has(f.kind)) {
+      const res = await fetch(`${base}/nearest/v1/driving/${f.lon},${f.lat}?number=1`, { signal: AbortSignal.timeout(5000) });
+      const w = ((await res.json()) as { waypoints?: { location: [number, number]; distance: number }[] }).waypoints?.[0];
+      return w && w.distance <= ZONE_SNAP_MAX_M ? [{ deg: -1, at: [Number(w.location[0].toFixed(6)), Number(w.location[1].toFixed(6))] }] : null;
+    }
     const found: { deg: number; at: [number, number]; d: number }[] = [];
     for (const deg of HEADINGS) {
       const res = await fetch(`${base}/nearest/v1/driving/${f.lon},${f.lat}?number=1&bearings=${deg},23`, { signal: AbortSignal.timeout(5000) });

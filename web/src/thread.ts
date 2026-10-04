@@ -315,37 +315,37 @@ export function applySnap(path: LonLat[], snapped: (LonLat | null)[], fixed: boo
   return path;
 }
 
-/** Computes lane bias (-1 leftmost, +1 rightmost, 0 center) for approaching turns so the line leads into optimal lanes. */
+/**
+ * The side each vertex's lane is taken on (server lanes.ts snap): -1 the leftmost, +1 the rightmost, 0 a through
+ * lane — the lane the next turn wants, from BIAS_TOWN_M before it in town and BIAS_FAST_M on a motorway (where the
+ * exit is said from 1 km and the lanes are changed early), as the car apps draw the line in the lane to be in.
+ */
+const BIAS_TOWN_M = 250;
+const BIAS_FAST_M = 600;
 function computeBiases(route: Route): number[] {
   const n = route.path.length;
   const biases = new Array<number>(n).fill(0);
   if (!route.guides || route.guides.length === 0 || n < 2) return biases;
 
   const line = new Line(route.path);
-  const turns: { alongM: number; bias: number }[] = [];
+  const turns: { alongM: number; bias: number; reach: number }[] = [];
   for (const g of route.guides) {
     const m = maneuverOf(route.provider, g);
     let bias = 0;
-    if (m === "left" || m === "sharp-left" || m === "slight-left" || m === "uturn") bias = -1;
+    if (m === "left" || m === "sharp-left" || m === "slight-left" || m === "ramp-left" || m === "uturn") bias = -1;
     else if (m === "right" || m === "sharp-right" || m === "slight-right" || m === "ramp-right") bias = 1;
     if (bias !== 0) {
-      const p = line.project(g.at);
-      turns.push({ alongM: p.alongM, bias });
+      const p = line.project(g.at, 0, line.path.length);
+      const fast = route.motorways?.some(([a, b]) => p.segment >= a && p.segment < b) ?? false;
+      turns.push({ alongM: p.alongM, bias, reach: fast ? BIAS_FAST_M : BIAS_TOWN_M });
     }
   }
   if (turns.length === 0) return biases;
 
-  let along = 0;
   for (let i = 0; i < n; i++) {
-    if (i > 0) along += metres(route.path[i - 1][0], route.path[i - 1][1], route.path[i][0], route.path[i][1]);
-    for (const t of turns) {
-      const inM = t.alongM - along;
-      if (inM >= 0 && inM <= 250) {
-        const share = Math.min(1, Math.max(0, (250 - inM) / 190));
-        biases[i] = t.bias * share;
-        break;
-      }
-    }
+    const along = line.along[i];
+    const t = turns.find((t) => t.alongM - along >= 0 && t.alongM - along <= t.reach);
+    if (t) biases[i] = t.bias;
   }
   return biases;
 }

@@ -353,36 +353,46 @@ export class LaneIndex {
       if (!Number.isFinite(heading)) return null;
       const d = SNAP_M / M, k = d / Math.cos((p[1] * Math.PI) / 180);
       const near = db.near.all(p[0] + k, p[0] - k, p[1] + d, p[1] - d) as unknown as Link[];
-      const found: { at: LonLat; off: number; year: number }[] = [];
+      const found: { at: LonLat; off: number; year: number; id: string | null; l: string | null; r: string | null }[] = [];
       for (const l of near) {
         const hit = nearestOn(p, lineOf(l));
         if (!hit || hit.off > SNAP_M || Math.abs(diff(heading, hit.bearing)) > SNAP_DEG) continue;
-        found.push({ at: hit.at, off: hit.off, year: surveyYear(l.id) });
+        found.push({ at: hit.at, off: hit.off, year: surveyYear(l.id), id: l.id, l: l.l, r: l.r });
       }
       if (found.length === 0) return null;
-      // One survey where several overlap; then the lanes of this carriageway: those within a road's width of the nearest.
+      // One survey where several overlap; then the carriageway the line is on: the nearest lane and the lanes beside it
+      // by the map's own neighbours (l, r) — not every lane within a road's width. An exit ramp just parted from the
+      // motorway is a road of its own: taken with the motorway's lanes 5–12 m off, the middle of them was a motorway
+      // lane, and the line went back onto the motorway and turned off it again further on (동부간선 → 하계역, 2026-10-04).
       const newest = Math.max(...found.map((f) => f.year));
       const ours = found.filter((f) => f.year === newest);
-      const least = Math.min(...ours.map((f) => f.off));
-      const row = ours.filter((f) => f.off <= least + CARRIAGEWAY_M);
+      const nearest = ours.reduce((a, b) => (b.off < a.off ? b : a));
+      const byId = new Map(ours.filter((f) => f.id).map((f) => [f.id!, f]));
+      let row = [nearest];
+      if (nearest.id && (nearest.l || nearest.r)) {
+        for (let at = nearest, guard = 0; at.l && byId.has(at.l) && guard < 12; guard++) { at = byId.get(at.l)!; row.unshift(at); }
+        for (let at = nearest, guard = 0; at.r && byId.has(at.r) && guard < 12; guard++) { at = byId.get(at.r)!; row.push(at); }
+      } else if (!nearest.id) {
+        const least = nearest.off;
+        row = ours.filter((f) => f.off <= least + CARRIAGEWAY_M);
+      }
       if (row.length === 1) return row[0].at;
 
-      // Sort lanes from left to right across the travel direction
+      // Left to right across the way the road runs.
       const hRad = (heading * Math.PI) / 180;
       const cosH = Math.cos(hRad), sinH = Math.sin(hRad);
       const withSide = row.map((f) => {
         const [x, y] = toXY(f.at, p);
-        const lateral = x * cosH - y * sinH;
-        return { at: f.at, lateral };
+        return { at: f.at, lateral: x * cosH - y * sinH };
       }).sort((a, b) => a.lateral - b.lateral);
 
+      // One lane, the one that serves the way on, never between two (a 4-lane road's middle was drawn on the line
+      // between 2차로 and 3차로): into a turn, the lane on its side; else a through lane, left of the middle — not
+      // the outermost, where the buses and the right turns are, nor the innermost, where the left turns are.
       const bias = biases?.[i] ?? 0;
-      // bias: -1 (leftmost), +1 (rightmost), 0 (center through-lanes)
-      const targetIdx = Math.max(0, Math.min(withSide.length - 1, (bias + 1) * 0.5 * (withSide.length - 1)));
-      const lower = Math.floor(targetIdx), upper = Math.ceil(targetIdx);
-      const frac = targetIdx - lower;
-      const p1 = withSide[lower].at, p2 = withSide[upper].at;
-      return [p1[0] + (p2[0] - p1[0]) * frac, p1[1] + (p2[1] - p1[1]) * frac];
+      const n = withSide.length;
+      const index = bias <= -0.34 ? 0 : bias >= 0.34 ? n - 1 : Math.floor((n - 1) / 2);
+      return withSide[index].at;
     });
   }
 

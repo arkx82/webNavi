@@ -109,7 +109,7 @@ test("a corner is threaded through the lane that turns the route's way: from the
   assert.equal(index.thread(at(0, 20), 270, after), null);
 });
 
-test("a route vertex is moved to the middle of the lanes running its way, not the oncoming ones; nowhere with no lanes", async () => {
+test("a route vertex is moved onto one lane running its way — a through lane, or the turn's side — not the oncoming ones; nowhere with no lanes", async () => {
   const index = await indexOf([
     // Two lanes north at x = 1.75 and 5.25 (the right side of the road), two south at x = -1.75 and -5.25.
     link({ id: "A219A000041", lane: 1, a: "Q0", b: "Q1", l: null, r: "A219A000042" }, [[1.75, -100], [1.75, 0], [1.75, 100]]),
@@ -117,11 +117,27 @@ test("a route vertex is moved to the middle of the lanes running its way, not th
     link({ id: "A219A000043", lane: 1, a: "R0", b: "R1", l: null, r: null }, [[-1.75, 100], [-1.75, 0], [-1.75, -100]]),
     link({ id: "A219A000044", lane: 2, a: "R0", b: "R2", l: null, r: null }, [[-5.25, 100], [-5.25, 0], [-5.25, -100]]),
   ]);
-  const [north, south, away] = index.snap([at(0, 50), at(0, 50), at(300, 50)], [0, 180, 0]);
+  const [north, south, away, right] = index.snap([at(0, 50), at(0, 50), at(300, 50), at(0, 50)], [0, 180, 0, 0], [0, 0, 0, 1]);
   const xOf = (p: LonLat) => (p[0] - O[0]) * M * Math.cos((O[1] * Math.PI) / 180);
-  assert.ok(north && Math.abs(xOf(north) - 3.5) < 0.05, `northbound → 3.5 m right: ${north && xOf(north)}`);
-  assert.ok(south && Math.abs(xOf(south) + 3.5) < 0.05, `southbound → 3.5 m left: ${south && xOf(south)}`);
+  // On a lane, never between two (the line was drawn on the paint between 2차로 and 3차로).
+  assert.ok(north && Math.abs(xOf(north) - 1.75) < 0.05, `northbound, going on → its first lane: ${north && xOf(north)}`);
+  assert.ok(right && Math.abs(xOf(right) - 5.25) < 0.05, `northbound, a right turn ahead → the right lane: ${right && xOf(right)}`);
+  // The southbound lanes are not each other's neighbours in this map: the nearest alone.
+  assert.ok(south && Math.abs(xOf(south) + 1.75) < 0.05, `southbound → its nearest lane: ${south && xOf(south)}`);
   assert.equal(away, null);
+});
+
+test("an exit ramp just parted from the motorway is its own road: the line stays on it, not taken back to the motorway's middle", async () => {
+  const index = await indexOf([
+    // Three motorway lanes north at x = 0, 3.5, 7; the ramp 9 m right of the outer one, neighbour to none.
+    link({ id: "A219C000001", lane: 1, a: "T0", b: "T1", l: null, r: "A219C000002" }, [[0, -100], [0, 100]]),
+    link({ id: "A219C000002", lane: 2, a: "T0", b: "T2", l: "A219C000001", r: "A219C000003" }, [[3.5, -100], [3.5, 100]]),
+    link({ id: "A219C000003", lane: 3, a: "T0", b: "T3", l: "A219C000002", r: null }, [[7, -100], [7, 100]]),
+    link({ id: "A219C000004", lane: 1, a: "T4", b: "T5", l: null, r: null }, [[16, -100], [16, 100]]),
+  ]);
+  const [onRamp] = index.snap([at(16.5, 0)], [0]);
+  const xOf = (p: LonLat) => (p[0] - O[0]) * M * Math.cos((O[1] * Math.PI) / 180);
+  assert.ok(onRamp && Math.abs(xOf(onRamp) - 16) < 0.05, `on the ramp: ${onRamp && xOf(onRamp)}`);
 });
 
 test("a 도류화 right turn: the slip lane leaves before the stop line, and is found from the lanes under the route", async () => {

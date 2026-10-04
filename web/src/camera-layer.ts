@@ -23,6 +23,8 @@ const RADIUS_M = 3000;
 /** Kept this far from the middle; further ones are dropped. */
 const KEEP_M = 6000;
 export const CAMERAS_MIN_ZOOM = 12;
+/** Cameras and lights held at most; past it the furthest from the map go. */
+const KEPT_MAX = 6000;
 
 export class CameraLayer {
   private ready = false;
@@ -63,9 +65,41 @@ export class CameraLayer {
     if (this.ready) this.fill();
   }
 
+  /**
+   * The cameras in front of the car on the road it is on, of those the map knows: within [reachM] ahead, within
+   * ±30° of its heading, and not the other way's (every carriageway they stand on running against it). For the car
+   * off its route — leaving the car park the other way, a wrong turn — whose road the route watch does not cover:
+   * on 2026-10-04 two 어린이 보호구역 cameras on 언주로 went undrawn for the half-minute the car was off the route.
+   */
+  ahead(at: LonLat, headingDeg: number, reachM = 600): Feature[] {
+    const kx = 111_320 * Math.cos((at[1] * Math.PI) / 180), ky = 111_320;
+    const off = (a: number, b: number) => Math.abs(((b - a + 540) % 360) - 180);
+    return [...this.known.values()].filter((f) => {
+      if (f.kind === "signal-light") return false;
+      const dx = (f.lon - at[0]) * kx, dy = (f.lat - at[1]) * ky, d = Math.hypot(dx, dy);
+      if (d > reachM || d < 5) return false;
+      if (off(headingDeg, ((Math.atan2(dx, dy) * 180) / Math.PI + 360) % 360) > 30) return false;
+      return !(f.ways?.length && f.ways.every((w) => w.deg >= 0 && off(headingDeg, w.deg) >= 110));
+    });
+  }
+
   /** Features the route watch placed, so a light ahead is drawn even before the map's own ask has it. */
   addKnown(features: Feature[]) {
     for (const f of features) if (KINDS.includes(f.kind)) this.known.set(f.id, f);
+    this.trim();
+  }
+
+  /** How many it holds (the 진단 log's minute line). */
+  get size() { return this.known.size; }
+
+  /** Kept to the ones near where the map is: a long drive asked round every stretch, and kept them all. */
+  private trim() {
+    if (this.known.size <= KEPT_MAX) return;
+    const c = this.map.getCenter();
+    const far = [...this.known.values()]
+      .map((f) => ({ f, d: Math.hypot((f.lon - c.lng) * Math.cos((c.lat * Math.PI) / 180), f.lat - c.lat) }))
+      .sort((a, b) => b.d - a.d);
+    for (const { f } of far.slice(0, this.known.size - KEPT_MAX * 0.7)) this.known.delete(f.id);
   }
 
   private async ask() {
@@ -81,6 +115,7 @@ export class CameraLayer {
       this.askedAt = at;
       this.askedWhen = Date.now();
       for (const f of found) if (KINDS.includes(f.kind)) this.known.set(f.id, f);
+      this.trim();
       for (const [id, f] of this.known) if (metres(at[0], at[1], f.lon, f.lat) > KEEP_M) this.known.delete(id);
       if (this.ready) this.fill();
     } catch (e) {

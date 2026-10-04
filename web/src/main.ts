@@ -161,6 +161,17 @@ function log(text: string) {
   const diag = el<HTMLDetailsElement>("diag");
   if (diag && !diag.hidden && diag.open) drawLog();
 }
+// A page that dies takes its last words with it unless they are written as they come: an error, a promise let fall,
+// and once a minute what the page holds — on 2026-10-04 the car's browser restarted the page twice (after 17 and 11
+// minutes) with nothing logged before.
+window.addEventListener("error", (e) => log(`페이지 오류 ${e.message} @${e.filename?.split("/").pop()}:${e.lineno}`));
+window.addEventListener("unhandledrejection", (e) => log(`처리 안 된 오류 ${String((e.reason as Error)?.message ?? e.reason).slice(0, 200)}`));
+const pageStarted = Date.now();
+setInterval(() => {
+  const mem = (performance as Performance & { memory?: { usedJSHeapSize: number; totalJSHeapSize: number; jsHeapSizeLimit: number } }).memory;
+  const mb = (b: number) => Math.round(b / 1048576);
+  log(`메모리 ${mem ? `${mb(mem.usedJSHeapSize)}/${mb(mem.totalJSHeapSize)} MB (한도 ${mb(mem.jsHeapSizeLimit)})` : "?"} · 켠 지 ${Math.round((Date.now() - pageStarted) / 60_000)}분 · 위치 ${gps.samples.length} · 카메라 ${cameraLayer?.size ?? 0} · 기록 대기 ${unsent.length}`);
+}, 60_000);
 function drawLog() {
   const box = el("log");
   box.textContent = lines.join("\n");
@@ -2358,7 +2369,11 @@ function showNextLight(w: RouteWatch, along: number, speedMps: number | null | u
   const lights = aheadAll.filter((a) => a.feature.kind === "signal-light");
   // The lights and the cameras on the route ahead: the ones the map draws (경로만).
   cameraLayer?.addKnown(aheadAll.map((a) => a.feature));
-  cameraLayer?.setLightsAhead(new Set(aheadAll.map((a) => a.feature.id)));
+  const ids = new Set(aheadAll.map((a) => a.feature.id));
+  // Off the route: the cameras in front of the car on the road it is really on, too.
+  const shown = tracker.frame();
+  if (shown?.offRoute && cameraLayer) for (const f of cameraLayer.ahead(shown.at, shown.bearing)) ids.add(f.id);
+  cameraLayer?.setLightsAhead(ids);
   const line = el("next-light");
   // Past the stop line of the one being driven through: the next junction's.
   const next = lights.find((a) => a.inM > 8);
