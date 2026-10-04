@@ -98,9 +98,9 @@ export interface GuideSettings {
 export type Mode = "voice" | "show" | "off";
 
 export const DEFAULTS: GuideSettings = {
-  voice: true, voiceName: null, volume: 1, turns: true, junctionNames: true, laneHints: true, merges: true, closeups: true, sendLogs: true, layout: "classic", hdLanes: true, hdLanesWhen: "turns", laneGuide: true, colorLines: true, theme: "auto", nightCity: false, endOnArrive: true, mapDpr: "auto", followFps: "auto", ducking: "soft", fasterRoute: "ask", carData: "auto", rev: 2, uiScale: 1, lightsOnMap: "route", camerasOnMap: "route", nextLight: true, flashSignals: true,
+  voice: true, voiceName: null, volume: 1, turns: true, junctionNames: true, laneHints: true, merges: true, closeups: true, sendLogs: true, layout: "classic", hdLanes: true, hdLanesWhen: "turns", laneGuide: true, colorLines: true, theme: "auto", nightCity: false, endOnArrive: true, mapDpr: "auto", followFps: "auto", ducking: "soft", fasterRoute: "ask", carData: "auto", rev: 3, uiScale: 1, lightsOnMap: "route", camerasOnMap: "route", nextLight: true, flashSignals: true,
   cameras: true, cameraFromM: 600, sections: true, schools: true,
-  bumps: "show", curves: "show", accidents: "show", bikeAccidents: "show",
+  bumps: "show", curves: "off", accidents: "show", bikeAccidents: "show",
   overspeed: true, overspeedBy: 0,
   schoolZones: "voice", seniorZones: "show", incidents: "voice", roadworks: "show", restAreas: "show", weatherAlerts: "voice",
 };
@@ -142,6 +142,12 @@ export function migrate(s: GuideSettings): GuideSettings {
   // 더 빠른 길 is only ever taken on 바꾸기 (the 20-second "자동" is gone, 2026-10-03): one saved as 자동 is asked.
   if ((s.fasterRoute as string) === "auto") s.fasterRoute = "ask";
   if ((s.rev ?? 1) < 2) s.rev = 2;
+  // rev 3 (2026-10-04): 급커브 off by default — the owner found its cards at the foot of the map noise. One left at
+  // the old default ("표시만") is turned off; one set to 음성 by hand is kept.
+  if ((s.rev ?? 1) < 3) {
+    if (s.curves === "show") s.curves = "off";
+    s.rev = 3;
+  }
   return s;
 }
 
