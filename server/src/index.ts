@@ -31,7 +31,7 @@ import { Settings } from "./settings.js";
 import { registerAdmin } from "./admin.js";
 import { registerMusic } from "./music.js";
 import { Db } from "./db.js";
-import { registerUsers } from "./users.js";
+import { registerUsers, sessionUser } from "./users.js";
 import { RefusedUrl, fetchPublic, registerGuard } from "./guard.js";
 import { hdLanes, registerHdmap } from "./hdmap.js";
 import { registerShare } from "./share.js";
@@ -572,7 +572,10 @@ const admin = registerAdmin(app, settings, {
     };
   },
   prerender: () => prerender(speaker),
-}, join(root, "admin", "index.html"));
+}, join(root, "admin", "index.html"), (request) => {
+  const user = sessionUser(request, db, settings);
+  return user?.role === "admin" ? user.name : null;
+}, () => db.users().some((u) => u.role === "admin"));
 registerMusic(app, settings, admin.adminGuard);
 registerUsers(app, db, settings, admin.adminGuard, workDir);
 // The car's own speed for the tunnels (car/): Tesla linked on /admin, the samples to the car page.

@@ -1,6 +1,6 @@
 import type { CarSample } from "./sample.js";
 
-/** A car linked on /admin: its VIN, the owner API's ids, and which of this site's users sees it (empty: everyone). */
+/** A car linked on /admin: its VIN, the owner API's ids, and the site account it is (empty: no one's). */
 export interface LinkedCar {
   vin: string;
   id: string;
@@ -41,9 +41,9 @@ export class CarHub {
     private make: (car: LinkedCar, emit: (s: CarSample) => void, state: (st: string) => void) => CarSource | null,
   ) {}
 
-  /** The cars [user] sees. */
+  /** The cars [user] sees: its own, and no other account's (a car given to no one is no one's, not everyone's). */
   carsFor(user: string): LinkedCar[] {
-    return this.cars().filter((c) => !c.user || c.user.toLowerCase() === user.toLowerCase());
+    return this.cars().filter((c) => !!c.user && c.user.toLowerCase() === user.toLowerCase());
   }
 
   /** [l] hears [vin]'s samples until the returned call. */

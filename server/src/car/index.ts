@@ -20,7 +20,29 @@ export const PUBLIC_KEY_PATH = "/.well-known/appspecific/com.tesla.3p.public-key
 
 export function registerCar(app: FastifyInstance, settings: Settings, db: Db, adminGuard: Guard, configDir: string, workDir: string) {
   const log = (m: string) => app.log.info(m);
-  const owner = new OwnerAuth(settings);
+  // Each site account's own Tesla login (owner.ts): an account sees the cars of the Tesla it linked, and none other.
+  const tokens = (): Record<string, string> => { try { return JSON.parse(settings.get("teslaOwners") ?? "{}") as Record<string, string>; } catch { return {}; } };
+  const owners = new Map<string, OwnerAuth>();
+  const ownerFor = (user: string): OwnerAuth => {
+    const key = user.trim().toLowerCase();
+    let o = owners.get(key);
+    if (!o) {
+      o = new OwnerAuth({
+        get: () => tokens()[key] || undefined,
+        set: (token: string) => {
+          const all = tokens();
+          if (token) all[key] = token; else delete all[key];
+          settings.set({ teslaOwners: JSON.stringify(all) });
+        },
+      });
+      owners.set(key, o);
+    }
+    return o;
+  };
+  const accountOf = (name: unknown): string | null => {
+    const n = String(name ?? "").trim().toLowerCase();
+    return db.users().find((u) => u.name.toLowerCase() === n)?.name ?? null;
+  };
   const key = new FleetKey(join(configDir, "tesla", "fleet-key.pem"));
   const fleet = new FleetApi(settings, key);
   const feed = new FleetFeed(process.env.FLEET_REDIS ?? "fleet-redis:6379", log);
@@ -29,17 +51,52 @@ export function registerCar(app: FastifyInstance, settings: Settings, db: Db, ad
 
   const source = () => (settings.get("teslaSource") === "fleet" ? "fleet" : "owner");
   const cars = (): LinkedCar[] => {
+    migrate();
     try { return JSON.parse(settings.get("teslaCars") ?? "[]") as LinkedCar[]; } catch { return []; }
   };
+  /**
+   * The one login of before (one Tesla account for the whole site, its car seen by every account whose name it was
+   * not given) moved to an account: the one its cars were given to, else the first 관리자. Tried until there is one.
+   */
+  function migrate() {
+    const old = settings.get("teslaRefresh");
+    if (!old) return;
+    let list: LinkedCar[] = [];
+    try { list = JSON.parse(settings.get("teslaCars") ?? "[]") as LinkedCar[]; } catch { /* none */ }
+    const who = list.find((c) => c.user)?.user ?? db.users().find((u) => u.role === "admin")?.name;
+    if (!who) return;
+    const all = tokens();
+    all[who.toLowerCase()] ??= old;
+    settings.set({ teslaOwners: JSON.stringify(all), teslaRefresh: "", teslaCars: JSON.stringify(list.map((c) => ({ ...c, user: c.user || who }))) });
+    log(`Tesla 연결을 ${who} 계정으로 옮김`);
+  }
   const hub = new CarHub(cars, (car, emit, state): CarSource | null => {
     if (source() === "fleet") return fleet.linked ? feed.source(car.vin, emit, state) : null;
-    if (!owner.linked || !car.vehicleId) return null;
-    return new OwnerStream(car.vehicleId, owner, emit, state, (m) => app.log.info({ vin: car.vin.slice(-6) }, m));
+    const owner = car.user ? ownerFor(car.user) : null;
+    if (!owner?.linked || !car.vehicleId) return null;
+    return new OwnerStream(car.vehicleId, owner, emit, state, (m) => app.log.info({ vin: car.vin.slice(-6), user: car.user }, m));
   });
 
-  /** The account's cars, by whichever way is linked, with each one's user as it was set. */
-  const refreshCars = async () => {
-    const list = source() === "fleet" ? await fleet.vehicles() : await owner.vehicles();
+  /**
+   * The cars, as Tesla has them now. By the owner login, [user]'s own (those of every account linked, with none
+   * named), each given to its account; by Fleet, the one app login's, each with the account it was given on /admin.
+   */
+  const refreshCars = async (user?: string) => {
+    if (source() !== "fleet") {
+      const who = user ? [user] : Object.keys(tokens()).map((k) => accountOf(k) ?? k);
+      let next = cars();
+      for (const u of who) {
+        const list = await ownerFor(u).vehicles();
+        next = [
+          ...next.filter((c) => c.user.toLowerCase() !== u.toLowerCase() && !list.some((v) => v.vin === c.vin)),
+          ...list.map((v) => ({ vin: v.vin, id: v.id, vehicleId: v.vehicleId, name: v.name, user: u })),
+        ];
+      }
+      settings.set({ teslaCars: JSON.stringify(next) });
+      hub.reset();
+      return next;
+    }
+    const list = await fleet.vehicles();
     const had = new Map(cars().map((c) => [c.vin, c]));
     const next: LinkedCar[] = list.map((v) => ({
       vin: v.vin,
@@ -100,7 +157,8 @@ export function registerCar(app: FastifyInstance, settings: Settings, db: Db, ad
 
   app.get("/admin/car/state", { preHandler: adminGuard }, async (request) => ({
     source: source(),
-    owner: { linked: owner.linked },
+    owner: { linked: Object.keys(tokens()).length > 0 },
+    owners: db.users().map((u) => ({ name: u.name, role: u.role, linked: ownerFor(u.name).linked })),
     fleet: {
       configured: fleet.configured,
       linked: fleet.linked,
@@ -125,21 +183,30 @@ export function registerCar(app: FastifyInstance, settings: Settings, db: Db, ad
     return { source: next };
   });
 
-  app.post("/admin/car/owner/begin", { preHandler: adminGuard }, async () => ({ url: owner.begin() }));
-  app.post<{ Body: { url?: string } }>("/admin/car/owner/finish", { preHandler: adminGuard }, async (request, reply) => {
+  // The owner login, for the account named: its Tesla, its cars.
+  app.post<{ Body: { user?: string } }>("/admin/car/owner/begin", { preHandler: adminGuard }, async (request, reply) => {
+    const user = accountOf(request.body?.user);
+    if (!user) return reply.code(400).send({ error: "연결할 계정을 고르세요" });
+    return { url: ownerFor(user).begin() };
+  });
+  app.post<{ Body: { url?: string; user?: string } }>("/admin/car/owner/finish", { preHandler: adminGuard }, async (request, reply) => {
+    const user = accountOf(request.body?.user);
+    if (!user) return reply.code(400).send({ error: "연결할 계정을 고르세요" });
     try {
-      await owner.finish(String(request.body?.url ?? ""));
+      await ownerFor(user).finish(String(request.body?.url ?? ""));
       if (source() !== "owner") settings.set({ teslaSource: "owner" });
-      return { cars: await refreshCars() };
+      return { cars: await refreshCars(user) };
     } catch (e) { return fail(reply, e); }
   });
-  app.post<{ Body: { token?: string } }>("/admin/car/owner/token", { preHandler: adminGuard }, async (request, reply) => {
+  app.post<{ Body: { token?: string; user?: string } }>("/admin/car/owner/token", { preHandler: adminGuard }, async (request, reply) => {
+    const user = accountOf(request.body?.user);
+    if (!user) return reply.code(400).send({ error: "연결할 계정을 고르세요" });
     const token = String(request.body?.token ?? "").trim();
     if (!token) return reply.code(400).send({ error: "refresh token" });
     try {
-      await owner.useRefresh(token);
+      await ownerFor(user).useRefresh(token);
       if (source() !== "owner") settings.set({ teslaSource: "owner" });
-      return { cars: await refreshCars() };
+      return { cars: await refreshCars(user) };
     } catch (e) { return fail(reply, e); }
   });
 
@@ -179,8 +246,8 @@ export function registerCar(app: FastifyInstance, settings: Settings, db: Db, ad
     return out;
   });
 
-  app.post("/admin/car/refresh", { preHandler: adminGuard }, async (_request, reply) => {
-    try { return { cars: await refreshCars() }; } catch (e) { return fail(reply, e); }
+  app.post<{ Body: { user?: string } }>("/admin/car/refresh", { preHandler: adminGuard }, async (request, reply) => {
+    try { return { cars: await refreshCars(accountOf(request.body?.user) ?? undefined) }; } catch (e) { return fail(reply, e); }
   });
   app.post<{ Body: { vin?: string; user?: string } }>("/admin/car/user", { preHandler: adminGuard }, async (request, reply) => {
     const list = cars();
@@ -191,9 +258,15 @@ export function registerCar(app: FastifyInstance, settings: Settings, db: Db, ad
     hub.reset();
     return { cars: list };
   });
-  app.post<{ Body: { which?: string } }>("/admin/car/unlink", { preHandler: adminGuard }, async (request) => {
+  app.post<{ Body: { which?: string; user?: string } }>("/admin/car/unlink", { preHandler: adminGuard }, async (request, reply) => {
     if (request.body?.which === "fleet") fleet.unlink();
-    else owner.unlink();
+    else {
+      const user = accountOf(request.body?.user);
+      if (!user) return reply.code(400).send({ error: "해제할 계정을 고르세요" });
+      ownerFor(user).unlink();
+      // Its cars go with it.
+      settings.set({ teslaCars: JSON.stringify(cars().filter((c) => c.user.toLowerCase() !== user.toLowerCase())) });
+    }
     hub.reset();
     return { ok: true };
   });
@@ -203,11 +276,11 @@ export function registerCar(app: FastifyInstance, settings: Settings, db: Db, ad
     /** A word for /admin's 상태 table. */
     status(): string {
       const list = cars();
-      if (!list.length) return owner.linked || fleet.linked ? "연결됨 · 차 없음" : "연결 안 됨";
+      if (!list.length) return Object.keys(tokens()).length || fleet.linked ? "연결됨 · 차 없음" : "연결 안 됨";
       const streams = hub.status();
       return `${source() === "fleet" ? "Fleet Telemetry" : "Owner 스트리밍"} · ` + list.map((c) => {
         const s = streams[c.vin];
-        return `${c.name}: ${s.state}${s.lastSampleAgoS != null ? ` (${s.lastSampleAgoS}초 전)` : ""}${s.lastError ? ` · ${s.lastError}` : ""}`;
+        return `${c.name}(${c.user || "계정 없음"}): ${s.state}${s.lastSampleAgoS != null ? ` (${s.lastSampleAgoS}초 전)` : ""}${s.lastError ? ` · ${s.lastError}` : ""}`;
       }).join(", ");
     },
   };

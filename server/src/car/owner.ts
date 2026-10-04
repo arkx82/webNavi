@@ -43,16 +43,30 @@ export interface OwnerVehicle {
   state: string;
 }
 
+/** Where one owner login's refresh token is kept (car/index.ts: each site account's own). */
+export interface TokenStore {
+  get(): string | undefined;
+  set(token: string): void;
+}
+
+/** The token kept under one settings field (the one login of before, and the tests). */
+export function settingsStore(settings: Settings, field: "teslaRefresh" = "teslaRefresh"): TokenStore {
+  return { get: () => settings.get(field), set: (token) => settings.set({ [field]: token }) };
+}
+
 export class OwnerAuth {
   private access: { token: string; until: number } | null = null;
   private refreshing: Promise<string> | null = null;
   /** Logins begun on /admin and not yet finished, by state: the PKCE verifier each needs. */
   private pending = new Map<string, { verifier: string; at: number }>();
 
-  constructor(private settings: Settings, private post: typeof postH2 = postH2) {}
+  private store: TokenStore;
+  constructor(store: TokenStore | Settings, private post: typeof postH2 = postH2) {
+    this.store = "get" in store && "set" in store && !("verify" in store) ? (store as TokenStore) : settingsStore(store as Settings);
+  }
 
   get linked(): boolean {
-    return !!this.settings.get("teslaRefresh");
+    return !!this.store.get();
   }
 
   /** A fresh access token: the kept one while it lasts, else one refresh at a time (the refresh token is single use). */
@@ -68,7 +82,7 @@ export class OwnerAuth {
   }
 
   private async refresh(): Promise<string> {
-    const refresh = this.settings.get("teslaRefresh");
+    const refresh = this.store.get();
     if (!refresh) throw new Error("Tesla 계정이 연결되지 않음");
     return this.exchange({ grant_type: "refresh_token", client_id: CLIENT_ID, refresh_token: refresh, scope: SCOPE });
   }
@@ -84,20 +98,20 @@ export class OwnerAuth {
     try { answer = JSON.parse(text) as TokenAnswer; } catch { /* an HTML error page: the status says it */ }
     if (status !== 200 || !answer.access_token) throw new Error(answer.error_description ?? answer.error ?? `Tesla 로그인 ${status}`);
     // A new refresh token each time (the old one is spent): kept before anything else can fail.
-    if (answer.refresh_token) this.settings.set({ teslaRefresh: answer.refresh_token });
+    if (answer.refresh_token) this.store.set(answer.refresh_token);
     this.access = { token: answer.access_token, until: Date.now() + ((answer.expires_in ?? 28_800) - 300) * 1000 };
     return answer.access_token;
   }
 
   /** A refresh token pasted on /admin (from a token app): tried at once, kept only if it works. */
   async useRefresh(refresh: string) {
-    const had = this.settings.get("teslaRefresh");
-    this.settings.set({ teslaRefresh: refresh });
+    const had = this.store.get();
+    this.store.set(refresh);
     this.access = null;
     try {
       await this.token();
     } catch (e) {
-      this.settings.set({ teslaRefresh: had ?? "" });
+      this.store.set(had ?? "");
       throw e;
     }
   }
@@ -138,7 +152,7 @@ export class OwnerAuth {
   }
 
   unlink() {
-    this.settings.set({ teslaRefresh: "" });
+    this.store.set("");
     this.access = null;
   }
 

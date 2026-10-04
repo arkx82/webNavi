@@ -4,10 +4,12 @@ import { readFileSync } from "node:fs";
 import { EDITABLE, type SecretName, type Settings } from "./settings.js";
 
 /**
- * The page where the keys go in. One password, set on the first visit;
- * a session cookie signed with the master key; five wrong tries lock an
- * address out for a minute. The keys never come back out — the page is
- * shown whether each is set and its last four characters.
+ * The page where the keys go in. Two ways in: the page's own password
+ * (the built-in 관리자 "admin", set on the first visit; a session cookie
+ * signed with the master key; five wrong tries lock an address out for a
+ * minute) — or a site account whose role is 관리자, by its own login on the
+ * car page, with nothing more to type. The keys never come back out — the
+ * page is shown whether each is set and its last four characters.
  */
 const SESSION_DAYS = 30;
 const COOKIE = "nav_admin";
@@ -24,14 +26,21 @@ export interface AdminChecks {
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
 
-export function registerAdmin(app: FastifyInstance, settings: Settings, checks: AdminChecks, pageFile: string): { adminGuard: Guard } {
+export function registerAdmin(
+  app: FastifyInstance, settings: Settings, checks: AdminChecks, pageFile: string,
+  /** The site account the request is logged in as, where its role is 관리자; null otherwise. */
+  adminUser: (request: FastifyRequest) => string | null = () => null,
+  /** Whether any site account is 관리자: then the page's password is set by one of them, not by whoever comes first. */
+  anyAdmin: () => boolean = () => false,
+): { adminGuard: Guard } {
   // Wrong logins by address and, under one key, for the page as a whole: a forged address does not start afresh (guard.ts).
   const lockout = new Lockout(LOCK_AFTER, LOCK_MS);
 
   const isSecure = (request: FastifyRequest) =>
     request.protocol === "https" || request.headers["x-forwarded-proto"] === "https";
 
-  const loggedIn = (request: FastifyRequest): boolean => {
+  const loggedIn = (request: FastifyRequest): boolean => byPassword(request) || adminUser(request) != null;
+  const byPassword = (request: FastifyRequest): boolean => {
     const raw = request.headers.cookie ?? "";
     const m = raw.match(new RegExp(`(?:^|;\\s*)${COOKIE}=([^;]+)`));
     if (!m) return false;
@@ -58,13 +67,19 @@ export function registerAdmin(app: FastifyInstance, settings: Settings, checks: 
     return reply.type("text/html; charset=utf-8").send(readFileSync(pageFile, "utf8"));
   });
 
-  app.get("/admin/api/state", async (request) => ({
-    needsSetup: !settings.hasPassword,
-    loggedIn: settings.hasPassword && loggedIn(request),
-  }));
+  app.get("/admin/api/state", async (request) => {
+    const user = adminUser(request);
+    // An admin account is let in before the page's password is set too: setting it is then the account's to do.
+    return {
+      needsSetup: !settings.hasPassword && !user && !anyAdmin(),
+      loggedIn: (settings.hasPassword && byPassword(request)) || user != null,
+      who: byPassword(request) ? "admin" : user,
+    };
+  });
 
   app.post<{ Body: { password?: string } }>("/admin/api/setup", async (request, reply) => {
     if (settings.hasPassword) return reply.code(409).send({ error: "already set" });
+    if (anyAdmin() && !adminUser(request)) return reply.code(403).send({ error: "관리자 계정으로 로그인한 뒤 정하세요" });
     const password = request.body?.password ?? "";
     if (password.length < 8) return reply.code(400).send({ error: "8자 이상" });
     settings.setPassword(password);

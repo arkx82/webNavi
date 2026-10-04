@@ -42,7 +42,10 @@ export interface Secrets {
    * the host:port of our fleet-telemetry server as the car is to reach it.
    */
   teslaSource?: string;
+  /** The one owner login of before: moved into teslaOwners, under the account the cars were given to. */
   teslaRefresh?: string;
+  /** Each site account's own owner login: JSON { account (lower case): refresh token }. */
+  teslaOwners?: string;
   teslaCars?: string;
   teslaClientId?: string;
   teslaClientSecret?: string;
@@ -76,6 +79,7 @@ const ENV: Record<SecretName, string | undefined> = {
   tidalCountryCode: undefined,
   teslaSource: undefined,
   teslaRefresh: undefined,
+  teslaOwners: undefined,
   teslaCars: undefined,
   teslaClientId: "TESLA_CLIENT_ID",
   teslaClientSecret: "TESLA_CLIENT_SECRET",

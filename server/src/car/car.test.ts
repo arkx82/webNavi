@@ -162,3 +162,13 @@ test("the owner login: the console's \"Failed to launch\" line pasted whole give
   assert.ok(body.get("code_verifier"));
   assert.equal(settings.get("teslaRefresh"), "R");
 });
+
+test("a car is its account's alone: one given to no account is no one's, not everyone's", async () => {
+  const { CarHub } = await import("./hub.js");
+  const hub = new CarHub(() => [
+    { vin: "V1", id: "1", vehicleId: 1, name: "june's", user: "june" },
+    { vin: "V2", id: "2", vehicleId: 2, name: "nobody's", user: "" },
+  ], () => null);
+  assert.deepEqual(hub.carsFor("June").map((c) => c.vin), ["V1"]);
+  assert.deepEqual(hub.carsFor("sim1"), []);
+});

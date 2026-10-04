@@ -9,11 +9,16 @@ import { join } from "node:path";
  * the car see the same; and an index of every sentence the voice has made,
  * so the same words are never paid for twice and /admin can say what is kept.
  */
+/** 관리자 (admin): /admin with the account's own login; 사용자 (user): the car page only. */
+export type Role = "admin" | "user";
+const roleOf = (v: unknown): Role => (v === "admin" ? "admin" : "user");
+
 export interface User {
   id: number;
   name: string;
   created: number;
   lastSeen: number | null;
+  role: Role;
 }
 
 /** What a user keeps, by name; the page owns each value's shape. */
@@ -72,6 +77,8 @@ export class Db {
     // A file from before the column: given it.
     const columns = this.db.prepare("PRAGMA table_info(tts)").all() as { name: string }[];
     if (!columns.some((c) => c.name === "repaired")) this.db.exec("ALTER TABLE tts ADD COLUMN repaired INTEGER NOT NULL DEFAULT 0");
+    const userColumns = this.db.prepare("PRAGMA table_info(users)").all() as { name: string }[];
+    if (!userColumns.some((c) => c.name === "role")) this.db.exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'");
   }
 
   // ---- places sent from a phone ----
@@ -97,8 +104,12 @@ export class Db {
   // ---- users ----
 
   users(): User[] {
-    const rows = this.db.prepare("SELECT id, name, created, last_seen AS lastSeen FROM users ORDER BY name").all() as unknown as User[];
-    return rows.map((r) => ({ id: r.id, name: r.name, created: r.created, lastSeen: r.lastSeen }));
+    const rows = this.db.prepare("SELECT id, name, created, last_seen AS lastSeen, role FROM users ORDER BY name").all() as unknown as User[];
+    return rows.map((r) => ({ id: r.id, name: r.name, created: r.created, lastSeen: r.lastSeen, role: roleOf(r.role) }));
+  }
+
+  setRole(id: number, role: Role) {
+    this.db.prepare("UPDATE users SET role = ? WHERE id = ?").run(roleOf(role), id);
   }
 
   addUser(name: string, password: string): User {
@@ -126,21 +137,21 @@ export class Db {
 
   /** The user if the password is theirs; the same time taken for a name that is not there. */
   check(name: string, password: string): (User & { epoch: number }) | null {
-    const row = this.db.prepare("SELECT id, name, hash, created, last_seen AS lastSeen, epoch FROM users WHERE name = ?").get(name.trim()) as
-      | { id: number; name: string; hash: string; created: number; lastSeen: number | null; epoch: number }
+    const row = this.db.prepare("SELECT id, name, hash, created, last_seen AS lastSeen, epoch, role FROM users WHERE name = ?").get(name.trim()) as
+      | { id: number; name: string; hash: string; created: number; lastSeen: number | null; epoch: number; role: string }
       | undefined;
     const ok = verifyHash(password, row?.hash ?? DUMMY);
     if (!row || !ok) return null;
-    return { id: row.id, name: row.name, created: row.created, lastSeen: row.lastSeen, epoch: row.epoch };
+    return { id: row.id, name: row.name, created: row.created, lastSeen: row.lastSeen, epoch: row.epoch, role: roleOf(row.role) };
   }
 
   /** The user a session names, if it is still theirs (not removed, password not changed since). */
   session(id: number, epoch: number): User | null {
-    const row = this.db.prepare("SELECT id, name, created, last_seen AS lastSeen, epoch FROM users WHERE id = ?").get(id) as
+    const row = this.db.prepare("SELECT id, name, created, last_seen AS lastSeen, epoch, role FROM users WHERE id = ?").get(id) as
       | (User & { epoch: number })
       | undefined;
     if (!row || row.epoch !== epoch) return null;
-    return { id: row.id, name: row.name, created: row.created, lastSeen: row.lastSeen };
+    return { id: row.id, name: row.name, created: row.created, lastSeen: row.lastSeen, role: roleOf(row.role) };
   }
 
   seen(id: number) {

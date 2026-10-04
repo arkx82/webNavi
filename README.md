@@ -27,10 +27,79 @@ docker compose up -d --build   # NUC: nav · osrm (caddy 는 주석 처리, HTTP
 `server/data/` 에 data.go.kr 표준데이터 CSV를 넣으면 시작 시 색인된다
 ([server/data/README.md](server/data/README.md)).
 
+## 필요한 키
+
+키는 모두 `/admin` 에서 넣는다(암호화 저장, 재시작 없이 적용). `.env` 는 비워 둔 칸의 대체값. **없어도 되는 키는 그 기능만 빠진다** —
+경로 3사가 하나도 없으면 키 없는 OSRM(OSM 도로)으로만 길을 찾는다.
+
+| `/admin` 칸 (`.env`) | 어디서 | 무엇에 | 꼭? |
+|---|---|---|---|
+| TMAP appKey (`TMAP_APP_KEY`) | [SK open API](https://openapi.sk.com) → 앱 만들기 → **TMAP API** 상품 사용 | 티맵 경로(`/tmap/routes`), 바탕 지도(벡터), 좌표→주소 | 셋 중 하나 이상 권장 |
+| 카카오 REST 키 (`KAKAO_REST_KEY`) | [카카오디벨로퍼스](https://developers.kakao.com) 앱의 REST API 키 + [카카오모빌리티 개발자센터](https://developers.kakaomobility.com)에서 같은 앱으로 **길찾기** 사용 | 카카오 경로(`apis-navi.kakaomobility.com`), **장소 검색**, 주변(카테고리), 좌표→행정구역 | 검색에 필요 — 사실상 필수 |
+| 네이버 Client ID / Secret (`NAVER_CLIENT_ID/SECRET`) | [네이버 클라우드](https://console.ncloud.com) → Maps → Application 등록, **Directions 5** · **Dynamic Map** 선택 | 네이버 경로, 네이버 지도(선택) | 선택 |
+| DashScope 키 (`DASHSCOPE_API_KEY`) | [Alibaba Model Studio](https://modelstudio.console.alibabacloud.com) (국제판) API Key | 음성(Qwen3-TTS). 고정 문장 ~350개는 한 번 만들어 디스크에 두고 다시 부르지 않음 | 음성 안내에 필수 |
+| 공공데이터포털 키 (`DATA_GO_KR_KEY`) | [data.go.kr](https://www.data.go.kr) 일반 인증키 하나 + 아래 표의 **서비스마다 활용신청** | 단속 카메라 · 방지턱 · 보호구역 · 신호등 · 날씨 · 기상특보 · 미세먼지 · 충전소 · 사고다발 | 안전 안내에 필수 |
+| 오피넷 키 (`OPINET_KEY`) | [오피넷](https://www.opinet.co.kr) → 유가정보 API 신청 | 주변 주유소 가격 | 선택 |
+| 한국도로공사 키 (`EX_API_KEY`) | [고속도로 공공데이터 포털](https://data.ex.co.kr) | 휴게소(위치 · 기름값 · 편의시설) | 선택 |
+| ITS 키 (`ITS_API_KEY`) | [국가교통정보센터](https://www.its.go.kr/opendata) → 오픈API 신청: **돌발상황정보**, **교통소통정보** | 돌발상황 카드 · 음성, 자체 경로의 실시간 속도 | 선택 (자체 경로는 이것 없이 안 나옴) |
+| 서울 열린데이터 키 (`SEOUL_API_KEY`) | [서울 열린데이터광장](https://data.seoul.go.kr) 인증키 | 서울 신호등(전국 표준데이터에 서울이 거의 없음) | 선택 |
+| TIDAL Client ID / Secret | 비워 두면 기본값. `/admin` → 음악에서 기기 코드로 로그인 | 음악 | 선택 |
+| Tesla (Owner 로그인, 또는 Fleet API Client ID / Secret · 텔레메트리 주소) | `/admin` → 차량 (Tesla), **계정마다** 연결 — 아래 [차량 데이터](#차량-데이터-tesla) | 터널 · 주차장 보정 | 선택 |
+
+**공공데이터포털에서 활용신청할 서비스** (모두 같은 인증키, 신청 후 1~2시간 뒤부터 응답):
+
+| 서비스 (data.go.kr 검색어) | 호출 | 쓰는 곳 |
+|---|---|---|
+| 전국무인교통단속카메라표준데이터 | `api.data.go.kr/openapi/tn_pubr_public_unmanned_traffic_camera_api` | 단속 카메라 · 구간 단속 · 보호구역 제한 속도 (주 1회) |
+| 행정안전부_과속방지턱정보 (1741000) | `apis.data.go.kr/1741000/speed_bump_info/info` | 과속 방지턱 |
+| 전국어린이보호구역표준데이터 | `api.data.go.kr/openapi/tn_pubr_public_child_prtc_zn_api` | 어린이 보호구역 |
+| 전국노인장애인보호구역표준데이터 | `api.data.go.kr/openapi/tn_pubr_public_oldnddspsnprt_carea_api` | 노인 · 장애인 보호구역 |
+| 전국신호등표준데이터 | `api.data.go.kr/openapi/tn_pubr_public_traffic_light_api` | 신호등(점멸 시간) |
+| 기상청_단기예보 조회서비스 (1360000) | `VilageFcstInfoService_2.0` getUltraSrtNcst · getVilageFcst | 날씨 |
+| 기상청_중기예보 조회서비스 (1360000) | `MidFcstInfoService` getMidLandFcst · getMidTa | 주간 날씨 |
+| 기상청_기상특보 조회서비스 (1360000) | `WthrWrnInfoService/getPwnStatus` | 기상특보 카드 · 음성 |
+| 한국환경공단_에어코리아_대기오염정보 (B552584) | `ArpltnInforInqireSvc/getCtprvnRltmMesureDnsty` | 미세먼지 |
+| 한국환경공단_전기자동차 충전소 정보 (B552584) | `EvCharger/getChargerInfo` | 충전소 빈 자리 · 요금 |
+| 한국도로교통공단_지자체별 사고다발지역정보 / 자전거 사고다발지역정보 (B552061) | `frequentzoneLg` · `frequentzoneBicycle` | 사고 다발 지역 |
+| 한국도로공사_고속도로 노면색깔유도선 (15118978, 파일데이터) | 키 없이 파일 내려받기 | 분기점 "분홍색 유도선" 안내 |
+
+`/admin` → 상태 표가 목록마다 받은 개수와 날짜(또는 거절 사유)를 보여 주고, **연결 확인** 이 서비스마다 실제로 한 번씩 불러 본다.
+
+## 계정과 권한
+
+차 화면 · 폰은 `/admin` → 사용자 에서 만든 **사이트 계정**으로 로그인한다. 계정마다 권한이 있다.
+
+- **관리자**: 자기 계정으로 차 화면에 로그인한 브라우저에서 `/admin` 을 열면 바로 들어온다(키, 사용자, 차량, 음악 관리).
+- **사용자**: 차 화면만. `/admin` 은 막힌다.
+- 관리 페이지 비밀번호(첫 방문에 정함)로 들어오는 **admin** 은 계정과 별개로 늘 관리자.
+- 권한은 `/admin` → 사용자 표에서 바꾼다. 처음 만든 계정은 사용자.
+
+## 정밀도로지도 (선택)
+
+국토지리정보원 정밀도로지도로 하는 것: 경로선을 실제 차로 위로(회전 방향 쪽 차로), 교차로 코너를 회전 차로 모양대로, 차로 안내 카드(몇 차로,
+전용 차로), 지도에 차선 · 노면표시, 신호등 · 방지턱 보강, 보호구역의 도로 폭 판정. **없어도 내비는 그대로 동작한다** — 경로선은 업체가
+준 선(코너는 둥글게), 차로 카드는 방향만, 신호등 · 방지턱은 공공데이터로.
+
+가공한 결과물(`lanes.db`, `hdmap.mbtiles`, `*.geojsons`)은 국토지리정보원 자료의 2차 가공물이라 **저장소에 넣지 않는다**. 쓰려면 각자 받아 만든다:
+
+1. [국토정보플랫폼 → 정밀도로지도 공개](https://map.ngii.go.kr/ms/pblictn/precise)에서 회원 가입 후 필요한 노선 · 지역의 zip 을 신청 · 내려받는다
+   (전국 약 670개, 500 GB 남짓 — 사는 지역 · 자주 가는 도로만 받아도 된다).
+2. zip 을 한 폴더(예: `/mnt/data/hdmap`)에 둔다. 풀 필요 없다.
+3. 변환 (도커가 있으면 GDAL · tippecanoe 는 컨테이너로 돈다):
+   ```bash
+   python3 tools/hdmap/build.py /mnt/data/hdmap /mnt/data/webnavi/hdmap            # 전부
+   python3 tools/hdmap/build.py /mnt/data/hdmap /mnt/data/webnavi/hdmap --only 여의도,동작   # 일부만
+   ```
+   결과가 서버의 `WORK_DIR/hdmap`(도커에선 `/work/hdmap`)에 생기면 서버가 한 시간 안에 알아서 읽는다(`lanes.db` 는 처음 한 번 색인).
+   잘린 다운로드는 끝에 이름을 알려 주고 나머지는 그대로 만든다.
+
+같은 방식으로 **표준노드링크**(자체 경로, 아래)도 선택이다. 없으면 `docker compose` 의 `osrm` 서비스는 빼고, `KOREA_OSRM_URL` 을 비운다
+(자체 경로 · 카메라 차로 판정 · 업체가 빠뜨린 회전 보완이 빠진다).
+
 ## 설정 페이지 `/admin`
 
 키를 파일에 쓰지 않고 브라우저에서 넣는다. 첫 방문에 비밀번호를 정하고(8자
-이상), 그 뒤로는 그 비밀번호로 들어간다. 필드마다 "저장됨 …1234" 식으로 마지막
+이상), 그 뒤로는 그 비밀번호로 — 또는 관리자 권한 계정의 로그인으로 — 들어간다(위 [계정과 권한](#계정과-권한)). 필드마다 "저장됨 …1234" 식으로 마지막
 네 자만 보이고, 키 자체는 다시 나오지 않는다. **저장하면 재시작 없이 바로
 적용**된다(제공자가 호출 때마다 읽음). 버튼 둘: **연결 확인**은 서비스마다 실제
 호출을 한 번씩 해서 ok/오류를 표로 보여 주고, **고정 멘트 렌더링**은 안내·경고 문장
@@ -79,7 +148,7 @@ open https://nav.example.com/admin   # 비밀번호 정하고 키 입력, 사용
 | 무엇 | 출처 (키) | 받는 방식 | 화면 / 음성 |
 |---|---|---|---|
 | 과속 방지턱 | 행정안전부 과속방지턱정보 (공공데이터포털) | 전국 약 14만 개, 주 1회 `/config/bumps.json` | 150m 앞 음성 |
-| 어린이 보호구역 | 전국어린이보호구역표준데이터 (공공데이터포털) | 전국 1.4만 곳, 주 1회 `/config/school-zones.json`; 시설 반경 200m 원 | 300m 앞 "어린이 보호구역입니다, 제한 속도 30", 안에서는 제한 속도 표지 |
+| 어린이 보호구역 | 전국어린이보호구역표준데이터 (공공데이터포털) | 전국 1.4만 곳, 주 1회 `/config/school-zones.json`; 시설 옆 경로 300 m 띠. 시설에서 가장 가까운 도로가 경로일 때(큰길이면 그 구역 단속 카메라가 경로 위에 있을 때)만 | 300m 앞 "어린이 보호구역입니다, 제한 속도 N"(N은 그 구역 단속 카메라의 값, 모르면 말하지 않음), 안에서는 제한 속도 표지 |
 | 미세먼지 | 에어코리아 대기오염정보 (공공데이터포털) | 시도별 실시간, 20분; 측정소는 동·구 이름으로 고름 | 날씨 창, 나쁨 이상이면 날씨 버튼에 점 |
 | 기상특보 | 기상청 기상특보 조회서비스 (공공데이터포털) | 전국 발효 현황 10분; 시도·시군구 이름으로 대조 | 오른쪽 위 카드, 호우·대설·태풍·강풍·한파·폭염·황사는 한 번 음성 |
 | 휴게소 | 한국도로공사 (data.ex.co.kr) | 위치 1일, 기름값 1시간, 편의시설 1일 — 전부 한 번에 | 오른쪽 위 카드(다음 휴게소, 30km 안), 기본은 표시만 |
@@ -147,6 +216,8 @@ unclassified), 연결로 → *_link, 링크마다 oneway·maxspeed·lanes·name�
 
 터널·지하주차장처럼 GPS 가 끊기는 곳에서 차가 보내는 속도·기어·위치로 화면의 차를 잇는다. 받는 길은 둘이고
 `/admin` → 차량 (Tesla) 에서 고른다: Owner API 스트리밍(비공식, 쓰는 중)과 Fleet Telemetry(공식, `fleet/`).
+- **계정마다 연결**: Owner 로그인은 사이트 계정 하나에 Tesla 계정 하나. 연결한 계정만 그 차의 데이터를 받고, 다른 계정은 받지 않는다
+  (`/api/car/info` 가 "연결 안 됨", 스트림은 204). Fleet 은 앱 로그인이 하나라 차마다 받을 계정을 `/admin` 에서 정한다 — 정하지 않은 차는 아무도 안 받는다.
 페이지가 듣는 동안에만 스트림을 연다(경로 안내 중이거나, 경로 없이 GPS 가 약할 때).
 - **터널**: 차 속도로 경로를 따라 간다. 안에서 막혀 서면 화면의 차도 선다. GPS 가 돌아오면 1.5초에 걸쳐 미끄러져 맞춘다.
 - **주차(P)**: 기어가 P 이면(또는 기어 빈칸·속도 없음) 위치·방향·속도계를 고정한다. 더 정확한 GPS 만 위치를 다듬는다.

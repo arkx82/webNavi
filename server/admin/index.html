@@ -47,6 +47,7 @@
   </section>
 
   <section id="login" hidden>
+    <p class="hint">관리 페이지 비밀번호로 들어가거나, 관리자 권한 계정으로 차 화면(<a href="/" style="color:var(--accent)">/</a>)에 로그인한 브라우저에서 이 페이지를 열면 바로 들어옵니다.</p>
     <label>비밀번호<input id="login-pw" type="password" autocomplete="current-password" /></label>
     <div class="row"><button class="primary" id="login-go">들어가기</button></div>
     <div class="msg" id="login-msg"></div>
@@ -96,6 +97,9 @@
         </div>
         <div id="car-owner">
           <p class="hint">PC의 크롬·엣지에서: ① <b>F12</b>로 개발자 도구를 열고 <b>Console</b> 탭을 띄워 둔 채 <b>Tesla 로그인 열기</b> → 새 탭에서도 F12 → Console. ② 로그인을 마치면 화면은 그대로지만 Console에 <code>Failed to launch 'tesla://auth/callback?code=…'</code> 가 뜹니다. ③ 그 줄을 통째로 복사해 아래에 붙여 넣고 완료. (Tesla Auth 앱 0.13 이상에서 받은 refresh token을 붙여 넣어도 됩니다.)</p>
+          <p class="hint">Tesla 계정은 <b>이 사이트의 계정마다</b> 따로 연결합니다. 연결한 계정만 그 차의 속도·위치를 받고, 다른 계정은 받지 않습니다.</p>
+          <label>연결할 계정 <select id="car-owner-user" style="min-height:36px;background:#111;color:var(--ink);border:1px solid #2c2c31;border-radius:6px"></select></label>
+          <p class="hint" id="car-owners"></p>
           <div class="row">
             <button type="button" id="car-owner-begin">Tesla 로그인 열기</button>
             <span class="hint" id="car-owner-state"></span>
@@ -139,6 +143,7 @@
 
     <h2>사용자</h2>
     <section>
+      <p class="hint"><b>관리자</b>는 자기 아이디로 로그인한 채 이 관리 페이지에 들어올 수 있고, <b>사용자</b>는 차 화면만 씁니다. 관리 페이지 비밀번호(admin)는 따로 늘 관리자입니다.</p>
       <p class="hint">차 화면과 폰은 여기서 만든 아이디로 로그인해야 쓸 수 있습니다. 집 · 회사 · 즐겨찾기, 최근 목적지, 안내 설정은 사용자마다 서버에 저장되어 어느 기기에서나 같습니다. 비밀번호를 바꾸면 그 사용자의 다른 기기는 다시 로그인해야 합니다.</p>
       <table id="users"></table>
       <div class="row">
@@ -181,8 +186,14 @@ function showUsers(users) {
   if (!users.length) { t.innerHTML = `<tr><td class="hint">아직 없습니다 — 아래에서 추가하세요</td></tr>`; return; }
   for (const u of users) {
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td><b></b></td><td class="hint"></td><td><button type="button" data-pw>비밀번호 변경</button> <button type="button" data-del>삭제</button></td>`;
+    tr.innerHTML = `<td><b></b></td><td><select data-role style="min-height:36px;background:#111;color:var(--ink);border:1px solid #2c2c31;border-radius:6px"><option value="admin">관리자</option><option value="user">사용자</option></select></td><td class="hint"></td><td><button type="button" data-pw>비밀번호 변경</button> <button type="button" data-del>삭제</button></td>`;
     tr.querySelector("b").textContent = u.name;
+    const role = tr.querySelector("[data-role]");
+    role.value = u.role || "user";
+    role.onchange = async () => {
+      try { showUsers((await send("POST", `/admin/api/users/${u.id}/role`, { role: role.value })).users); say("users-msg", `${u.name}: ${role.value === "admin" ? "관리자" : "사용자"}로 바꿨습니다`, "ok"); }
+      catch (e) { say("users-msg", e.message, "bad"); }
+    };
     tr.querySelector(".hint").textContent = `마지막 접속 ${when(u.lastSeen)}`;
     tr.querySelector("[data-pw]").onclick = async () => {
       const pw = window.prompt(`${u.name} 의 새 비밀번호 (6자 이상)`);
@@ -213,6 +224,11 @@ async function start() {
   $("setup").hidden = !s.needsSetup;
   $("login").hidden = s.needsSetup || s.loggedIn;
   $("panel").hidden = !s.loggedIn;
+  if (s.loggedIn && s.who && s.who !== "admin") {
+    // In by the account's own login: leaving is logging out of the car page.
+    $("logout").textContent = `${s.who} (관리자)`;
+    $("logout").disabled = true;
+  }
   if (s.loggedIn) await load();
 }
 
@@ -370,8 +386,15 @@ function showCar(st) {
   for (const b of document.querySelectorAll("[data-car-source]")) b.className = b.dataset.carSource === st.source ? "primary" : "";
   $("car-owner").hidden = st.source !== "owner";
   $("car-fleet").hidden = st.source !== "fleet";
-  $("car-owner-state").textContent = st.owner.linked ? "연결됨" : "미연결";
-  $("car-owner-state").className = "hint" + (st.owner.linked ? " saved" : "");
+  const pick = $("car-owner-user");
+  const was = pick.value;
+  pick.innerHTML = st.owners.map((o) => `<option value="${o.name}">${o.name}${o.role === "admin" ? " (관리자)" : ""}${o.linked ? " — 연결됨" : ""}</option>`).join("");
+  if (was && st.owners.some((o) => o.name === was)) pick.value = was;
+  const mine = st.owners.find((o) => o.name === pick.value);
+  $("car-owner-state").textContent = mine?.linked ? `${mine.name}: 연결됨` : `${pick.value || "계정"}: 미연결`;
+  $("car-owner-state").className = "hint" + (mine?.linked ? " saved" : "");
+  const linked = st.owners.filter((o) => o.linked).map((o) => o.name);
+  $("car-owners").textContent = linked.length ? `Tesla 연결된 계정: ${linked.join(", ")}` : "Tesla 연결된 계정 없음";
   $("car-redirect").textContent = st.fleet.redirect;
   $("car-fleet-pair").href = st.fleet.pairing;
   const f = st.fleet;
@@ -381,14 +404,16 @@ function showCar(st) {
     `Redis: ${f.redis ? "듣는 중" : (f.redisError ?? "대기")}`,
     `<a href="${f.publicKey}" target="_blank" style="color:var(--accent)">공개키</a>`,
   ].join(" · ");
-  const users = [["", "모든 사용자"], ...st.users.map((u) => [u, u])];
+  const users = [["", "(계정 없음 — 아무도 안 받음)"], ...st.users.map((u) => [u, u])];
   $("car-cars").innerHTML = st.cars.map((c) => {
     const s = st.streams[c.vin] || {};
     const opts = users.map(([v, t]) => `<option value="${v}"${(c.user || "") === v ? " selected" : ""}>${t}</option>`).join("");
     return `<tr><td>${c.name}<br><span class="hint">…${c.vin.slice(-6)}</span></td><td><select data-vin="${c.vin}" style="min-height:36px;background:#111;color:var(--ink);border:1px solid #2c2c31;border-radius:6px">${opts}</select><br><span class="hint">${s.state || ""}${s.lastSampleAgoS != null ? ` · ${s.lastSampleAgoS}초 전` : ""}${s.lastError ? ` · ${s.lastError}` : ""}</span></td></tr>`;
   }).join("") || `<tr><td colspan="2" class="hint">연결된 차 없음</td></tr>`;
   for (const sel of $("car-cars").querySelectorAll("select[data-vin]")) {
-    sel.onchange = () => carCall("/admin/car/user", { vin: sel.dataset.vin, user: sel.value }, "보는 사용자를 바꿨습니다");
+    // By the owner login a car is the account's that linked it; by Fleet it is given here.
+    sel.disabled = st.source !== "fleet";
+    sel.onchange = () => carCall("/admin/car/user", { vin: sel.dataset.vin, user: sel.value }, "받는 계정을 바꿨습니다");
   }
 }
 async function loadCar() {
@@ -407,16 +432,22 @@ for (const b of document.querySelectorAll("[data-car-source]")) {
   b.onclick = () => carCall("/admin/car/source", { source: b.dataset.carSource }, "방식을 바꿨습니다 — 차 목록을 다시 받으세요");
 }
 $("car-owner-begin").onclick = async () => {
-  try { const r = await call("/admin/car/owner/begin", {}); window.open(r.url, "_blank"); say("car-msg", "새 탭에서 로그인한 뒤, 끝 페이지의 주소를 붙여 넣으세요", "ok"); }
+  try { const r = await call("/admin/car/owner/begin", { user: $("car-owner-user").value }); window.open(r.url, "_blank"); say("car-msg", "새 탭에서 로그인한 뒤, 끝 페이지의 주소를 붙여 넣으세요", "ok"); }
   catch (e) { say("car-msg", e.message, "bad"); }
 };
 $("car-owner-finish").onclick = () => {
   const v = $("car-owner-paste").value.trim();
   if (!v) return say("car-msg", "주소나 토큰을 붙여 넣으세요", "bad");
   const isUrl = /code=/.test(v);
-  carCall(isUrl ? "/admin/car/owner/finish" : "/admin/car/owner/token", isUrl ? { url: v } : { token: v }, (r) => `연결됨 — 차 ${r.cars.length}대`).then(() => { $("car-owner-paste").value = ""; });
+  const user = $("car-owner-user").value;
+  carCall(isUrl ? "/admin/car/owner/finish" : "/admin/car/owner/token", isUrl ? { url: v, user } : { token: v, user }, (r) => `${user}: 연결됨 — 차 ${r.cars.filter((c) => c.user === user).length}대`).then(() => { $("car-owner-paste").value = ""; });
 };
-$("car-owner-unlink").onclick = () => carCall("/admin/car/unlink", { which: "owner" }, "Owner 연결을 해제했습니다");
+$("car-owner-unlink").onclick = () => {
+  const user = $("car-owner-user").value;
+  if (!window.confirm(`${user} 계정의 Tesla 연결을 해제할까요?`)) return;
+  carCall("/admin/car/unlink", { which: "owner", user }, `${user}: Tesla 연결을 해제했습니다`);
+};
+$("car-owner-user").onchange = () => carState && showCar(carState);
 $("car-fleet-register").onclick = () => carCall("/admin/car/fleet/register", {}, "파트너 등록됨");
 $("car-fleet-begin").onclick = async () => {
   try { const r = await call("/admin/car/fleet/begin", {}); location.href = r.url; } catch (e) { say("car-msg", e.message, "bad"); }

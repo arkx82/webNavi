@@ -44,20 +44,23 @@ export function parseSession(cookieHeader: string | undefined): [body: string, s
   return body && sig ? [body, sig] : null;
 }
 
+/** The site user a request's session cookie names, if it is good (signed, not expired, the password not changed since). */
+export function sessionUser(request: FastifyRequest, db: Db, settings: Settings): User | null {
+  const session = parseSession(request.headers.cookie);
+  if (!session) return null;
+  const [body, sig] = session;
+  if (!settings.verify(`user:${body}`, sig)) return null;
+  const [id, epoch, exp] = body.split(".").map(Number);
+  if (!(exp > Date.now())) return null;
+  return db.session(id, epoch);
+}
+
 export function registerUsers(app: FastifyInstance, db: Db, settings: Settings, adminGuard: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>, workDir: string) {
   // Wrong logins by address and by account: a forged address does not free the account (guard.ts).
   const lockout = new Lockout(LOCK_AFTER, LOCK_MS);
   const isSecure = (request: FastifyRequest) => request.protocol === "https" || request.headers["x-forwarded-proto"] === "https";
 
-  const userOf = (request: FastifyRequest): User | null => {
-    const session = parseSession(request.headers.cookie);
-    if (!session) return null;
-    const [body, sig] = session;
-    if (!settings.verify(`user:${body}`, sig)) return null;
-    const [id, epoch, exp] = body.split(".").map(Number);
-    if (!(exp > Date.now())) return null;
-    return db.session(id, epoch);
-  };
+  const userOf = (request: FastifyRequest): User | null => sessionUser(request, db, settings);
 
   const cookie = (request: FastifyRequest, value: string, maxAge: number) =>
     `${COOKIE}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${isSecure(request) ? "; Secure" : ""}`;
@@ -108,7 +111,7 @@ export function registerUsers(app: FastifyInstance, db: Db, settings: Settings, 
 
   app.get("/api/me", async (request, reply) => {
     if (!request.user) return reply.code(401).send({ error: "login", users: db.users().length > 0 });
-    return { user: { id: request.user.id, name: request.user.name } };
+    return { user: { id: request.user.id, name: request.user.name, role: request.user.role } };
   });
 
   // What the user keeps, all at once (the page loads it before it starts) and one key at a time.
@@ -173,6 +176,12 @@ export function registerUsers(app: FastifyInstance, db: Db, settings: Settings, 
     } catch (e) {
       return reply.code(400).send({ error: (e as Error).message });
     }
+  });
+  app.post<{ Params: { id: string }; Body: { role?: string } }>("/admin/api/users/:id/role", { preHandler: adminGuard }, async (request, reply) => {
+    const role = request.body?.role;
+    if (role !== "admin" && role !== "user") return reply.code(400).send({ error: "role: admin 또는 user" });
+    db.setRole(Number(request.params.id), role);
+    return { users: db.users() };
   });
   app.delete<{ Params: { id: string } }>("/admin/api/users/:id", { preHandler: adminGuard }, async (request) => {
     db.removeUser(Number(request.params.id));

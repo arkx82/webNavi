@@ -12,3 +12,16 @@ server/config/
 .vscode/
 .codesight/
 __pycache__/
+
+# 정밀도로지도 · 표준노드링크의 가공물: 국토지리정보원 · ITS 자료의 2차 가공물이라 저장소에 넣지 않는다 (README → 정밀도로지도).
+*.mbtiles
+*.geojsons
+lanes.db
+links.db
+*.osrm*
+korea.osm
+speeds.csv
+hdmap/
+nodelink/
+!tools/hdmap/
+!tools/nodelink/
