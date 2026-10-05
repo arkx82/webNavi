@@ -2328,6 +2328,15 @@ async function watchRoad(fix: Fix) {
   if (!incidentsAt || Date.now() - incidentsAt.t > INCIDENTS_EVERY_MS || metres(incidentsAt.at[0], incidentsAt.at[1], fix.lon, fix.lat) > 8000) {
     void placeIncidents(w, [fix.lon, fix.lat]);
   }
+  checkRoad(w, r, speedOf(fix));
+}
+
+/**
+ * The warnings, the limit, the cards and the map's bands for where the car is drawn — at a fix, and every half second
+ * between fixes too: they had waited for a fix, and in the car browser's 20-second silences or a tunnel a camera's 300 m
+ * warning went by unsaid (130 km/h, 2026-10-05). The car's place is the tracker's, reckoned through the gap.
+ */
+function checkRoad(w: RouteWatch, r: Route, speedMps: number | null | undefined) {
   // The warnings, the limit, the cards and the map's bands a few times a second, not at every fix: the car's browser
   // gives ten a second (2026-10-04), and all this ten times a second slowed the page through a long drive. The car on
   // the map still moves at every fix and every frame.
@@ -2353,12 +2362,12 @@ async function watchRoad(fix: Fix) {
     log(`경고 ${phrase}`);
     // Said while its distance still holds — until the car is 30 % nearer than it says: "육백미터 앞" said fourteen seconds
     // late, behind another, was 400 m out (a pretend drive, 2026-10-05).
-    const mps = Math.max(5, speedOf(fix) ?? 0);
+    const mps = Math.max(5, speedMps ?? 0);
     voice.say(phrase, undefined, { key: `warn:${f.id}:${due.rungM}`, withinS: Math.max(3, Math.min(20, (due.inM - due.rungM * 0.7) / mps)) });
   }
   showSectionHud(tracker.frame());
-  showLimit(w.limitAt(along), speedOf(fix));
-  showNextLight(w, along, speedOf(fix));
+  showLimit(w.limitAt(along), speedMps);
+  showNextLight(w, along, speedMps);
   // The protected zones on the route, as bands on the road (those the driver keeps shown).
   zoneLayer.set([
     ...w.zones().filter((z) => shows(guide, z.feature.kind)).map((z) => ({ id: z.feature.id, kind: z.feature.kind as "school-zone" | "senior-zone", alongM: z.alongM, endM: z.endM })),
@@ -2367,6 +2376,12 @@ async function watchRoad(fix: Fix) {
   ], routeLine);
   drawNotes(roadNotes(w, along));
 }
+setInterval(() => {
+  const w = watch, r = route;
+  if (!w || !r || performance.now() - roadCheckedAt < 600) return;
+  holdAhead(w);
+  checkRoad(w, r, tracker.frame()?.speedMps ?? null);
+}, 500);
 
 /** Lights this close along the route are one junction's; the nearest ahead of the car is "the next". */
 const LIGHTS_ONE_JUNCTION_M = 40;

@@ -296,6 +296,12 @@ export class RouteWatch {
             if (d < nearest) { nearest = d; endM = m; }
             else if (d > nearest + 2000) break;
           }
+          // A route that never comes much nearer its end does not drive the stretch: going east past 영동고속도로's
+          // westbound start (151.5 km, its end at 144.8 km), the heading read neither way across the bend, and a
+          // stretch of 250 m opened and closed (2026-10-05).
+          // (One that clearly heads for it and turns off early still drives the start of it.)
+          const from = dist(f.alongM, pair);
+          if (heading(f.alongM, pair) !== 1 && nearest > Math.max(SECTION_TWIN_M, from * 0.5)) { silent.add(f.feature.id); continue; }
         }
         sections.push({ feature: f.feature, alongM: f.alongM, endM });
       } else {

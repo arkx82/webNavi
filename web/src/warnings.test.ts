@@ -358,3 +358,13 @@ test("a school by a wide road (3 lanes one way and more) is the road's zone only
   watch.add([{ id: "cam", kind: "speed", ...lonLat(at(330, 6)), limit: 50, zone: "school" }]);
   assert.deepEqual(watch.ahead(0, 2100).filter((a) => a.feature.kind === "school-zone").map((a) => a.feature.id), ["wide", "narrow", "unknown"]);
 });
+
+test("a stretch's start the route passes going across, never nearer its end (영동고속도로 westbound, 2026-10-05), opens no stretch", () => {
+  const watch = new RouteWatch(route);
+  // The route north then east; a start at 1500 m (on the east leg), its end 4 km away to the south-west, which the
+  // route only goes further from — though at the start it runs across, not away.
+  const atStart = offset(corner, 90, 500);
+  watch.add([{ id: "theirs", kind: "section-start", ...lonLat(atStart), limit: 80, direction: "1", pair: offset(atStart, 180, 4000) }]);
+  assert.deepEqual(watch.sections(), []);
+  assert.equal(watch.limitAt(1700), null);
+});

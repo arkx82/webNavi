@@ -106,7 +106,8 @@ export function turnSay(maneuver: Maneuver, inM: number, road: RoadKind, said: S
   // Onto a motorway with no side to take: a fixed sentence, not the provider's list of places.
   const entry = !facility && !toll && (maneuver === "straight" || maneuver === "other") && ENTRY.test(action);
   // Straight on, a toll gate, a motorway entry and the arrival are said once, close in.
-  if (!facility && (maneuver === "straight" || maneuver === "arrive" || toll || entry)) rungs = [near];
+  // …and so is a guide that names no way at all (NAVER's "분기도로 진입"): "일킬로미터 앞 분기도로 진입" told nothing to act on.
+  if (!facility && (maneuver === "straight" || maneuver === "arrive" || maneuver === "other" || toll || entry)) rungs = [near];
   // A 지하차도 or 고가차도 is a lane to be in, not a turn: the last far rung and 잠시 후 (three under 미사대로 are nine sentences otherwise).
   if (facility) rungs = all.slice(-2);
   const at = rungs.find((r) => inM <= r.to && inM >= r.from);
