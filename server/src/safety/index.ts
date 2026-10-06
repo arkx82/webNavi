@@ -54,8 +54,14 @@ export class SafetyIndex {
       return index.build();
     }
     for (const file of files) {
-      const text = decode(readFileSync(join(dir, file)));
-      index.add(parseStandardData(text, file));
+      // One file that will not parse (a quote left open) is left out, not the whole index — nor the process, when
+      // the hourly rebuild meets it with no catch above.
+      try {
+        const text = decode(readFileSync(join(dir, file)));
+        index.add(parseStandardData(text, file));
+      } catch (e) {
+        console.warn(`safety: ${file} not read: ${(e as Error).message}`);
+      }
     }
     return index.build();
   }
@@ -135,7 +141,8 @@ export function zoneLimits(features: Feature[]): void {
       }
     }
     const limits = new Set(near.map((n) => n.limit));
-    features[i] = { ...f, limit: limits.size === 1 ? near[0].limit : undefined };
+    // A school zone's 30 was the list's guess, so none is kept; a senior zone's limit is the row's own (datasets.ts), kept.
+    features[i] = { ...f, limit: limits.size === 1 ? near[0].limit : f.kind === "senior-zone" ? f.limit : undefined };
   });
 }
 

@@ -124,7 +124,9 @@ function carChoice(): GuideSettings["carData"] {
 
 export function loadGuide(): GuideSettings {
   try {
-    return migrate({ ...DEFAULTS, ...(JSON.parse(localStorage.getItem(KEY) ?? "{}") as Partial<GuideSettings>), carData: carChoice() });
+    const stored = JSON.parse(localStorage.getItem(KEY) ?? "{}") as Partial<GuideSettings>;
+    // The saved revision, not the default's: spread over DEFAULTS, a copy saved before rev was kept read as current.
+    return migrate({ ...DEFAULTS, ...stored, rev: stored.rev ?? 1, carData: carChoice() });
   } catch {
     return { ...DEFAULTS, carData: carChoice() };
   }

@@ -72,7 +72,7 @@ export async function fetchCameras(key: string, dir: string): Promise<KeptCamera
     const body = { response: raw.response ?? raw };
     if (!body.response.header && !body.response.body) throw new Error(`cameras: ${answer.status} unexpected answer ${text.slice(0, 120)}`);
     const header = body.response?.header;
-    if (header?.resultCode && header.resultCode !== "00") {
+    if (header?.resultCode && !/^0+$/.test(header.resultCode)) {
       if (header.resultCode === "03") break; // no more data
       throw new Error(`cameras: ${header.resultCode} ${header.resultMsg ?? ""}`);
     }

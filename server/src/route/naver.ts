@@ -52,7 +52,7 @@ export class Naver implements RouteProvider {
       // Naver's duration is milliseconds.
       durationS: Math.round(first.summary.duration / 1000),
       path: first.path,
-      guides: first.guide.map((g) => ({
+      guides: first.guide.filter((g) => first.path[g.pointIndex] != null).map((g) => ({
         at: first.path[g.pointIndex],
         text: g.instructions,
         distanceM: g.distance,

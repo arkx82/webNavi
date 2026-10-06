@@ -32,7 +32,7 @@ import { registerAdmin } from "./admin.js";
 import { registerMusic } from "./music.js";
 import { Db } from "./db.js";
 import { registerUsers, sessionUser } from "./users.js";
-import { RefusedUrl, fetchPublic, registerGuard } from "./guard.js";
+import { RefusedUrl, fetchPublic, isApiPath, registerGuard } from "./guard.js";
 import { hdLanes, registerHdmap } from "./hdmap.js";
 import { registerShare } from "./share.js";
 import { registerCar } from "./car/index.js";
@@ -592,7 +592,7 @@ if (existsSync(webDir)) {
   // The phone's page for sending a place to a car (web/share.html), and the share sheet's way in.
   app.get("/share", async (_request, reply) => reply.sendFile("share.html"));
   app.setNotFoundHandler((request, reply) => {
-    if (request.url.startsWith("/api/")) return reply.code(404).send({ error: "no such call" });
+    if (isApiPath(request.url)) return reply.code(404).send({ error: "no such call" });
     return reply.sendFile("index.html");
   });
 }

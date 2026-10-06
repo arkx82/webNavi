@@ -119,7 +119,7 @@ export function findMerges(route: Route): Feature[] {
     const at = p.alongM + (entrance ? ENTRANCE_RAMP_M : JUNCTION_RAMP_M);
     if (at >= line.lengthM - 50) return;
     const [lon, lat] = line.place(at).at;
-    out.push({ id: `merge:${n}:${Math.round(p.alongM)}`, kind: "merge", lon, lat });
+    out.push({ id: `merge:${lon.toFixed(4)},${lat.toFixed(4)}`, kind: "merge", lon, lat });
   });
   return out;
 }

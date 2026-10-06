@@ -103,6 +103,8 @@ export class TidalSource implements MusicSource {
       // The source let go (disconnect): no track failed.
       if (this.queue.length === 0) return;
       this.failure = "TIDAL 재생 오류가 발생했습니다";
+      // A fault mid-track stops the sound with no pause event: not "playing" any more, and the fault shown.
+      if (this.audio.paused || this.audio.error) { this.switching = false; this.playing = false; }
       this.emitNow();
       // Moved on only if nothing else has by then: a play() refused for the same fault moves on itself (advance),
       // and this must not skip the track that one put on.
@@ -271,6 +273,8 @@ export class TidalSource implements MusicSource {
   }
 
   async play(uri: string): Promise<void> {
+    // Two lists tapped in a row: the first's answer, coming second, must not take the queue from the second.
+    const load = ++this.load;
     if (uri.startsWith("track:")) {
       const id = uri.slice(6);
       const from = this.found.findIndex((t) => t.id === id);
@@ -297,6 +301,8 @@ export class TidalSource implements MusicSource {
       this.ordered = (res?.items ?? []).map(trackOf);
     }
 
+    // Another list was asked for while this one's came: this one is not played.
+    if (load !== this.load) return;
     if (this.ordered.length === 0) {
       throw new Error("재생할 곡을 찾지 못했습니다");
     }
@@ -386,7 +392,10 @@ export class TidalSource implements MusicSource {
 
   async toggle(): Promise<void> {
     if (this.playing) {
+      // Paused while the next track was being put on: the listener's pause, not the change's — reported.
+      this.switching = false;
       this.audio.pause();
+      if (this.audio.paused && this.playing) { this.playing = false; this.emitNow(); }
     } else {
       await this.audio.play();
     }

@@ -58,7 +58,11 @@ export class HdPoints {
   without(features: Feature[]): Feature[] {
     if (this.features.length === 0) return features;
     const cells = new Map<string, Feature[]>();
-    const key = (f: Feature) => `${f.kind}:${Math.floor(f.lat * M / NEAR_M)}:${Math.floor(f.lon * M * Math.cos((f.lat * Math.PI) / 180) / NEAR_M)}`;
+    // One cos for every point (Korea's middle): with each point's own, two 20 m apart north–south fell in cells
+    // more than one apart east–west (lon·M is 1.4e7; a cos differing in the sixth place moves the cell), and
+    // 9 % of such pairs were kept twice.
+    const kx = M * Math.cos((36 * Math.PI) / 180);
+    const key = (f: Feature) => `${f.kind}:${Math.floor(f.lat * M / NEAR_M)}:${Math.floor(f.lon * kx / NEAR_M)}`;
     for (const f of this.features) {
       const k = key(f);
       (cells.get(k) ?? cells.set(k, []).get(k)!).push(f);

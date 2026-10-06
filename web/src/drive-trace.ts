@@ -55,6 +55,13 @@ export class DriveTrace {
     return this.rows.splice(0, this.rows.length);
   }
 
+  /** Lines handed over and not sent after all, back at the front for the next round. */
+  putBack(rows: string[]) {
+    if (!rows.length) return;
+    this.rows.unshift(...rows);
+    if (this.rows.length > DriveTrace.KEPT) this.rows.splice(0, this.rows.length - DriveTrace.KEPT);
+  }
+
   private push(line: string) {
     this.rows.push(line);
     if (this.rows.length > DriveTrace.KEPT) this.rows.splice(0, this.rows.length - DriveTrace.KEPT);

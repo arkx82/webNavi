@@ -138,12 +138,20 @@ export class RouteWatch {
 
   /** Takes the server's radius answer; features already known are left alone. */
   add(features: Feature[]) {
-    const known = new Set(this.onRoute.map((f) => f.feature.id));
     let added = false;
-    for (const f of features) if (!known.has(f.id)) { this.place(f); added = true; }
+    for (const f of features) {
+      // Once each: the ones placed, and the ones placed off the route or merged into a twin — every answer round the
+      // car has the same hundreds of lights, and each was projected onto the whole line again.
+      if (this.tried.has(f.id)) continue;
+      this.tried.add(f.id);
+      const n = this.onRoute.length;
+      this.place(f);
+      if (this.onRoute.length !== n) added = true;
+    }
     // A new array marks the features changed, for what is cached off them (sections()).
     if (added) this.onRoute = [...this.onRoute];
   }
+  private tried = new Set<string>();
 
   private place(f: Feature) {
     const p = this.line.project([f.lon, f.lat], 0, this.line.path.length);
@@ -384,6 +392,13 @@ export class RouteWatch {
       // Of the rungs the car is inside, the nearest not yet said — and saying it marks the further ones said
       // too: a camera first learned of at 250 m (the server's answer came late) is "300미터 앞", not "600미터 앞"
       // and then "300미터 앞" a second later. One rung per feature per call; the next comes on a later call.
+      // Behind the car already (a camera the server's answer named after it was passed; a zone the drive began
+      // inside): nothing to say of it — "삼백미터 앞에…" would be wrong — and its rungs are over.
+      if (a.inM < 0) {
+        for (const r of rungs) done.add(r);
+        this.spoken.set(a.feature.id, done);
+        continue;
+      }
       const inside = rungs.filter((r) => a.inM <= r && !done.has(r));
       if (inside.length === 0) continue;
       const rung = Math.min(...inside);
@@ -494,7 +509,9 @@ export function findCurves(route: Route): Feature[] {
     const first = bends[k];
     const [lon, lat] = route.path[first.i];
     const many = end > k;
-    out.push({ id: `curve:${first.i}`, kind: many ? "curves" : "curve", lon, lat, name: many ? `${end - k + 1}곳` : `${Math.round(first.turn)}°` });
+    // Named by its place, not its vertex: a re-route keeps what was said, and the same vertex number on the new
+    // line is another bend.
+    out.push({ id: `curve:${lon.toFixed(4)},${lat.toFixed(4)}`, kind: many ? "curves" : "curve", lon, lat, name: many ? `${end - k + 1}곳` : `${Math.round(first.turn)}°` });
     k = end + 1;
   }
   return out;

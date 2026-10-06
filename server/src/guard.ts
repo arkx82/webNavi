@@ -122,6 +122,25 @@ export class RefusedUrl extends Error {
 }
 
 /** The driver's address: Cloudflare's header when the request came through the tunnel on this machine. */
+/**
+ * Whether a request is for the API, read as the router reads it: the path decoded ("/%61pi/health" is
+ * "/api/health" to find-my-way) and without the query. Read from the raw URL, "/%61pi/route" passed the login hook
+ * and the rate limit and was routed to the keyed providers all the same (2026-10-06). A path that cannot be decoded
+ * is taken as the API's: refused rather than let through.
+ */
+export function isApiPath(url: string): boolean {
+  const raw = url.split("?")[0];
+  let path: string;
+  try { path = decodeURIComponent(raw); } catch { return true; }
+  // "//api", "/./api", "/x/../api": what a router or a static server might fold into "/api".
+  const parts: string[] = [];
+  for (const p of path.split("/")) {
+    if (p === "" || p === ".") continue;
+    if (p === "..") parts.pop(); else parts.push(p);
+  }
+  return parts[0]?.toLowerCase() === "api";
+}
+
 export function clientIp(request: FastifyRequest): string {
   const cf = request.headers["cf-connecting-ip"];
   if (typeof cf === "string" && cf && isPrivate(request.ip)) return cf;
@@ -214,7 +233,7 @@ export function registerGuard(app: FastifyInstance) {
   // After the login hook (users.ts) has named the user.
   app.addHook("preHandler", async (request, reply) => {
     const path = request.url.split("?")[0];
-    if (!path.startsWith("/api/") || !request.user) return;
+    if (!isApiPath(request.url) || !request.user) return;
     if (!limit.allow(String(request.user.id), path)) {
       request.log.warn({ user: request.user.name, path }, "rate limited");
       return reply.code(429).send({ error: "too many requests — 잠시 뒤에 다시" });

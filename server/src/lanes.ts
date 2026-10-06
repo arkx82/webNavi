@@ -153,9 +153,10 @@ export class LaneIndex {
     if (existsSync(this.dbFile) && statSync(this.dbFile).mtimeMs >= statSync(this.linksFile).mtimeMs) return;
     this.building = true;
     const tmp = `${this.dbFile}.new`;
+    let db: DatabaseSync | null = null;
     try {
       if (existsSync(tmp)) unlinkSync(tmp);
-      const db = new DatabaseSync(tmp);
+      db = new DatabaseSync(tmp);
       db.exec(`
         PRAGMA journal_mode = OFF; PRAGMA synchronous = OFF;
         CREATE TABLE links (rowid INTEGER PRIMARY KEY, id TEXT, lane INTEGER, a TEXT, b TEXT, l TEXT, r TEXT, coords TEXT);
@@ -181,12 +182,15 @@ export class LaneIndex {
       }
       db.exec("COMMIT; CREATE INDEX links_id ON links(id); CREATE INDEX links_a ON links(a);");
       db.close();
+      db = null;
       this.stmts = null;
       this.db?.close();
       this.db = null;
       renameSync(tmp, this.dbFile);
       this.log(`lanes: index built, ${n} links`);
     } finally {
+      // A build that threw (the disk full, the stream cut) leaves no open handle on the half-written file.
+      try { db?.close(); } catch { /* already closed */ }
       this.building = false;
     }
   }

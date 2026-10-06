@@ -93,7 +93,7 @@ export function lazy(id: MusicSource["id"], label: string, load: () => Promise<M
     id, label,
     async connect() {
       // One load however many connect() overlap (this source, another, this again before the module came).
-      real ??= await (loading ??= load());
+      real ??= await (loading ??= load().catch((e: unknown) => { loading = null; throw e; }));
       for (const l of pending) real.onState(l);
       pending.length = 0;
       await real.connect();

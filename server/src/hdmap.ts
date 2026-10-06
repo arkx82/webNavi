@@ -33,13 +33,23 @@ export class HdTiles {
     if (!existsSync(this.file)) return null;
     const m = statSync(this.file).mtimeMs;
     if (this.tileStmt && m === this.opened) return this.tileStmt;
-    this.db?.close();
-    this.db = new DatabaseSync(this.file, { readOnly: true });
-    this.opened = m;
-    const rows = this.db.prepare("SELECT name, value FROM metadata").all() as { name: string; value: string }[];
-    this.meta = Object.fromEntries(rows.map((r) => [r.name, r.value]));
-    this.tileStmt = this.db.prepare("SELECT tile_data FROM tiles WHERE zoom_level = ? AND tile_column = ? AND tile_row = ?");
-    return this.tileStmt;
+    // The new file opened and read first; the old handle let go only then. A file being replaced (its metadata
+    // table not yet there) threw after the old one was closed, and every tile was a 500 until a restart.
+    let db: DatabaseSync | null = null;
+    try {
+      db = new DatabaseSync(this.file, { readOnly: true });
+      const rows = db.prepare("SELECT name, value FROM metadata").all() as { name: string; value: string }[];
+      const stmt = db.prepare("SELECT tile_data FROM tiles WHERE zoom_level = ? AND tile_column = ? AND tile_row = ?");
+      try { this.db?.close(); } catch { /* already closed */ }
+      this.db = db;
+      this.opened = m;
+      this.meta = Object.fromEntries(rows.map((r) => [r.name, r.value]));
+      this.tileStmt = stmt;
+      return stmt;
+    } catch {
+      try { db?.close(); } catch { /* half opened */ }
+      return this.tileStmt;
+    }
   }
 
   get ready() {

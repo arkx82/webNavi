@@ -70,6 +70,8 @@ export class CameraRoads {
     for (const deg of HEADINGS) {
       const res = await fetch(`${base}/nearest/v1/driving/${f.lon},${f.lat}?number=1&bearings=${deg},23`, { signal: AbortSignal.timeout(5000) });
       const body = (await res.json()) as { code?: string; waypoints?: { location: [number, number]; distance: number }[] };
+      // No road that way is an answer; anything else (TooBig, InvalidQuery, a half-up server) is not, and is asked again next round.
+      if (body.code !== "Ok" && body.code !== "NoSegment") throw new Error(`nearest ${body.code ?? res.status}`);
       const w = body.waypoints?.[0];
       if (w) found.push({ deg, at: [Number(w.location[0].toFixed(6)), Number(w.location[1].toFixed(6))], d: w.distance });
     }

@@ -76,3 +76,11 @@ test("a user past the minute's allowance is refused until the next minute", () =
   assert.ok(limit.allow("2", "/api/safety/near", t), "another user is not held up");
   assert.ok(limit.allow("1", "/api/safety/near", t + 60_000), "a new minute");
 });
+
+test("the API is told by the decoded, folded path: an encoded or doubled slash does not slip past the login", async () => {
+  const { isApiPath } = await import("./guard.js");
+  for (const url of ["/api/health", "/api/route?provider=all", "/%61pi/health", "/API/health", "//api/health", "/./api/health", "/x/../api/health", "/%zz"]) {
+    assert.equal(isApiPath(url), true, url);
+  }
+  for (const url of ["/", "/share", "/admin/api/state", "/assets/main.js", "/apix/health"]) assert.equal(isApiPath(url), false, url);
+});

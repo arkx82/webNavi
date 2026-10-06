@@ -1,4 +1,4 @@
-import { Lockout, clientIp } from "./guard.js";
+import { Lockout, clientIp, isApiPath } from "./guard.js";
 import { appendFile, mkdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
@@ -69,8 +69,9 @@ export function registerUsers(app: FastifyInstance, db: Db, settings: Settings, 
   /** Last-seen is written at most this often per user. */
   const seenAt = new Map<number, number>();
   app.addHook("onRequest", async (request, reply) => {
-    const path = request.url.split("?")[0];
-    if (!path.startsWith("/api/")) return;
+    if (!isApiPath(request.url)) return;
+    let path = request.url.split("?")[0];
+    try { path = decodeURIComponent(path); } catch { /* refused below as not open */ }
     request.user = userOf(request);
     if (request.user) {
       const last = seenAt.get(request.user.id) ?? 0;

@@ -53,7 +53,10 @@ async function allPages(url: (page: number) => URL, pageSize: number, label: str
   const first = await page(url(1), label);
   const total = first.total;
   const rows = [...first.rows];
-  const pages = Math.ceil(total / pageSize);
+  // By the rows a page really holds: a service that caps numOfRows below what was asked (the speed bumps' does, at
+  // 100) gave fewer pages than the total needs, and the rest were silently left out.
+  const perPage = first.rows.length > 0 && first.rows.length < pageSize && total > first.rows.length ? first.rows.length : pageSize;
+  const pages = Math.ceil(total / perPage);
   for (let p = 2; p <= pages; p += parallel) {
     const batch = await Promise.all(Array.from({ length: Math.min(parallel, pages - p + 1) }, (_, i) => page(url(p + i), label)));
     for (const b of batch) rows.push(...b.rows);

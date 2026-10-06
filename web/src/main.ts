@@ -1367,7 +1367,13 @@ function relined(r: Route) {
   // asked for again at once, so the bands — 구간 단속, the school zones — are drawn along the line as it is now.
   if (watch && route === r) {
     watch = new RouteWatch(r, () => ({ wants: (k) => wants(guide, k), shows: (k) => shows(guide, k), cameraFromM: guide.cameraFromM }), warningsSaid);
+    // Everything the old watch was given is asked for again for this one: the features round the car, the rest
+    // areas, the incidents, the stretch held ahead. Left as they were, a drive re-routed had no rest-area card for
+    // the rest of the way (the list came to the watch before, and the guard kept it from the new one).
     watchedAt = null;
+    incidentsAt = null;
+    aheadFor = null;
+    void placeRestAreas(watch);
   }
 }
 /** Routes whose line has been put onto the lanes (or asked to be): once each. */
@@ -2879,6 +2885,7 @@ async function pickSource(s: MusicSource) {
     music.disconnect();
     voice.duckers.delete(duckBySource);
   }
+  const before = music;
   music = s;
   showNow({ playing: false });
   el("player").hidden = true;
@@ -2897,6 +2904,9 @@ async function pickSource(s: MusicSource) {
   } catch (e) {
     musicSay(`${s.label}: ${(e as Error).message}`, true);
     log(`음악 ${s.label} 실패 ${(e as Error).message}`);
+    // Not connected: not "the source", or the next tap on it returned at once and nothing could be tried again.
+    if (music === s) { music = null; void drawSources(); }
+    void before;
   }
 }
 
@@ -3406,16 +3416,28 @@ function sendLog(beacon = false) {
   const rows = trace.take();
   if (!unsent.length && !rows.length) return;
   const lines = unsent.splice(0, unsent.length);
-  const body = JSON.stringify({ lines, trace: rows });
-  // A beacon and a keepalive fetch carry 64 KB at most: a route in the trace is often more, and goes by plain fetch.
-  const small = body.length < 60_000;
-  const post = (b: string, keepalive: boolean) =>
-    void fetch("/api/me/log", { method: "POST", headers: { "Content-Type": "application/json" }, body: b, keepalive }).catch(() => {});
-  if (beacon && navigator.sendBeacon && small) navigator.sendBeacon("/api/me/log", new Blob([body], { type: "application/json" }));
-  else if (beacon && navigator.sendBeacon) {
-    navigator.sendBeacon("/api/me/log", new Blob([JSON.stringify({ lines })], { type: "application/json" }));
-    post(JSON.stringify({ lines: [], trace: rows }), false);
-  } else post(body, small);
+  /** Not sent (the link down in a tunnel, a beacon refused): back for the next round, not lost — the tunnel's own lines. */
+  const keep = (l: string[], t: string[]) => { unsent.unshift(...l.slice(-2000)); trace.putBack(t); };
+  const post = (l: string[], t: string[], keepalive: boolean) =>
+    fetch("/api/me/log", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lines: l, trace: t }), keepalive })
+      .then((a) => { if (!a.ok) keep(l, t); })
+      .catch(() => keep(l, t));
+  if (!beacon) { void post(lines, rows, false); return; }
+  // The page going to the back or away: a beacon or a keepalive fetch, which carry 64 KB at most — measured in bytes
+  // (한글 is three a letter). The lines first, then the trace in such pieces; what does not fit goes back for later.
+  const bytes = (b: Blob) => b.size;
+  const logBlob = new Blob([JSON.stringify({ lines, trace: [] })], { type: "application/json" });
+  if (lines.length && !(bytes(logBlob) < 60_000 && navigator.sendBeacon?.("/api/me/log", logBlob))) void post(lines, [], true);
+  let piece: string[] = [];
+  const flushPiece = () => { if (piece.length) { void post([], piece, true); piece = []; } };
+  let size = 0, sent = 0;
+  for (const r of rows) {
+    if (size + r.length > 55_000) { flushPiece(); size = 0; sent++; }
+    // Keepalive requests share one 64 KB budget: two pieces at most now, the rest kept for the next round.
+    if (sent >= 2) { trace.putBack(rows.slice(rows.indexOf(r))); return; }
+    piece.push(r); size += r.length;
+  }
+  flushPiece();
 }
 setInterval(() => sendLog(), 30_000);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") sendLog(true); });

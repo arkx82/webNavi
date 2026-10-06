@@ -38,6 +38,8 @@ const PREDICT_S = 2.5;
 const CATCH_UP_S = 1.2;
 /** The closing never adds or takes more than this share of the car's speed: a fix's wander must not be felt as a surge. */
 const CATCH_UP_SHARE = 0.3;
+/** Off the road with the car's figures gone too, the marker is carried on no further than this. */
+const FREE_BEYOND_MAX_M = 300;
 /** A fix this far from the drawn car (a leap) is taken at once, not slid to. */
 const LEAP_M = 40;
 /**
@@ -122,6 +124,14 @@ export class Tracker {
   private lastFrameAt = 0;
 
   private speedMps = 0;
+  /**
+   * Out of a tunnel: the slide from where the reckoning had the car to where the fixes say, over SNAP_S from
+   * [snapStart]. Its own clock, not the glide's: the car browser's next fix, a tenth of a second on, began a new
+   * glide and the slide was cut — the marker leapt the whole reckoning error there and then (2026-10-06).
+   */
+  private snapUntil = 0;
+  private snapStart = 0;
+  private snapFromAlong: number | null = null;
   private reckonAlong = 0;
   private reckonSince = 0;
   private reckonBy: "car" | "speed" = "speed";
@@ -263,16 +273,29 @@ export class Tracker {
         : this.glideToAlong != null && this.glideFromAlong != null ? this.glideToAlong - this.glideFromAlong : null;
       this.onReckonEnd({ seconds: (now - this.reckonSince) / 1000, by: this.reckonBy, errorM, free: this.reckonFree });
     }
-    this.reckonSince = 0;
-    this.reckonFree = false;
-    this.startGlide(target, now, wasReckoning ? SNAP_S : this.periodS);
+    // A vague fix in the dark leaves the reckoning as it is (frame() goes on with it): only a good one ends it.
+    if (fix.accM <= LOST_ACC_M) {
+      this.reckonSince = 0;
+      this.reckonFree = false;
+    }
+    if (wasReckoning) {
+      this.snapStart = now;
+      this.snapUntil = now + SNAP_S * 1000;
+      this.snapFromAlong = this.shownAlong;
+      this.startGlide(target, now, SNAP_S);
+    } else if (now < this.snapUntil) {
+      // A fix while the slide is on: where it heads moves, the slide goes on from where it began.
+      this.glideTo = target;
+    } else {
+      this.startGlide(target, now, this.periodS);
+    }
     this.shownBearing = bearing;
   }
 
-  /** The last speed, held to the traffic's pace where the route says its stretch is slow or jammed. */
-  private reckonSpeed(speed = this.speedMps): number {
+  /** The last speed, held to the traffic's pace where the route says its stretch is slow or jammed — at [alongM], where the reckoning has the car, not where the last fix was. */
+  private reckonSpeed(speed = this.speedMps, alongM = this.shownAlong ?? this.reckonAlong): number {
     if (!this.route || !this.line) return speed;
-    const i = this.lastProj?.segment ?? 0;
+    const i = this.line.place(alongM).segment;
     const seg = this.route.segments.find((s) => i >= s.from && i < s.to);
     const cap = seg ? CONGESTED_MPS[seg.congestion] : undefined;
     return cap != null ? Math.min(speed, cap) : speed;
@@ -339,7 +362,9 @@ export class Tracker {
       const way = Math.hypot(free.dE, free.dN);
       let at = way > 0 ? offset(this.glideTo, (Math.atan2(free.dE, free.dN) * 180) / Math.PI, way) : this.glideTo;
       const heading = free.heading ?? this.shownBearing;
-      const beyond = (this.car!.lastSpeed() ?? 0) * (Math.max(0, wallNow - free.through) / 1000);
+      // Past the car's own figures, on at its last speed — but not for ever: with the link gone too the heading
+      // stands, and 30 minutes of it is 18 km off the road. A car park's worth, and it waits.
+      const beyond = Math.min(FREE_BEYOND_MAX_M, (this.car!.lastSpeed() ?? 0) * (Math.max(0, wallNow - free.through) / 1000));
       if (beyond > 0) at = offset(at, heading, beyond);
       this.shownAt = at;
       this.shownAlong = null;
@@ -358,10 +383,11 @@ export class Tracker {
         // Past PREDICT_S the place it is steered to stands: the car is carried no further than that, not crept on
         // for as long as the fixes stay away (a car park, a car too slow to reckon on).
         along = (now - this.lastFixAt) / 1000 > PREDICT_S ? Math.max(along, Math.min(predicted, along + this.speedMps * dt)) : along + this.speedMps * dt;
-        if (this.glideS === SNAP_S && t < 1 && this.glideFromAlong != null) {
-          // Out of a tunnel: from where the reckoning had the car to where the fix says, eased over SNAP_S — however
+        if (now < this.snapUntil && this.snapFromAlong != null) {
+          // Out of a tunnel: from where the reckoning had the car to where the fixes say, eased over SNAP_S — however
           // far the two were apart, a slide, not the leap a jump in the fixes is taken with.
-          along = this.glideFromAlong + (predicted - this.glideFromAlong) * (t * t * (3 - 2 * t));
+          const ts = Math.min(1, (now - this.snapStart) / (SNAP_S * 1000));
+          along = this.snapFromAlong + (predicted - this.snapFromAlong) * (ts * ts * (3 - 2 * ts));
         } else {
           // The error closed with a time constant: a small one melts away, a large one (a leap in the fixes) is taken.
           const gap = predicted - along;
@@ -380,7 +406,7 @@ export class Tracker {
           this.glideFrom[1] + (this.glideTo[1] - this.glideFrom[1]) * t,
         ];
       }
-      if (this.glideS === SNAP_S && t < 1) mode = "snapping";
+      if (now < this.snapUntil) mode = "snapping";
     }
     this.lastFrameAt = now;
 

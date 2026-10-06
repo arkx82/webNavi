@@ -81,8 +81,10 @@ export class Speaker {
    * Throws SpentError where that model's allowance is gone.
    */
   private async render(key: string, tier: Tier, text: string, asked: string): Promise<Buffer> {
+    // A slot taken here, or handed over by the render that finished (which then does not give it back): a waiter
+    // woken and a newcomer could otherwise both see a free slot in the same moment.
     if (this.rendering >= RENDERS_AT_ONCE) await new Promise<void>((go) => this.turn.push(go));
-    this.rendering++;
+    else this.rendering++;
     try {
       for (let attempt = 0; ; attempt++) {
         try {
@@ -93,8 +95,9 @@ export class Speaker {
         }
       }
     } finally {
-      this.rendering--;
-      this.turn.shift()?.();
+      const next = this.turn.shift();
+      if (next) next(); // the slot passes to it
+      else this.rendering--;
     }
   }
 
