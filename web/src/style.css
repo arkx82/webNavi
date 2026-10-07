@@ -151,6 +151,9 @@ button.icon.main { width: 74px; height: 74px; background: var(--tint); color: #1
 #mini button.icon.round { width: 40px; height: 40px; min-height: 40px; }
 
 .tabs { display: flex; gap: 8px; }
+.music-top { display: flex; align-items: center; gap: 8px; }
+.music-top .tabs { flex: 1; min-width: 0; }
+#music-off { flex: 0 0 auto; width: 40px; height: 40px; min-height: 40px; }
 .tabs.pills button { flex: 0 0 auto; min-height: 36px; line-height: 36px; padding: 0 16px; border-radius: 999px; font-size: 14px; font-weight: 600; background: rgba(255,255,255,.08); }
 .tabs.pills button.on { background: var(--tint); color: #1d1a2b; }
 

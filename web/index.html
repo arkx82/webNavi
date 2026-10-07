@@ -338,7 +338,11 @@
         <span id="mini-chevron"><svg class="gl" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 6l6 7H4z"/></svg></span>
       </div>
       <div id="full">
-        <div class="tabs pills" id="music-sources"></div>
+        <div class="music-top">
+          <div class="tabs pills" id="music-sources"></div>
+          <!-- 음악 끄기: the sound stopped, the list let go and the panel closed (folding it alone is the bar below). -->
+          <button id="music-off" class="icon round" type="button" title="음악 끄기" aria-label="음악 끄기"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
         <div id="player" hidden>
           <div class="cover-wrap"><div class="art big" id="now-art"></div></div>
           <div class="now-line">

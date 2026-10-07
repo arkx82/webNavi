@@ -79,9 +79,12 @@
         <p class="hint">검증된 기기용(스마트 TV/스트리머) Client ID가 기본 내장되어 있어 <b>전곡(HiFi) 무제한 재생</b>이 가능합니다. 별도 설정 없이 바로 <b>[TIDAL 연결]</b> 버튼을 누르시면 화면에 5자리 인증 코드가 표시됩니다. 스마트폰이나 PC로 <code>link.tidal.com</code>에 접속하여 코드를 입력하면 즉시 연결됩니다. (필요 시 다른 기기 키로 변경도 가능합니다)</p>
         <label><b>TIDAL</b> Client ID (선택 — 비워 두면 기본 내장 키 사용) <span class="hint" data-hint="tidalClientId"></span><input name="tidalClientId" /></label>
         <label><b>TIDAL</b> Client Secret (선택 — 비워 두면 기본 내장 키 사용) <span class="hint" data-hint="tidalClientSecret"></span><input name="tidalClientSecret" /></label>
+        <p class="hint">TIDAL 계정은 <b>이 사이트의 계정마다</b> 따로 연결합니다. 연결한 계정만 차 화면에 음악 버튼이 나오고, 그 계정의 재생목록·좋아요만 봅니다.</p>
+        <label>연결할 계정 <select id="tidal-user" style="min-height:36px;background:#111;color:var(--ink);border:1px solid #2c2c31;border-radius:6px"></select></label>
+        <p class="hint" id="tidal-owners"></p>
         <div class="row">
           <button type="button" class="primary" id="btn-tidal-connect">TIDAL 연결 (link.tidal.com)</button>
-          <button type="button" data-disconnect="tidal">해제</button>
+          <button type="button" id="btn-tidal-disconnect">해제</button>
           <span class="hint" id="state-tidal"></span>
         </div>
         <div id="tidal-box" style="margin-top: 14px; padding: 14px; background: #1f1f23; border: 1px solid var(--accent); border-radius: 8px;" hidden>
@@ -266,12 +269,7 @@ async function load() {
   showFields(r.fields);
   showStatus(r.status);
   void loadCar();
-  const m = await call("/api/music/state");
-  for (const name of ["tidal"]) {
-    const st = m[name] || {};
-    $("state-" + name).textContent = st.connected ? "연결됨" : "미연결";
-    $("state-" + name).className = "hint" + (st.connected ? " saved" : "");
-  }
+  try { showTidal((await call("/admin/music/state")).tidal); } catch (e) { say("msg", e.message, "bad"); }
   const q = new URLSearchParams(location.search);
   if (q.get("music")) {
     say("msg", q.get("ok") ? `${q.get("music")} 연결됐습니다` : `${q.get("music")} 연결 실패: ${q.get("error")}`, q.get("ok") ? "ok" : "bad");
@@ -279,12 +277,31 @@ async function load() {
   }
 }
 
+// ---- TIDAL, an account at a time ----
+let tidalOwners = [];
+function showTidal(owners) {
+  tidalOwners = owners;
+  const pick = $("tidal-user");
+  const was = pick.value;
+  pick.innerHTML = owners.map((o) => `<option value="${o.name}">${o.name}${o.role === "admin" ? " (관리자)" : ""}${o.connected ? " — 연결됨" : ""}</option>`).join("");
+  if (was && owners.some((o) => o.name === was)) pick.value = was;
+  const mine = owners.find((o) => o.name === pick.value);
+  $("state-tidal").textContent = mine?.connected ? `${mine.name}: 연결됨` : `${pick.value || "계정"}: 미연결`;
+  $("state-tidal").className = "hint" + (mine?.connected ? " saved" : "");
+  const linked = owners.filter((o) => o.connected).map((o) => o.name);
+  $("tidal-owners").textContent = linked.length ? `TIDAL 연결된 계정: ${linked.join(", ")}` : "TIDAL 연결된 계정 없음";
+}
+$("tidal-user").onchange = () => showTidal(tidalOwners);
+
 let tidalPollTimer = null;
 const btnTidal = $("btn-tidal-connect");
 if (btnTidal) {
   btnTidal.onclick = async () => {
     if (tidalPollTimer) clearInterval(tidalPollTimer);
-    say("msg", "TIDAL 기기 인증 요청 중…");
+    // The account is fixed at the start: a change of the list while the code waits does not move the link elsewhere.
+    const user = $("tidal-user").value;
+    if (!user) return say("msg", "연결할 계정을 고르세요", "bad");
+    say("msg", `${user}: TIDAL 기기 인증 요청 중…`);
     try {
       const res = await call("/admin/music/tidal/device", {});
       const link = $("tidal-link");
@@ -309,12 +326,12 @@ if (btnTidal) {
           return;
         }
         try {
-          const check = await call("/admin/music/tidal/check", { deviceCode: res.deviceCode });
+          const check = await call("/admin/music/tidal/check", { deviceCode: res.deviceCode, user });
           failCount = 0;
           if (check.status === "ok") {
             clearInterval(tidalPollTimer);
             $("tidal-box").hidden = true;
-            say("msg", "TIDAL 연결 완료! 전곡(HiFi) 스트리밍이 활성화되었습니다.", "ok");
+            say("msg", `${user}: TIDAL 연결 완료! 전곡(HiFi) 스트리밍이 활성화되었습니다.`, "ok");
             await load();
           }
         } catch (err) {
@@ -331,15 +348,17 @@ if (btnTidal) {
   };
 }
 
-for (const b of document.querySelectorAll("[data-disconnect]")) {
-  b.onclick = async () => {
-    if (tidalPollTimer) clearInterval(tidalPollTimer);
-    $("tidal-box").hidden = true;
-    await call(`/admin/music/${b.dataset.disconnect}/disconnect`, {});
-    say("msg", "음악 계정 연결을 해제했습니다", "ok");
-    await load();
-  };
-}
+$("btn-tidal-disconnect").onclick = async () => {
+  const user = $("tidal-user").value;
+  if (!user || !window.confirm(`${user} 계정의 TIDAL 연결을 해제할까요?`)) return;
+  if (tidalPollTimer) clearInterval(tidalPollTimer);
+  $("tidal-box").hidden = true;
+  try {
+    await call("/admin/music/tidal/disconnect", { user });
+    say("msg", `${user}: TIDAL 연결을 해제했습니다`, "ok");
+    showTidal((await call("/admin/music/state")).tidal);
+  } catch (e) { say("msg", e.message, "bad"); }
+};
 
 $("form").onsubmit = async (e) => {
   e.preventDefault();

@@ -576,7 +576,7 @@ const admin = registerAdmin(app, settings, {
   const user = sessionUser(request, db, settings);
   return user?.role === "admin" ? user.name : null;
 }, () => db.users().some((u) => u.role === "admin"));
-registerMusic(app, settings, admin.adminGuard);
+registerMusic(app, settings, db, admin.adminGuard);
 registerUsers(app, db, settings, admin.adminGuard, workDir);
 // The car's own speed for the tunnels (car/): Tesla linked on /admin, the samples to the car page.
 const car = registerCar(app, settings, db, admin.adminGuard, configDir, workDir);

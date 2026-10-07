@@ -36,6 +36,8 @@ export interface Secrets {
   tidalRefresh?: string;
   tidalUserId?: string;
   tidalCountryCode?: string;
+  /** Each site account's own TIDAL login: JSON { account (lower case): { refresh, userId, countryCode } }. The three above are the one login of before. */
+  tidalOwners?: string;
   /**
    * Tesla (car/): where the car's speed comes from ("owner" streaming or "fleet" telemetry), the owner login's
    * refresh token, the cars linked (JSON, car/hub.ts LinkedCar[]); the Fleet API app's client and its login, and
@@ -77,6 +79,7 @@ const ENV: Record<SecretName, string | undefined> = {
   tidalRefresh: undefined,
   tidalUserId: undefined,
   tidalCountryCode: undefined,
+  tidalOwners: undefined,
   teslaSource: undefined,
   teslaRefresh: undefined,
   teslaOwners: undefined,

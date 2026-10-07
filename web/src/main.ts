@@ -2910,6 +2910,26 @@ async function pickSource(s: MusicSource) {
   }
 }
 
+/**
+ * 음악 끄기 (the ✕ on the open panel): not a pause the car's card or the wheel could start again, but the music
+ * ended — the sound and its list let go, the card under the car gone, the panel closed and the dock a button again.
+ * The next tap on the button connects afresh and shows the lists.
+ */
+function stopMusic() {
+  const s = music;
+  if (s) {
+    music = null;
+    s.disconnect();
+    voice.duckers.delete(duckBySource);
+    log(`음악 끔 (${s.label})`);
+  }
+  showNow({ playing: false });
+  for (const id of ["player", "music-lists", "music-found", "list-filter"]) el(id).hidden = true;
+  musicSay("");
+  openDock(false);
+}
+el("music-off").addEventListener("click", (e) => { e.stopPropagation(); stopMusic(); });
+
 /** The music's level as last set, and the fade under way: the voice asks for a level and how long to take. */
 let musicLevel = 1;
 let fading = 0;
@@ -3028,7 +3048,9 @@ function logTrackChange(state: NowPlaying) {
 function tellMediaSession(state: NowPlaying) {
   const ms = (navigator as Navigator & { mediaSession?: MediaSession }).mediaSession;
   if (!ms || typeof MediaMetadata === "undefined") return;
-  if (state.title) ms.metadata = new MediaMetadata({ title: state.title, artist: state.artist ?? "", artwork: state.art ? [{ src: state.art, sizes: "300x300" }] : [] });
+  // Nothing on (the music turned off): no card under the car either.
+  if (!state.title) { ms.metadata = null; ms.playbackState = "none"; return; }
+  ms.metadata = new MediaMetadata({ title: state.title, artist: state.artist ?? "", artwork: state.art ? [{ src: state.art, sizes: "300x300" }] : [] });
   ms.playbackState = state.playing ? "playing" : "paused";
   if (typeof ms.setPositionState === "function" && typeof state.durationS === "number" && state.durationS > 0) {
     try {
