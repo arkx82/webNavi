@@ -3025,7 +3025,6 @@ function logTrackChange(state: NowPlaying) {
   if (state.trackId) heardTrack = { id: state.trackId, at: Date.now() };
   pausedAt = null;
 }
-let sessionWired = false;
 function tellMediaSession(state: NowPlaying) {
   const ms = (navigator as Navigator & { mediaSession?: MediaSession }).mediaSession;
   if (!ms || typeof MediaMetadata === "undefined") return;
@@ -3042,19 +3041,79 @@ function tellMediaSession(state: NowPlaying) {
       /* not supported or invalid state */
     }
   }
-  if (sessionWired) return;
-  sessionWired = true;
-  const on = (action: MediaSessionAction, fn: (details: MediaSessionActionDetails) => void) => { try { ms.setActionHandler(action, fn); } catch { /* not this one */ } };
+}
+
+/**
+ * The car's steering-wheel tilt and the media card under the car picture. Whether the car asks for the next track
+ * or for a skip forward, and whether it asks through the media session or as a key, could not be seen from here:
+ * the next and previous arrows were greyed in the car (2026-10-07) while a desktop Chrome 148 on Linux showed them
+ * live, from the same page (MPRIS CanGoNext). So every way is taken, and each one heard is written to the 진단 log.
+ */
+function wireMediaSession(ms: MediaSession) {
+  const failed: string[] = [];
+  const on = (action: MediaSessionAction, fn: (details: MediaSessionActionDetails) => void) => {
+    try {
+      ms.setActionHandler(action, (details) => { log(`미디어 세션 ${action}`); fn(details); });
+    } catch {
+      failed.push(action);
+    }
+  };
   on("play", () => void music?.toggle().catch(onMusicError));
   on("pause", () => void music?.toggle().catch(onMusicError));
+  on("stop", () => { if (now.playing) void music?.toggle().catch(onMusicError); });
   on("nexttrack", () => void music?.next().catch(onMusicError));
   on("previoustrack", () => void music?.previous().catch(onMusicError));
+  // A skip with no length named is a button (the wheel's tilt, a card's arrow): in a music player, the next track.
+  // A skip by so many seconds (a desktop's ±10 s) stays a skip within the track.
+  on("seekforward", (d) => {
+    if (typeof d.seekOffset === "number" && now.positionS != null) void music?.seek?.(now.positionS + d.seekOffset).catch(onMusicError);
+    else void music?.next().catch(onMusicError);
+  });
+  on("seekbackward", (d) => {
+    if (typeof d.seekOffset === "number" && now.positionS != null) void music?.seek?.(Math.max(0, now.positionS - d.seekOffset)).catch(onMusicError);
+    else void music?.previous().catch(onMusicError);
+  });
   on("seekto", (details) => {
     if (typeof details.seekTime === "number") {
       void music?.seek?.(details.seekTime).catch(onMusicError);
     }
   });
+  log(`미디어 세션 연결${failed.length ? ` · 안 되는 동작 ${failed.join(", ")}` : ""}`);
 }
+
+{
+  // At once, not at the first track: whatever the car reads off the page when the sound starts finds them there.
+  const ms = (navigator as Navigator & { mediaSession?: MediaSession }).mediaSession;
+  if (ms) wireMediaSession(ms);
+  else log("미디어 세션 없음");
+}
+
+/**
+ * Media keys that reach the page as keys (a session that does not take them hands them on), and any other
+ * non-typing key while nothing is being typed into: what the car's wheel sends, if it sends anything, is logged.
+ */
+let keyLoggedAt = 0;
+document.addEventListener("keydown", (e) => {
+  const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
+  const media: Record<string, () => Promise<void> | undefined> = {
+    MediaTrackNext: () => music?.next(),
+    MediaTrackPrevious: () => music?.previous(),
+    MediaPlayPause: () => music?.toggle(),
+    MediaPlay: () => (now.playing ? undefined : music?.toggle()),
+    MediaPause: () => (now.playing ? music?.toggle() : undefined),
+    MediaStop: () => (now.playing ? music?.toggle() : undefined),
+  };
+  const act = media[e.key];
+  if (act) {
+    e.preventDefault();
+    log(`미디어 키 ${e.key}`);
+    void act()?.catch(onMusicError);
+    return;
+  }
+  if (typing || e.key.length === 1 || Date.now() - keyLoggedAt < 1000) return;
+  keyLoggedAt = Date.now();
+  log(`키 ${e.key} (${e.code})`);
+});
 
 const clock = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, "0")}`;
 /** A finger on the seek bar: the bar is theirs until they let go. */
