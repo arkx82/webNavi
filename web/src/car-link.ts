@@ -28,16 +28,38 @@ export class CarLink {
   private lastT = 0;
   /** No car for this user (a 204) or refused: not asked again before this, however often start() is called. */
   private quietUntil = 0;
+  /** When anything (a sample, a state, a beat) and when a sample last came down the stream, by this page's clock. */
+  private heardAt = 0;
+  sampleAt = 0;
+  private watch: number | null = null;
+  /** The stream opened again because it had gone dead or was missing samples: why, for the log. */
+  onStall: (why: string) => void = () => {};
 
   start() {
     if (this.source || typeof EventSource === "undefined" || Date.now() < this.quietUntil) return;
     const es = new EventSource("/api/car/stream");
     this.source = es;
+    this.heardAt = Date.now();
+    // The server beats every 5 s. Nothing at all for 20 s: the pipe is dead though the browser has not said so.
+    if (this.watch == null) this.watch = window.setInterval(() => {
+      if (this.source && Date.now() - this.heardAt > 20_000) this.stalled("20초 동안 아무것도 안 옴");
+    }, 5_000);
+    es.addEventListener("beat", (e) => {
+      this.heardAt = Date.now();
+      let beat: { state?: string; sampleAgoMs?: number | null };
+      try { beat = JSON.parse((e as MessageEvent).data); } catch { return; }
+      // The server had a sample in the last 3 s and none reached here for 8: what was sent is stuck on the way —
+      // every recovery on 2026-10-09 was a new stream with samples within a tenth of a second.
+      if (beat.sampleAgoMs != null && beat.sampleAgoMs < 3000 && Date.now() - this.sampleAt > 8000) {
+        this.stalled(`서버는 ${(beat.sampleAgoMs / 1000).toFixed(1)}초 전 샘플, 여기는 ${this.sampleAt ? `${Math.round((Date.now() - this.sampleAt) / 1000)}초` : "아직"} 못 받음`);
+      }
+    });
     es.addEventListener("car", (e) => {
       try { this.name = (JSON.parse((e as MessageEvent).data) as { name?: string }).name ?? null; } catch { /* a bad line: ignored */ }
     });
     es.addEventListener("state", (e) => {
       let state = "";
+      this.heardAt = Date.now();
       try { state = (JSON.parse((e as MessageEvent).data) as { state?: string }).state ?? ""; } catch { return; }
       // The account or the way changed on /admin: open again, to the new stream.
       if (state === "reset") { this.restart(2000); return; }
@@ -46,6 +68,7 @@ export class CarLink {
     es.onmessage = (e) => {
       let s: CarSample;
       try { s = JSON.parse(e.data) as CarSample; } catch { return; }
+      this.heardAt = this.sampleAt = Date.now();
       if (!this.samples++) this.onFirst(s);
       if (this.lastT && s.t > this.lastT) this.gaps.push(s.t - this.lastT);
       this.lastT = Math.max(this.lastT, s.t);
@@ -64,6 +87,8 @@ export class CarLink {
   stop() {
     if (this.retry != null) clearTimeout(this.retry);
     this.retry = null;
+    if (this.watch != null) clearInterval(this.watch);
+    this.watch = null;
     this.source?.close();
     this.source = null;
     this.set("off");
@@ -81,6 +106,17 @@ export class CarLink {
     if (state === this.state) return;
     this.state = state;
     this.onState(state);
+  }
+
+  /** Samples this old are no help: the stream is "streaming" in name only. */
+  stale(ms = 10_000): boolean {
+    return this.state === "streaming" && Date.now() - this.sampleAt > ms;
+  }
+
+  private stalled(why: string) {
+    this.onStall(why);
+    this.set("reconnecting");
+    this.restart(0);
   }
 
   private restart(ms: number) {

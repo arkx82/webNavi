@@ -159,6 +159,29 @@ export function registerUsers(app: FastifyInstance, db: Db, settings: Settings, 
     return { ok: true };
   });
 
+  // The browser's own reports (the Reporting API): above all "crash", sent by Chrome on the next start after the
+  // page's process died — the sad tab that took the car's page three times (2026-10-04 twice, 10-09) with nothing in
+  // the log. The page's crash context (window.crashReport, main.ts) comes in it: its last memory line and log lines.
+  // Asked for by the Reporting-Endpoints header on every page (index.ts); the session cookie comes with it.
+  app.addContentTypeParser("application/reports+json", { parseAs: "string", bodyLimit: 512 * 1024 }, (_request, body, done) => {
+    try { done(null, JSON.parse(body as string)); } catch (e) { done(e as Error, undefined); }
+  });
+  app.post("/api/report", async (request, reply) => {
+    const reports = Array.isArray(request.body) ? (request.body as { type?: unknown; url?: unknown; age?: unknown; body?: unknown }[]).slice(0, 20) : [];
+    if (!reports.length) return reply.code(204).send();
+    await (logDirMade ??= mkdir(logDir, { recursive: true }));
+    const now = new Date();
+    const file = join(logDir, `${request.user!.name.replace(/[^\p{L}\p{N}._-]/gu, "_")}-${new Date(now.getTime() + 9 * 3600_000).toISOString().slice(0, 10)}.log`);
+    const lines = reports.map((r) => {
+      const url = String(r.url ?? "").replace(/^https?:\/\/[^/]+/, "");
+      // The context's log is many lines in one value: kept whole, on this one line, to be split when read.
+      return `${now.toISOString()} 브라우저 보고 ${String(r.type ?? "?")} ${url} ${Math.round(Number(r.age) || 0)}ms 전 ${JSON.stringify(r.body ?? null).replace(/[\r\n]+/g, " ").slice(0, 70_000)}`;
+    });
+    await appendFile(file, lines.join("\n") + "\n");
+    request.log.warn({ types: reports.map((r) => r.type) }, "browser report");
+    return reply.code(204).send();
+  });
+
   // /admin: the users.
   app.get("/admin/api/users", { preHandler: adminGuard }, async () => ({ users: db.users() }));
   app.post<{ Body: { name?: string; password?: string } }>("/admin/api/users", { preHandler: adminGuard }, async (request, reply) => {

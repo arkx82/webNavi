@@ -586,6 +586,16 @@ registerShare(app, db, search);
 // 정밀도로지도 tiles, built into WORK_DIR by tools/hdmap/build.py.
 const hdTiles = registerHdmap(app, workDir);
 
+// Every page asks Chrome to send its reports here (users.ts /api/report): a crash among them, with the page's own
+// crash context, on the next start — what the 진단 log, written by the page that died, cannot hold.
+app.addHook("onSend", async (_request, reply, payload) => {
+  if (String(reply.getHeader("content-type") ?? "").startsWith("text/html")) {
+    reply.header("Reporting-Endpoints", 'default="/api/report"');
+    reply.header("Document-Policy", "include-js-call-stacks-in-crash-reports");
+  }
+  return payload;
+});
+
 const webDir = env.WEB_DIR ?? resolve(root, "..", "web", "dist");
 if (existsSync(webDir)) {
   await app.register(fastifyStatic, { root: webDir, prefix: "/" });

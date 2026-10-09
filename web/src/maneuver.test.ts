@@ -16,6 +16,10 @@ test("Kakao's codes and words: 왼쪽/오른쪽 방향, clock hours, motorway ex
   assert.equal(m("kakao", 84, "톨게이트 진입"), "other");
   assert.equal(m("kakao", 49, "인천 원주 방면으로 오른쪽 고속도로 진입"), "slight-right");
   assert.equal(m("kakao", 1, "좌회전"), "left");
+  // 2026-10-09, 동부간선로's end at 장암: 42 is Kakao's right ("…방면으로 오른쪽 도로 주행"), said bare as an exit.
+  assert.equal(m("kakao", 42, "도시고속도로 출구"), "ramp-right");
+  assert.equal(m("kakao", 42, "덕소삼패IC에서 '서울양양고속도로, 춘천, 화도' 방면으로 오른쪽 도로 주행"), "slight-right");
+  assert.equal(m("kakao", 41, "춘천분기점에서 '중앙고속도로, 춘천' 방면으로 왼쪽 도로 주행"), "slight-left");
 });
 
 test("NAVER's: 4 and 5 are 왼쪽 and 오른쪽 방향, 6 the U-turn", () => {

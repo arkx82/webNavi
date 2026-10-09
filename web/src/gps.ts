@@ -72,7 +72,8 @@ export class Gps {
   feed(fix: Fix) {
     fix.course = this.courseOf(fix);
     this.samples.push(fix);
-    if (this.samples.length > 36_000) this.samples.shift(); // ten hours at 1 Hz
+    // Five minutes at the car browser's 10 Hz: only the last two are read (the period), and the CSV of the 진단 panel.
+    if (this.samples.length > 3000) this.samples.shift();
     for (const l of this.listeners) l(fix, this.samples);
   }
 

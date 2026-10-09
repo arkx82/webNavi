@@ -1,5 +1,6 @@
 import { DOWN, PLAY, UP } from "./icons";
 import type { Kind } from "./warnings";
+import { PAINTS, type CarIcon } from "./car-icon";
 import { push } from "./userdata";
 
 /**
@@ -38,6 +39,10 @@ export interface GuideSettings {
   theme: "auto" | "light" | "dark";
   /** 야경: by night in the 3D view, the buildings lit (night-city.ts). */
   nightCity: boolean;
+  /** 자차 모양: the car seen from above, or the arrow — either at the car's own size on the road (car-icon.ts). */
+  carIcon: CarIcon;
+  /** 차 색: the paint the car is drawn in. */
+  carPaint: string;
   /** 도착하면 안내 종료: the drive ends by itself a few seconds after the arrival is announced. */
   endOnArrive: boolean;
   /** 카메라 프레임: the map moved every frame, or an even thirty a second for a car computer that cannot keep sixty. */
@@ -98,7 +103,7 @@ export interface GuideSettings {
 export type Mode = "voice" | "show" | "off";
 
 export const DEFAULTS: GuideSettings = {
-  voice: true, voiceName: null, volume: 1, turns: true, junctionNames: true, laneHints: true, merges: true, closeups: true, sendLogs: true, layout: "classic", hdLanes: true, hdLanesWhen: "turns", laneGuide: true, colorLines: true, theme: "auto", nightCity: false, endOnArrive: true, mapDpr: "auto", followFps: "auto", ducking: "soft", fasterRoute: "ask", carData: "auto", rev: 3, uiScale: 1, lightsOnMap: "route", camerasOnMap: "route", nextLight: true, flashSignals: true,
+  voice: true, voiceName: null, volume: 1, turns: true, junctionNames: true, laneHints: true, merges: true, closeups: true, sendLogs: true, layout: "classic", hdLanes: true, hdLanesWhen: "turns", laneGuide: true, colorLines: true, theme: "auto", nightCity: false, carIcon: "tesla", carPaint: PAINTS[0][0], endOnArrive: true, mapDpr: "auto", followFps: "auto", ducking: "soft", fasterRoute: "ask", carData: "auto", rev: 3, uiScale: 1, lightsOnMap: "route", camerasOnMap: "route", nextLight: true, flashSignals: true,
   cameras: true, cameraFromM: 600, sections: true, schools: true,
   bumps: "show", curves: "off", accidents: "show", bikeAccidents: "show",
   overspeed: true, overspeedBy: 0,
@@ -264,8 +269,10 @@ const GROUPS: Group[] = [
     { key: "hdLanesWhen", label: "주행 중 정밀 차선", kind: "choice", options: [["turns", "회전 근처 · 저속만"], ["always", "항상"]], sub: "회전 400 m 안이거나 30 km/h 아래일 때만 그리고, 그 밖에서는 숨겨 시내 주행을 가볍게. 지도를 손으로 움직이면 다 나옴" },
     { key: "nightCity", label: "야경 건물", kind: "toggle", sub: "밤에 3D 화면이면 티맵·네이버 바탕 위에 건물을 옅은 금빛으로 (OpenStreetMap 건물이라 도심 밖에는 드묾. 도로가 가려 보이면 끄세요)" },
   ] },
-  { id: "display", title: "디스플레이", sub: "테마 · 배치 · 크기 · 해상도", rows: [
+  { id: "display", title: "디스플레이", sub: "테마 · 자차 · 배치 · 크기 · 해상도", rows: [
     { key: "theme", label: "화면 테마", kind: "choice", options: [["auto", "자동 (해 기준)"], ["light", "밝게"], ["dark", "어둡게"]], sub: "밤에는 바탕 지도도 어둡게" },
+    { key: "carIcon", label: "자차 모양", kind: "choice", options: [["tesla", "Model Y L"], ["arrow", "화살표"]], sub: "지도 위 내 차를 실제 차 크기(4.98 × 1.92 m)로. 멀리 볼 때는 너무 작아지지 않게 최소 크기만 지킴" },
+    { key: "carPaint", label: "차 색", kind: "choice", options: PAINTS, sub: "Model Y L 모양일 때의 색" },
     { key: "layout", label: "화면 배치", kind: "choice", options: [["classic", "기본"], ["mini", "미니"]], sub: "미니: 왼쪽 창을 좁게, 시계 · 다음 신호등 · 그다음 안내는 숨김" },
     { key: "uiScale", label: "화면 크기", kind: "choice", options: [[0.85, "작게"], [1, "보통"], [1.15, "크게"], [1.3, "더 크게"]], sub: "패널 · 카드 · 버튼의 크기 (지도는 그대로). 기기마다 화면 픽셀 크기가 달라 글씨가 크거나 작게 보일 때" },
     { key: "mapDpr", label: "지도 해상도", kind: "choice", options: [["auto", "선명하게"], ["balanced", "균형"], ["fast", "빠르게"]], sub: "선명하게: 화면 그대로 · 균형: 1.5배까지 · 빠르게: 1배로 그리고 창 뒤 흐림 효과도 끔. 바꾼 뒤 새로 고침" },

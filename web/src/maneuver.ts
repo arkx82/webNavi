@@ -29,6 +29,9 @@ const KAKAO: Record<number, Maneuver> = {
   // 17 + the hour: 18 is 1시 … 29 is 12시.
   18: "slight-right", 19: "slight-right", 20: "right", 21: "sharp-right", 22: "sharp-right", 23: "uturn",
   24: "sharp-left", 25: "sharp-left", 26: "left", 27: "slight-left", 28: "slight-left", 29: "straight",
+  // 41/42 "왼쪽/오른쪽 도로 주행" at a junction, and 42 also the bare "도시고속도로 출구" where 동부간선로 ends at 장암
+  // onto 동일로's right: read off the road's bend that one was said as 왼쪽 출구, the ramp curling left after it parts.
+  41: "slight-left", 42: "slight-right", 46: "slight-left",
   82: "slight-left", 83: "slight-right",
   100: "depart", 101: "arrive", 300: "roundabout",
 };
@@ -68,6 +71,8 @@ function readManeuver(provider: Provider, guide: Guide): Maneuver {
   if (said) return said;
   if (typeof t === "number") {
     const m = (provider === "tmap" ? TMAP : provider === "kakao" ? KAKAO : provider === "naver" ? NAVER : {})[t];
+    // The code's side with the words' kind: a side kept that the words call an exit is the exit on that side.
+    if (m && EXIT.test(guide.text ?? "") && MOTORWAY.test(guide.text ?? "")) return m === "slight-left" ? "ramp-left" : m === "slight-right" ? "ramp-right" : m;
     if (m) return m;
   }
   return "other";

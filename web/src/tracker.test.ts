@@ -462,3 +462,42 @@ test("a new route while the fixes are away (a re-route, a quicker way taken): re
   assert.ok(shown.alongM! < 80, `along the new route ${shown.alongM} m, the car having gone 50 m`);
   assert.ok(metres(shown.at[0], shown.at[1], here[0], here[1]) < 80);
 });
+
+test("placeless fixes in a tunnel (accuracy 10,000, the place adrift) move the marker by their speed and call nothing off the route", () => {
+  // 2026-10-09, 동부간선로 near 장암: the Tesla's browser sent ten fixes a second through 36 s with no place, the smoothed
+  // place running straight on beside the bending road to 54 m out; they were taken as fixes and the car was called off.
+  const tracker = new Tracker();
+  tracker.setRoute(route);
+  let offCalls = 0;
+  const ends: ReckonEnd[] = [];
+  tracker.onOffRoute = () => offCalls++;
+  tracker.onReckonEnd = (r) => ends.push(r);
+  tracker.feed(fix(offset(start, 0, 200), 0, { accM: 3, speed: 20 }), 0);
+  for (let t = 100; t <= 20_000; t += 100) {
+    // Slowing from 20 to 10 m/s, the place drifting east 5 m a second.
+    const speed = 20 - (10 * t) / 20_000;
+    tracker.feed(fix(offset(offset(start, 0, 200 + t / 50), 90, t / 200), t, { accM: 10_000, speed, course: 0 }), t);
+    tracker.frame(t);
+  }
+  assert.equal(offCalls, 0);
+  const shown = tracker.frame(20_000)!;
+  assert.equal(shown.mode, "reckoning");
+  assert.equal(shown.reckonBy, "fix");
+  // 200 m + the mean 15 m/s for 20 s: 500 m along, on the road.
+  assert.ok(Math.abs(shown.alongM! - 500) < 5, `${shown.alongM}`);
+  // Out of the tunnel at 500 m: the reckoning was right, and said so.
+  tracker.feed(fix(offset(start, 0, 501), 20_100, { accM: 3, speed: 10 }), 20_100);
+  assert.equal(ends.length, 1);
+  assert.equal(ends[0].by, "fix");
+  assert.ok(Math.abs(ends[0].errorM!) < 6, `${ends[0].errorM}`);
+});
+
+test("placeless fixes heading across the road (a turn round under cover) carry the marker no further along it", () => {
+  const tracker = new Tracker();
+  tracker.setRoute(route);
+  tracker.feed(fix(offset(start, 0, 200), 0, { accM: 3, speed: 5 }), 0);
+  for (let t = 100; t <= 10_000; t += 100) tracker.feed(fix(offset(start, 0, 200), t, { accM: 10_000, speed: 5, course: 90 }), t);
+  const shown = tracker.frame(10_000)!;
+  assert.equal(shown.reckonBy, "fix");
+  assert.ok(Math.abs(shown.alongM! - 200) < 2, `${shown.alongM}`);
+});

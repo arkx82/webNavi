@@ -138,8 +138,9 @@ export function registerCar(app: FastifyInstance, settings: Settings, db: Db, ad
       sample: (s) => res.write(`data: ${JSON.stringify(s)}\n\n`),
       state: (state) => event("state", { state }),
     });
-    // A comment every 15 s: the tunnel and the browser keep a quiet stream open.
-    const beat = setInterval(() => res.write(": \n\n"), 15_000);
+    // Every 5 s what the stream is and how old its last sample: the page sees a pipe gone dead (a comment it could not),
+    // and samples the server has that never reached it (2026-10-09: 38 minutes "streaming" with none), and opens again.
+    const beat = setInterval(() => event("beat", { state: hub.status()[car.vin]?.state ?? "stopped", sampleAgoMs: hub.sampleAgo(car.vin) }), 5_000);
     request.raw.on("close", () => { clearInterval(beat); off(); });
   });
 

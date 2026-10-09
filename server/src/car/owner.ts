@@ -228,6 +228,8 @@ export class OwnerStream {
   private running = false;
   private timer: NodeJS.Timeout | null = null;
   private quiet: NodeJS.Timeout | null = null;
+  /** The message kinds other than samples this socket has said, each logged once. */
+  private seen = new Set<string>();
   private attempts = 0;
   private disconnects = 0;
   private lastShift: string | null = null;
@@ -271,29 +273,40 @@ export class OwnerStream {
     this.timer = this.quiet = null;
   }
 
-  /** Nothing heard for half a minute: the socket is let go and opened again. */
+  /**
+   * No sample for half a minute (parked, the car sends one every 3 s): the socket is let go and opened again. Armed by
+   * samples only — a socket that answers but sends none ("vehicle_disconnected" over and over) is as good as dead — and
+   * the new one opened here, not on the old one's close, which a half-open socket never fires (2026-10-09: after
+   * "quiet, reconnecting" at 15:47:54 nothing more came for the rest of the drive).
+   */
   private armQuiet() {
     if (this.quiet) clearTimeout(this.quiet);
-    this.quiet = setTimeout(() => { this.log("streaming: quiet, reconnecting"); this.ws?.close(); }, 30_000);
+    this.quiet = setTimeout(() => { this.log("streaming: quiet, reconnecting"); this.retry(); }, 30_000);
+  }
+
+  /** The socket let go, and another opened after a wait: 1, 2, 4 … 30 s, a car parked does not need asking every second. */
+  private retry() {
+    const ws = this.ws;
+    this.ws = null;
+    this.clear();
+    try { ws?.close(); } catch { /* already closing */ }
+    if (!this.running) return;
+    const ms = Math.min(30_000, 1000 * 2 ** Math.min(5, this.attempts++));
+    this.set("waiting");
+    this.timer = setTimeout(() => this.connect(), ms);
   }
 
   private connect() {
     if (!this.running) return;
     this.set("connecting");
+    this.seen.clear();
     const ws = new WebSocket(this.url);
     ws.binaryType = "arraybuffer";
     this.ws = ws;
     ws.addEventListener("open", () => void this.subscribe());
     ws.addEventListener("message", (e) => this.message(e.data));
     ws.addEventListener("close", () => {
-      if (this.ws !== ws) return;
-      this.ws = null;
-      this.clear();
-      if (!this.running) return;
-      // 1, 2, 4 … 30 s: a car parked does not need asking every second.
-      const ms = Math.min(30_000, 1000 * 2 ** Math.min(5, this.attempts++));
-      this.set("waiting");
-      this.timer = setTimeout(() => this.connect(), ms);
+      if (this.ws === ws) this.retry();
     });
     ws.addEventListener("error", () => { this.lastError = "streaming socket error"; });
   }
@@ -318,10 +331,10 @@ export class OwnerStream {
     const text = typeof data === "string" ? data : data instanceof ArrayBuffer ? Buffer.from(data).toString("utf8") : String(data);
     let msg: { msg_type?: string; tag?: string; value?: string; error_type?: string };
     try { msg = JSON.parse(text); } catch { return; }
-    this.armQuiet();
     if (msg.msg_type === "data:update" && msg.tag === String(this.vehicleId) && typeof msg.value === "string") {
       const s = parseFrame(msg.value, this.odo);
       if (!s) return;
+      this.armQuiet();
       this.attempts = 0;
       this.disconnects = 0;
       this.lastShift = s.gear ?? null;
@@ -331,10 +344,15 @@ export class OwnerStream {
       this.onSample(s);
       return;
     }
-    if (msg.msg_type !== "data:error") return;
+    if (msg.msg_type !== "data:error") {
+      // Each other kind once a socket: what the stream says besides samples, without a line for each.
+      if (msg.msg_type && !this.seen.has(msg.msg_type)) { this.seen.add(msg.msg_type); this.log(`streaming: ${msg.msg_type}`.slice(0, 120)); }
+      return;
+    }
     if (msg.error_type === "vehicle_disconnected") {
       // The car fell off the subscription (asleep, waking, a drive's start): asked again, quickly while it was in gear.
       const d = this.disconnects++;
+      if (d === 0) this.log(`streaming: vehicle_disconnected (gear ${this.lastShift ?? "?"})`);
       const ms = this.lastShift && "PDNR".includes(this.lastShift) ? Math.min(8_000, 1000 * 1.3 ** d) : Math.min(30_000, 15_000 + 1000 * d);
       this.set("waiting");
       if (this.timer) clearTimeout(this.timer);

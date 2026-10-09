@@ -65,11 +65,21 @@ export const LOOKAHEAD_MIN_M = 40;
 export const LOOKAHEAD_MAX_M = 150;
 
 export type Mode = "waiting" | "gps" | "reckoning" | "snapping";
+/**
+ * What a reckoning goes by: the car's own speed (its stream), the speed of the car browser's placeless fixes ("fix":
+ * in a tunnel the Tesla's browser goes on sending ten a second at accuracy 10,000 m, the place adrift but the speed the
+ * car's own, and no network needed), or the last speed held.
+ */
+export type Reckoner = "car" | "fix" | "speed";
+/** A fix this vague has no place at all (the Tesla's browser says 10,000 or 9,999.99 m): only its speed is taken. */
+export const PLACELESS_ACC_M = 1000;
+/** The placeless fixes' speed is gone this long after the last of them: then the car's stream, or the held speed. */
+const VAGUE_FRESH_MS = 3000;
 
 /** How a reckoning ended: how long, on what, and how far the fix that ended it was from where it had the car. */
 export interface ReckonEnd {
   seconds: number;
-  by: "car" | "speed";
+  by: Reckoner;
   /** Metres along the route, the fix ahead (+) or behind (−) of the reckoned place; off the road, how far apart (≥ 0). */
   errorM: number | null;
   /** Reckoned off the road (no route, or off it), on the car's own heading or estimate. */
@@ -81,8 +91,8 @@ export interface Shown {
   bearing: number;
   speedMps: number;
   mode: Mode;
-  /** While reckoning: on the car's own speed, or the last fix's held. */
-  reckonBy?: "car" | "speed";
+  /** While reckoning: on the car's own speed, the placeless fixes' speed, or the last fix's held. */
+  reckonBy?: Reckoner;
   /** Only while a route is set. */
   alongM?: number;
   offM?: number;
@@ -134,7 +144,13 @@ export class Tracker {
   private snapFromAlong: number | null = null;
   private reckonAlong = 0;
   private reckonSince = 0;
-  private reckonBy: "car" | "speed" = "speed";
+  private reckonBy: Reckoner = "speed";
+  /**
+   * Since the last good fix, the way the placeless fixes' speed says the car went along the road (only its share
+   * along the road where the reckoning has it, by their heading), and when the last of them came (performance.now).
+   */
+  private vagueM = 0;
+  private vagueAt = 0;
   /** The last fix believed, by its own clock (Date.now) and ours (performance.now): where the car's distance is counted from. */
   private fixWall = 0;
   private fixPerf = 0;
@@ -144,6 +160,10 @@ export class Tracker {
   quiet: (g: Guide, route: Route) => boolean = () => false;
   /** The reckoning now is off the road (car-track.ts freePath). */
   private reckonFree = false;
+  /** The route changed while reckoning: the reckoning's miss, when the fix comes, is not one. */
+  private reckonRerouted = false;
+  /** When a fix last said the car moves (3 m/s and more): a gear of P said before that is out of date. */
+  private movingAt = -Infinity;
   /** Parked as of the last frame: the place it was drawn at then is where it stays. */
   private wasParked = false;
   private offSince: number | null = null;
@@ -177,6 +197,8 @@ export class Tracker {
         this.lastProj = this.line.project([this.lastFix.lon, this.lastFix.lat], 0, this.line.path.length);
         this.reckonAlong = this.lastProj.alongM;
       }
+      // A route changed mid-reckoning: the error the next fix makes is measured on another line, and not told.
+      if (this.reckonSince > 0) this.reckonRerouted = true;
     }
   }
 
@@ -189,10 +211,17 @@ export class Tracker {
     this.glideFrom = null;
     this.glideTo = null;
     this.reckonSince = 0;
+    this.vagueM = 0;
+    this.vagueAt = 0;
   }
 
   /** A fix from the car (or a replay). */
   feed(fix: Fix, now = performance.now()) {
+    if (fix.speed != null && fix.speed >= RECKON_MIN_MPS) this.movingAt = now;
+    if (this.lastFix && this.line && !this.declaredOff && fix.accM >= PLACELESS_ACC_M && fix.speed != null && fix.speed >= 0 && !(fix.speed < RECKON_MIN_MPS && this.car?.parked(fix.t))) {
+      this.feedPlaceless(fix, now);
+      return;
+    }
     if (this.lastFix) this.periodS = Math.min(3, Math.max(0.2, (fix.t - this.lastFix.t) / 1000));
     // Vague and not said to be moving (a garage, an underpass): the car is where it was.
     const saysMoving = fix.speed != null && fix.speed >= RECKON_MIN_MPS;
@@ -217,6 +246,7 @@ export class Tracker {
     }
     const previous = this.lastFix;
     this.lastFix = fix;
+    if (fix.accM <= LOST_ACC_M) { this.vagueM = 0; this.vagueAt = 0; }
     this.lastFixAt = now;
     this.fixWall = fix.t;
     this.fixPerf = now;
@@ -268,7 +298,7 @@ export class Tracker {
     const wasReckoning = this.reckonSince > 0;
     // Only a good fix ends it for the record: a vague one in the dark goes on reckoning from its own place.
     if (wasReckoning && fix.accM <= LOST_ACC_M) {
-      const errorM = this.reckonFree
+      const errorM = this.reckonRerouted ? null : this.reckonFree
         ? (this.shownAt ? metres(this.shownAt[0], this.shownAt[1], target[0], target[1]) : null)
         : this.glideToAlong != null && this.glideFromAlong != null ? this.glideToAlong - this.glideFromAlong : null;
       this.onReckonEnd({ seconds: (now - this.reckonSince) / 1000, by: this.reckonBy, errorM, free: this.reckonFree });
@@ -277,6 +307,7 @@ export class Tracker {
     if (fix.accM <= LOST_ACC_M) {
       this.reckonSince = 0;
       this.reckonFree = false;
+      this.reckonRerouted = false;
     }
     if (wasReckoning) {
       this.snapStart = now;
@@ -290,6 +321,28 @@ export class Tracker {
       this.startGlide(target, now, this.periodS);
     }
     this.shownBearing = bearing;
+  }
+
+  /**
+   * A fix with no place worth the name, on the road: the Tesla's browser in a tunnel (2026-10-09), ten a second at
+   * accuracy 10,000 m. Their places came out of the smoothing (gps.ts) as a straight line at the speed it went in at —
+   * 54 m beside a bending 동부간선로 by the end of 36 s near 장암 — and taken as fixes they snapped the marker, and
+   * called the car off the route three times that day: re-routes that began with a U-turn. Their speed is the car's own
+   * (within 0.1 m/s of its stream) and comes without a network, where the car's stream stalls: so it is a speed, summed
+   * along the road for the reckoning, and nothing else — no place, no off-route call.
+   */
+  private feedPlaceless(fix: Fix, now: number) {
+    const since = this.vagueAt || this.lastFixAt;
+    // The speed till now, then this one's from here: the sum of what the car did between them.
+    this.vagueM += this.speedMps * Math.max(0, now - since) / 1000;
+    this.vagueAt = now;
+    // Only the share along the road: a car turning round under cover (녹천, 15:48) is not carried on along it.
+    let share = 1;
+    if (this.line && fix.course != null && fix.speed! >= HEADING_MIN_MPS) {
+      const road = this.line.place(this.shownAlong ?? this.reckonAlong).bearing;
+      share = Math.max(0, Math.cos((angleBetween(fix.course, road) * Math.PI) / 180));
+    }
+    this.speedMps = fix.speed! * share;
   }
 
   /** The last speed, held to the traffic's pace where the route says its stretch is slow or jammed — at [alongM], where the reckoning has the car, not where the last fix was. */
@@ -318,7 +371,9 @@ export class Tracker {
     // or stands in a jam inside, is placed by what it did.
     const wallNow = this.fixWall + (now - this.fixPerf);
     // Parked: nothing to reckon, the fixes' silence or not, and the last fix's speed is not carried on.
-    const parked = !!this.car?.parked(wallNow);
+    // The car's P is held a minute after its last sample; the fixes saying it moves end that (2026-10-09: the stream
+    // fell silent as the car pulled out of Costco's car park, and the marker stood at the start for 57 s).
+    const parked = now - this.movingAt > 3000 && !!this.car?.parked(wallNow);
     if (parked) this.speedMps = 0;
     // Put in P where it was drawn — reckoned into a car park, say — it stays there: not taken back to the last fix
     // (its entrance). A sharper fix still moves it (feed), from here.
@@ -331,7 +386,9 @@ export class Tracker {
     this.wasParked = parked;
     const byCar = lost && !parked && this.line && this.car ? this.car.between(this.fixWall, wallNow) : null;
     // Only a car really moving (or that says how it moves), on a route, and for a tunnel's length: past that it waits for a fix.
-    const reckon = lost && !parked && lostForS <= (byCar ? RECKON_CAR_MAX_S : RECKON_MAX_S) && (byCar != null || this.speedMps >= RECKON_MIN_MPS);
+    // The placeless fixes still coming: the car's speed is known, whatever it is (a stop in a tunnel stands still).
+    const byFix = lost && !parked && this.vagueAt > 0 && now - this.vagueAt < VAGUE_FRESH_MS;
+    const reckon = lost && !parked && (byFix || (lostForS <= (byCar ? RECKON_CAR_MAX_S : RECKON_MAX_S) && (byCar != null || this.speedMps >= RECKON_MIN_MPS)));
     // Off the road (no route, or declared off it) — a terminal, a car park — only on the car's word, and only where
     // its heading or its own idea of its place is seen to live on without the fixes (car-track.ts freePath).
     const free = lost && !parked && this.car && (!this.line || this.declaredOff) && lostForS <= RECKON_CAR_MAX_S ? this.car.freePath(this.fixWall, wallNow) : null;
@@ -343,11 +400,15 @@ export class Tracker {
       // past where it stops (the link gone too), at the speed it last said — or, without it, at the last fix's speed.
       mode = "reckoning";
       if (this.reckonSince === 0) this.reckonSince = now;
-      this.reckonBy = byCar ? "car" : "speed";
+      // The placeless fixes first: as good as the car's stream, and there where it stalls (the car's link gone in the
+      // tunnel, its last speed was held at 25 m/s while the car slowed to 18). Then the stream; then the speed held.
+      this.reckonBy = byFix ? "fix" : byCar ? "car" : "speed";
       this.reckonFree = false;
-      const ahead = byCar
-        ? this.reckonAlong + byCar.m + this.reckonSpeed(this.car!.lastSpeed() ?? this.speedMps) * (Math.max(0, wallNow - byCar.through) / 1000)
-        : this.reckonAlong + this.reckonSpeed() * ((now - this.lastFixAt) / 1000);
+      const ahead = byFix
+        ? this.reckonAlong + this.vagueM + this.speedMps * ((now - this.vagueAt) / 1000)
+        : byCar
+          ? this.reckonAlong + byCar.m + this.reckonSpeed(this.car!.lastSpeed() ?? this.speedMps) * (Math.max(0, wallNow - byCar.through) / 1000)
+          : this.reckonAlong + this.reckonSpeed() * ((now - this.lastFixAt) / 1000);
       reckoned = this.line.place(ahead);
       this.shownAt = reckoned.at;
       this.shownAlong = reckoned.alongM;

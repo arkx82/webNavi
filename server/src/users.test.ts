@@ -85,3 +85,16 @@ test("a login body of the wrong shape is a 400, not a crash", async () => {
   const r = await app.inject({ method: "POST", url: "/api/login", payload: { name: 123, password: ["x"] }, remoteAddress: "127.0.0.1" });
   assert.equal(r.statusCode, 400);
 });
+
+test("the browser's reports (a crash, with the page's context) go to the user's log of the day", async () => {
+  const { app, dir } = await site();
+  const cookie = (await login(app, "june", "secret1")).headers["set-cookie"] as string;
+  const body = JSON.stringify([{ type: "crash", url: "https://navi.example/?x", age: 4200, body: { is_top_level: true, crash_report_api: { state: "메모리 42/113 MB", log: "a\nb" } } }]);
+  const r = await app.inject({ method: "POST", url: "/api/report", payload: body, headers: { cookie, "content-type": "application/reports+json" } });
+  assert.equal(r.statusCode, 204);
+  const files = readdirSync(join(dir, "client-logs"));
+  const text = readFileSync(join(dir, "client-logs", files[0]), "utf8");
+  assert.equal(text.trim().split("\n").length, 1, "one line, the context's own line breaks kept inside it");
+  assert.match(text, /브라우저 보고 crash \/\?x 4200ms 전 .*메모리 42\/113 MB/);
+  assert.equal((await app.inject({ method: "POST", url: "/api/report", payload: body, headers: { "content-type": "application/reports+json" } })).statusCode, 401);
+});

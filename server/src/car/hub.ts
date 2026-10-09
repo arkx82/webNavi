@@ -72,6 +72,12 @@ export class CarHub {
     };
   }
 
+  /** How long since [vin]'s stream last had a sample, ms; null before any. */
+  sampleAgo(vin: string): number | null {
+    const at = this.sources.get(vin)?.lastSampleAt;
+    return at ? Date.now() - at : null;
+  }
+
   emit(vin: string, s: CarSample) {
     for (const l of this.listeners.get(vin) ?? []) l.sample(s);
   }

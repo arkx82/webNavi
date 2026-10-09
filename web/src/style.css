@@ -293,7 +293,7 @@ body.side-open #base-menu { right: 440px; }
 #base-options button:disabled { opacity: 0.45; }
 
 /* The car: an arrow lying on the road, turned by its heading. */
-.car { width: 44px; height: 44px; filter: drop-shadow(0 2px 3px rgba(0,0,0,.5)); }
+.car { width: 22px; height: 51px; filter: drop-shadow(0 2px 3px rgba(0,0,0,.5)); }
 
 /* ---- a finger on the map ---- */
 #here-card {

@@ -5,6 +5,7 @@ import { chime, keepAwake } from "./probes";
 import { Replay } from "./replay";
 import { Simulator } from "./simulate";
 import { CarLink } from "./car-link";
+import { carBoxPx, carSvg, groundPxPerM, PAINTS } from "./car-icon";
 import { CarTrack } from "./car-track";
 import { DriveTrace } from "./drive-trace";
 import { RouteLayer } from "./route-layer";
@@ -167,11 +168,65 @@ function log(text: string) {
 window.addEventListener("error", (e) => log(`페이지 오류 ${e.message} @${e.filename?.split("/").pop()}:${e.lineno}`));
 window.addEventListener("unhandledrejection", (e) => log(`처리 안 된 오류 ${String((e.reason as Error)?.message ?? e.reason).slice(0, 200)}`));
 const pageStarted = Date.now();
+// What the page did, for the half-minute line: frames drawn and the longest gap between two, the main thread's long
+// tasks (50 ms and more) — the "점점 버벅" made a number.
+const frames = { n: 0, longestMs: 0, at: 0 };
+const longTasks = { n: 0, ms: 0 };
+try {
+  new PerformanceObserver((l) => { for (const e of l.getEntries()) { longTasks.n++; longTasks.ms += e.duration; } }).observe({ type: "longtask", buffered: false });
+} catch { /* no long tasks here */ }
+/** The map's tiles held, by source (loaded + kept out of view): what grows on the GPU side, which the heap never shows. */
+function tilesHeld(): string {
+  try {
+    const managers = (map.style as unknown as { tileManagers?: Record<string, { getIds(): unknown[] }>; sourceCaches?: Record<string, { getIds(): unknown[] }> });
+    const all = managers.tileManagers ?? managers.sourceCaches ?? {};
+    const n = Object.values(all).reduce((sum, m) => sum + (m.getIds?.().length ?? 0), 0);
+    return `${n}`;
+  } catch {
+    return "?";
+  }
+}
+let lastMemory = "";
 setInterval(() => {
   const mem = (performance as Performance & { memory?: { usedJSHeapSize: number; totalJSHeapSize: number; jsHeapSizeLimit: number } }).memory;
   const mb = (b: number) => Math.round(b / 1048576);
-  log(`메모리 ${mem ? `${mb(mem.usedJSHeapSize)}/${mb(mem.totalJSHeapSize)} MB (한도 ${mb(mem.jsHeapSizeLimit)})` : "?"} · 켠 지 ${Math.round((Date.now() - pageStarted) / 60_000)}분 · 위치 ${gps.samples.length} · 카메라 ${cameraLayer?.size ?? 0} · 기록 대기 ${unsent.length}`);
-}, 60_000);
+  let layers = "?";
+  try { layers = String(map.getLayersOrder().length); } catch { /* the style changing */ }
+  lastMemory = `메모리 ${mem ? `${mb(mem.usedJSHeapSize)}/${mb(mem.totalJSHeapSize)} MB (한도 ${mb(mem.jsHeapSizeLimit)})` : "?"} · 켠 지 ${Math.round((Date.now() - pageStarted) / 60_000)}분 · 위치 ${gps.samples.length} · 카메라 ${cameraLayer?.size ?? 0} · 기록 대기 ${unsent.length}`
+    + ` · 화면 ${frames.n}장/30초 (최장 ${Math.round(frames.longestMs)} ms) · 긴 작업 ${longTasks.n}번 ${Math.round(longTasks.ms)} ms · 타일 ${tilesHeld()} · 레이어 ${layers} · DOM ${document.getElementsByTagName("*").length}`;
+  frames.n = 0; frames.longestMs = 0; longTasks.n = 0; longTasks.ms = 0;
+  log(lastMemory);
+  // Sent at once, not at the next half-minute: a page that dies takes the unsent with it (on 10-09 the last 30 s).
+  sendLog();
+}, 30_000);
+// Chrome's crash context (window.crashReport): what the page last knew, carried in the crash report Chrome sends on its
+// next start (server users.ts /api/report). 64 KB at most; set every 5 s.
+const crashReport = (window as unknown as { crashReport?: { initialize(bytes: number): Promise<void>; set(k: string, v: string): void } }).crashReport;
+let crashReady = false;
+crashReport?.initialize(64 * 1024).then(() => { crashReady = true; }, () => {});
+// A page that ended without saying goodbye (pagehide): told on the next load, with what it last wrote here.
+const ALIVE_KEY = "nav-alive";
+function keepAliveNote(clean = false) {
+  const note = { t: Date.now(), start: pageStarted, memory: lastMemory, lines: lines.slice(-25), clean };
+  try { localStorage.setItem(ALIVE_KEY, JSON.stringify(note)); } catch { /* storage full or off */ }
+  if (crashReady) {
+    try {
+      crashReport!.set("state", `${lastMemory} · 경로 ${route?.provider ?? "없음"} · 화면 ${document.visibilityState}`.slice(0, 2000));
+      crashReport!.set("log", lines.slice(-120).join("\n").slice(-50_000));
+    } catch { /* not set: the report goes without */ }
+  }
+}
+setInterval(() => keepAliveNote(), 5_000);
+window.addEventListener("pagehide", () => keepAliveNote(true));
+try {
+  const before = JSON.parse(localStorage.getItem(ALIVE_KEY) ?? "null") as { t: number; start: number; memory: string; lines: string[]; clean: boolean } | null;
+  // Within 10 minutes of its last word: a page that died, not one the car closed as it went to sleep.
+  if (before && !before.clean && Date.now() - before.t < 10 * 60_000) {
+    const hhmm = (t: number) => new Date(t).toLocaleTimeString("ko-KR", { hour12: false });
+    log(`지난 페이지가 ${hhmm(before.t)} 무렵 비정상 종료 (켠 지 ${Math.round((before.t - before.start) / 60_000)}분) · 마지막: ${before.memory}`);
+    for (const l of before.lines.slice(-12)) log(`  지난 페이지: ${l}`);
+  }
+} catch { /* nothing kept */ }
 function drawLog() {
   const box = el("log");
   box.textContent = lines.join("\n");
@@ -181,12 +236,29 @@ el<HTMLDetailsElement>("diag").addEventListener("toggle", () => { if (el<HTMLDet
 
 // ---- the car ---------------------------------------------------------------
 
-// An arrow lying flat on the road, turned with the car: the way every car
-// app draws "you", and it tilts with the map in 3D.
+// The car lying flat on the road, turned with it, at its own size (car-icon.ts): a Model Y L seen from above or
+// the arrow, as 안내 설정 says; it tilts with the map in 3D.
 const car = document.createElement("div");
 car.className = "car";
-car.innerHTML = `<svg viewBox="0 0 48 48" width="44" height="44"><path d="M24 4 39 41 24 33 9 41z" fill="#1a73e8" stroke="#fff" stroke-width="3.5" stroke-linejoin="round"/></svg>`;
 const marker = new maplibregl.Marker({ element: car, rotationAlignment: "map", pitchAlignment: "map" }).setLngLat(HOME);
+let carDrawn = "";
+function drawCarIcon() {
+  const key = `${guide.carIcon}:${guide.carPaint}`;
+  if (key === carDrawn) return;
+  carDrawn = key;
+  car.innerHTML = carSvg(guide.carIcon ?? "tesla", guide.carPaint ?? PAINTS[0][0]);
+  sizeCar();
+}
+let carPx = { w: 0, h: 0 };
+/** The marker kept at the car's size where it is drawn: on every move of the map, and as the car moves on it. */
+function sizeCar() {
+  const at = marker.getLngLat();
+  const box = carBoxPx(groundPxPerM((p) => map.project(p), [at.lng, at.lat], map.getBearing()));
+  if (!Number.isFinite(box.w) || (Math.abs(box.w - carPx.w) < 0.3 && Math.abs(box.h - carPx.h) < 0.3)) return;
+  carPx = box;
+  car.style.width = `${box.w.toFixed(1)}px`;
+  car.style.height = `${box.h.toFixed(1)}px`;
+}
 
 // ---- the camera ------------------------------------------------------------
 // Three ways to look, as the car apps offer them: 3D (tilted, heading up,
@@ -294,6 +366,7 @@ function carStatus(): { state: "on" | "wait" | "off"; why: string } {
   const mode = guide.carData === "force" ? "강제 켜기" : "켜기";
   if (!carUsable()) return { state: "wait", why: `${mode} · 차가 이 기기와 멀어 쓰지 않음${where}` };
   if (carLink.state !== "streaming") return { state: "wait", why: `${mode} · 대기 (안내 중이거나 GPS가 약할 때 연결)${where}` };
+  if (carLink.stale()) return { state: "wait", why: `${mode} · 연결됐지만 ${Math.round((Date.now() - carLink.sampleAt) / 1000)}초째 샘플 없음${where}` };
   return { state: "on", why: `${mode} · 사용 중${where}` };
 }
 function drawCarBadge() {
@@ -343,6 +416,7 @@ function startCarLink() {
   if (carDataOn() && (guide.carData === "force" || IN_CAR || comparable || carNear)) carLink.start();
   else if (carLink.state !== "off") carLink.stop();
 }
+carLink.onStall = (why) => log(`차량 스트림 다시 연결: ${why}`);
 carLink.onState = (state) => { log(`차량 스트리밍: ${state}${carLink.name ? ` (${carLink.name})` : ""}`); drawCarBadge(); };
 // Parked (P, or blank with no speed), the marker holds still whatever the fixes do (tracker.ts): the record of when.
 carLink.onGear = (g) => log(`차량 기어 ${g ?? "빈칸"}${carLink.track.parked() ? " · 주차로 봄" : ""}`);
@@ -374,7 +448,7 @@ tracker.onReckonEnd = (r) => {
   // the record that says whether the car's estimate (est_lat/est_lng, Location) is worth steering by in a tunnel.
   const fix = gps.last, est = tracker.car === carLink.track ? carLink.track.lastEst : null;
   const estOff = est && fix && Date.now() - carLink.track.lastEstAt < 10_000 ? ` · 차 자체 위치와 GPS ${Math.round(metres(est.lon, est.lat, fix.lon, fix.lat))} m` : "";
-  const how = r.free ? "경로 밖 · 차량 방위·위치" : r.by === "car" ? "차량 속도" : "마지막 속도 유지";
+  const how = r.free ? "경로 밖 · 차량 방위·위치" : r.by === "car" ? "차량 속도" : r.by === "fix" ? "위치 없는 GPS의 속도" : "마지막 속도 유지";
   const miss = r.errorM == null ? "?" : r.free ? `${Math.round(r.errorM)} m 떨어짐` : `${r.errorM > 0 ? "+" : ""}${Math.round(r.errorM)} m`;
   log(`추측 항법 끝 ${Math.round(r.seconds)}초 · ${how} · GPS와 ${miss}${estOff}`);
 };
@@ -460,6 +534,10 @@ let cameraMovedAt = 0;
 /** When the drawn marker was last put in the trace: once a second is enough to see where it went. */
 let tracedAt = 0;
 function frame() {
+  const at = performance.now();
+  if (frames.at && document.visibilityState === "visible") frames.longestMs = Math.max(frames.longestMs, at - frames.at);
+  frames.at = at;
+  frames.n++;
   try {
     const shown = tracker.frame();
     if (shown && route && Date.now() - tracedAt >= 1000) {
@@ -468,7 +546,8 @@ function frame() {
     }
     if (shown) {
       marker.setLngLat(shown.at);
-      put("mode", MODES[shown.mode] + (shown.reckonBy === "car" ? " (차량 속도)" : "") + (tracker.car?.parked() ? " (주차)" : "") + (shown.offM != null ? ` · ${Math.round(shown.offM)} m` : ""));
+      sizeCar();
+      put("mode", MODES[shown.mode] + (shown.reckonBy === "car" ? " (차량 속도)" : shown.reckonBy === "fix" ? " (GPS 속도)" : "") + (tracker.car?.parked() ? " (주차)" : "") + (shown.offM != null ? ` · ${Math.round(shown.offM)} m` : ""));
       // No fixes in the tunnel to say the speed: the car's own, while it is what moves the marker.
       if (shown.reckonBy === "car") put("speed", Math.round(shown.speedMps * 3.6).toString());
       markerBearing = markerBearing == null ? shown.bearing : lerpAngle(markerBearing, shown.bearing, MARKER_TURN_SHARE);
@@ -563,9 +642,11 @@ function followCar(at: LonLat, speedMps = 0) {
   }
   // Standing still with the camera settled: nothing to move, so no move.
   // When moving (even crawling under 5 km/h in traffic), always update to keep the glide continuous without micro-stutters.
-  const moving = speedMps > 0.2 || returning;
-  if (!moving && metres(before.lng, before.lat, center[0], center[1]) < 0.01 && Math.abs(map.getZoom() - camera.zoom) < 0.0005
-    && Math.abs(lerpAngle(map.getBearing(), camera.bearing, 1) - map.getBearing()) < 0.02 && Math.abs(map.getPitch() - camera.pitch) < 0.02) return;
+  // At a light the fixes' wander reads 0.4 m/s and kept the camera chasing centimetres: both maps (TMAP's under
+  // MapLibre's) redrawn 60 times a second for as long as the light was red. Under 1 m/s, settled within 30 cm is still.
+  const moving = speedMps > 1 || returning;
+  if (!moving && metres(before.lng, before.lat, center[0], center[1]) < 0.3 && Math.abs(map.getZoom() - camera.zoom) < 0.003
+    && Math.abs(lerpAngle(map.getBearing(), camera.bearing, 1) - map.getBearing()) < 0.1 && Math.abs(map.getPitch() - camera.pitch) < 0.1) return;
   map.jumpTo({ center, ...camera });
 }
 
@@ -708,7 +789,7 @@ type Moved = { originalEvent?: Event };
 for (const kind of ["dragstart", "rotatestart", "pitchstart"] as const) {
   map.on(kind, (e: Moved) => { if (e.originalEvent) setFollow(false); });
 }
-map.on("move", (e: Moved) => { if (e.originalEvent) touchedAt = Date.now(); });
+map.on("move", (e: Moved) => { if (e.originalEvent) touchedAt = Date.now(); sizeCar(); });
 map.on("zoomend", (e: Moved) => { if (e.originalEvent) keepHandZoom(); });
 /** A zoom by hand while following is kept as a lean on the speed's zoom, not a fixed level. */
 function keepHandZoom() {
@@ -2757,6 +2838,7 @@ function themed(day: boolean) {
   nightCity?.setNight(!day);
 }
 function applyGuide() {
+  drawCarIcon();
   // 차량 데이터 turned off here: the stream let go and what it had forgotten (a stale "P" would hold the marker).
   if (!carDataOn()) { if (carLink.state !== "off") carLink.stop(); carLink.track.clear(); }
   document.body.classList.toggle("layout-mini", guide.layout === "mini");
@@ -3371,6 +3453,7 @@ el("save").addEventListener("click", () => {
   a.href = URL.createObjectURL(blob);
   a.download = `gps-${new Date().toISOString().replace(/[:.]/g, "-")}.csv`;
   a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
 });
 let replay: Replay | null = null;
 el<HTMLInputElement>("replay").addEventListener("change", async (e) => {
@@ -3491,6 +3574,25 @@ if (new URLSearchParams(location.search).has("debug")) {
   };
 }
 
+/** Once a load: what draws the maps — a real GPU or software, how many pixels — and what the machine has. */
+function logEnvironment() {
+  let gpu = "?", maxTex = "?";
+  try {
+    const gl = (map.getCanvas().getContext("webgl2") ?? map.getCanvas().getContext("webgl")) as WebGLRenderingContext | null;
+    const info = gl?.getExtension("WEBGL_debug_renderer_info");
+    if (gl) { gpu = info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : String(gl.getParameter(gl.RENDERER)); maxTex = String(gl.getParameter(gl.MAX_TEXTURE_SIZE)); }
+  } catch { /* none */ }
+  const canvases = [...document.querySelectorAll("canvas")].map((c) => `${c.width}×${c.height}`).join(", ");
+  const nav = navigator as Navigator & { deviceMemory?: number };
+  log(`환경 GPU ${gpu} · 화면 ${screen.width}×${screen.height} · DPR ${realDpr} (지도 ${mapPixelRatio}) · 캔버스 ${canvases} · 최대 텍스처 ${maxTex} · 메모리 ${nav.deviceMemory ?? "?"} GB · 코어 ${navigator.hardwareConcurrency ?? "?"} · 프레임 ${guide.followFps} · 해상도 ${guide.mapDpr}`);
+}
+// The maps' GPU contexts lost and given back: a GPU process that fell over is seen, not only a black map.
+map.on("webglcontextlost", () => log("지도 WebGL 컨텍스트 잃음 (MapLibre)"));
+map.on("webglcontextrestored", () => log("지도 WebGL 컨텍스트 복구 (MapLibre)"));
+el("ground").addEventListener("webglcontextlost", () => log("바탕 지도 WebGL 컨텍스트 잃음 (TMAP)"), true);
+el("ground").addEventListener("webglcontextrestored", () => log("바탕 지도 WebGL 컨텍스트 복구 (TMAP)"), true);
+document.addEventListener("visibilitychange", () => log(`화면 ${document.visibilityState}`));
+
 // The log to the server every half-minute, and as the page goes to the back or away (a beacon, which outlives it).
 function sendLog(beacon = false) {
   if (typeof guide === "undefined" || !guide.sendLogs) return;
@@ -3520,7 +3622,7 @@ function sendLog(beacon = false) {
   }
   flushPiece();
 }
-setInterval(() => sendLog(), 30_000);
+// Sent every half-minute by the memory line (above), right after it is written.
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") sendLog(true); });
 window.addEventListener("pagehide", () => sendLog(true));
 
@@ -3535,6 +3637,7 @@ setInterval(showAudioLocked, 2000);
 
 map.on("load", async () => {
   log(`UA ${navigator.userAgent}`);
+  logEnvironment();
   log(`secure=${window.isSecureContext} style=${style}`);
   el("wake").textContent = await keepAwake();
   gps.start();
