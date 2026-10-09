@@ -5,7 +5,7 @@ import { chime, keepAwake } from "./probes";
 import { Replay } from "./replay";
 import { Simulator } from "./simulate";
 import { CarLink } from "./car-link";
-import { carBoxPx, carSvg, groundPxPerM, PAINTS } from "./car-icon";
+import { CarLayer, PAINTS } from "./car-icon";
 import { CarTrack } from "./car-track";
 import { DriveTrace } from "./drive-trace";
 import { RouteLayer } from "./route-layer";
@@ -236,29 +236,14 @@ el<HTMLDetailsElement>("diag").addEventListener("toggle", () => { if (el<HTMLDet
 
 // ---- the car ---------------------------------------------------------------
 
-// The car lying flat on the road, turned with it, at its own size (car-icon.ts): a Model Y L seen from above or
-// the arrow, as 안내 설정 says; it tilts with the map in 3D.
-const car = document.createElement("div");
-car.className = "car";
-const marker = new maplibregl.Marker({ element: car, rotationAlignment: "map", pitchAlignment: "map" }).setLngLat(HOME);
-let carDrawn = "";
-function drawCarIcon() {
-  const key = `${guide.carIcon}:${guide.carPaint}`;
-  if (key === carDrawn) return;
-  carDrawn = key;
-  car.innerHTML = carSvg(guide.carIcon ?? "tesla", guide.carPaint ?? PAINTS[0][0]);
-  sizeCar();
-}
-let carPx = { w: 0, h: 0 };
-/** The marker kept at the car's size where it is drawn: on every move of the map, and as the car moves on it. */
-function sizeCar() {
-  const at = marker.getLngLat();
-  const box = carBoxPx(groundPxPerM((p) => map.project(p), [at.lng, at.lat], map.getBearing()));
-  if (!Number.isFinite(box.w) || (Math.abs(box.w - carPx.w) < 0.3 && Math.abs(box.h - carPx.h) < 0.3)) return;
-  carPx = box;
-  car.style.width = `${box.w.toFixed(1)}px`;
-  car.style.height = `${box.h.toFixed(1)}px`;
-}
+// The car on the road at its own size, laid on the map by its corners (car-icon.ts): a Model Y L seen from above, the
+// arrow, or the owner's own picture, as 안내 설정 says. The map draws it, so it is the road's scale wherever it is.
+const carLayer = new CarLayer(map);
+/** The car's place as last drawn. */
+let carAt: LonLat = HOME;
+/** The server has the owner's own picture of the car (CONFIG_DIR/car-icon.png): 안내 설정's 내 사진 draws it. */
+let carPhoto = false;
+void fetch("/api/car-icon", { method: "HEAD" }).then((a) => { carPhoto = a.ok; if (carPhoto) applyGuide(); }).catch(() => {});
 
 // ---- the camera ------------------------------------------------------------
 // Three ways to look, as the car apps offer them: 3D (tilted, heading up,
@@ -518,7 +503,7 @@ function onFix(fix: Fix) {
   el("period").textContent = period == null ? "--" : `${period.toFixed(1)} s`;
   el("count").textContent = gps.samples.length.toString();
   if (!placed) {
-    marker.addTo(map);
+    carLayer.show();
     placed = true;
     log(`첫 수신: speed=${fix.speed} heading=${fix.heading} acc=${fix.accM}`);
   }
@@ -545,13 +530,12 @@ function frame() {
       trace.shown(shown);
     }
     if (shown) {
-      marker.setLngLat(shown.at);
-      sizeCar();
+      carAt = shown.at;
       put("mode", MODES[shown.mode] + (shown.reckonBy === "car" ? " (차량 속도)" : shown.reckonBy === "fix" ? " (GPS 속도)" : "") + (tracker.car?.parked() ? " (주차)" : "") + (shown.offM != null ? ` · ${Math.round(shown.offM)} m` : ""));
       // No fixes in the tunnel to say the speed: the car's own, while it is what moves the marker.
       if (shown.reckonBy === "car") put("speed", Math.round(shown.speedMps * 3.6).toString());
       markerBearing = markerBearing == null ? shown.bearing : lerpAngle(markerBearing, shown.bearing, MARKER_TURN_SHARE);
-      marker.setRotation(markerBearing);
+      carLayer.place(carAt, markerBearing);
       zoomSpeed += (shown.speedMps * 3.6 - zoomSpeed) * 0.03;
       turnInM = route ? shown.nextGuide?.inM : undefined;
       closeup = closeupFor(shown);
@@ -789,7 +773,7 @@ type Moved = { originalEvent?: Event };
 for (const kind of ["dragstart", "rotatestart", "pitchstart"] as const) {
   map.on(kind, (e: Moved) => { if (e.originalEvent) setFollow(false); });
 }
-map.on("move", (e: Moved) => { if (e.originalEvent) touchedAt = Date.now(); sizeCar(); });
+map.on("move", (e: Moved) => { if (e.originalEvent) touchedAt = Date.now(); });
 map.on("zoomend", (e: Moved) => { if (e.originalEvent) keepHandZoom(); });
 /** A zoom by hand while following is kept as a lean on the speed's zoom, not a fixed level. */
 function keepHandZoom() {
@@ -2838,7 +2822,7 @@ function themed(day: boolean) {
   nightCity?.setNight(!day);
 }
 function applyGuide() {
-  drawCarIcon();
+  carLayer.set(guide.carIcon === "photo" && !carPhoto ? "tesla" : guide.carIcon ?? "tesla", guide.carPaint ?? PAINTS[0][0]);
   // 차량 데이터 turned off here: the stream let go and what it had forgotten (a stale "P" would hold the marker).
   if (!carDataOn()) { if (carLink.state !== "off") carLink.stop(); carLink.track.clear(); }
   document.body.classList.toggle("layout-mini", guide.layout === "mini");
@@ -3409,7 +3393,8 @@ function simEnded() {
   // The pretend speed is not left on the speedometer until a real fix comes.
   put("speed", "--");
   if (realFix) {
-    marker.setLngLat(realFix);
+    carAt = realFix;
+    carLayer.place(realFix);
     map.jumpTo({ center: realFix });
     setFollow(true);
   }

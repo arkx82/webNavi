@@ -1,6 +1,7 @@
 import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
 import { existsSync, readdirSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Tmap } from "./route/tmap.js";
@@ -585,6 +586,16 @@ registerGuard(app);
 registerShare(app, db, search);
 // 정밀도로지도 tiles, built into WORK_DIR by tools/hdmap/build.py.
 const hdTiles = registerHdmap(app, workDir);
+
+// The owner's own picture of the car, seen from above with its front up (안내 설정 → 자차 모양 → 내 사진): kept in
+// CONFIG_DIR beside the keys, never in the repository, so a picture of someone else's is the owner's alone.
+app.get("/api/car-icon", async (_request, reply) => {
+  for (const [name, type] of [["car-icon.png", "image/png"], ["car-icon.webp", "image/webp"]] as const) {
+    const file = join(configDir, name);
+    if (existsSync(file)) return reply.type(type).header("Cache-Control", "no-cache").send(await readFile(file));
+  }
+  return reply.code(404).send({ error: "no picture" });
+});
 
 // Every page asks Chrome to send its reports here (users.ts /api/report): a crash among them, with the page's own
 // crash context, on the next start — what the 진단 log, written by the page that died, cannot hold.

@@ -1,23 +1,34 @@
+import type maplibregl from "maplibre-gl";
+import type { LonLat } from "./types";
+
 /**
  * "You" on the map at the car's own size: a Model Y L seen from above
- * (4,976 × 1,920 mm, the mirrors 110 mm out each side), or the arrow of
- * before, laid on the road and sized as the car. A fixed 44 px arrow was
- * as wide as two lanes in town (zoom 18 is about 0.24 m a pixel), where
- * the lane lines are drawn now.
+ * (4,976 × 1,920 mm, the mirrors 110 mm out each side), the arrow of
+ * before sized as the car, or a picture of one's own (the server's
+ * CONFIG_DIR/car-icon.png, kept out of the repository).
  *
- * Drawn here, not a picture of Tesla's: the body in the paint chosen, the
- * glass roof, the light bars front and back.
+ * Drawn by the map itself, as an image laid on the ground by its four
+ * corners in metres (CarLayer): the same scale as the road under it at
+ * every zoom, tilt and place on the screen. An HTML marker is only turned
+ * flat (CSS rotateX, no perspective) and sized in screen pixels — lower on
+ * a tilted screen the road is larger than that, and a car turned across
+ * the screen came out the wrong shape.
  */
 
-export type CarIcon = "tesla" | "arrow";
+export type CarIcon = "tesla" | "arrow" | "photo";
 
 /** Model Y L, metres. */
 export const CAR_LENGTH_M = 4.976;
 export const CAR_WIDTH_M = 1.92;
-/** The SVG's box, in centimetres: the body 192 × 498, the mirrors and a little room round it. */
+/** The SVG's box, in centimetres: the body 192 × 498 centred in it, the mirrors and a little room round it. */
 const BOX = { x: -14, y: -4, w: 220, h: 506 };
-/** Below this the car would be a speck (zoom 16 at 100 km/h is about 0.9 m a pixel): never drawn shorter, in px. */
-export const MIN_LENGTH_PX = 28;
+/** Room round the drawing for its shadow, cm. */
+const PAD_CM = 24;
+/** Pixels a centimetre the drawing is made at: 0.06 m a screen pixel (zoom 20) still sharp. */
+const PX_PER_CM = 1.25;
+
+/** A degree of the map's own sphere (MapLibre's earth radius, 6,371,008.8 m): the road under the car is measured so. */
+const MAP_M_PER_DEG = (2 * Math.PI * 6_371_008.8) / 360;
 
 /** Paints offered in 안내 설정, as Tesla names them for this car. */
 export const PAINTS: [value: string, label: string][] = [
@@ -33,10 +44,118 @@ export function carSvg(icon: CarIcon, paint: string): string {
   return icon === "arrow" ? arrowSvg() : teslaSvg(paint);
 }
 
-/** The element's size in px for the car drawn [pxPerM] pixels a metre: the body's length kept at MIN_LENGTH_PX or more. */
-export function carBoxPx(pxPerM: number): { w: number; h: number } {
-  const scale = Math.max(pxPerM, MIN_LENGTH_PX / CAR_LENGTH_M);
-  return { w: (BOX.w / 100) * scale, h: (BOX.h / 100) * scale };
+/**
+ * The four corners (front left, front right, back right, back left: the image's top left round to its bottom left) of a
+ * box [widthM] × [lengthM] centred on [at], its front toward [headingDeg] (clockwise from north).
+ */
+export function carCorners(at: LonLat, headingDeg: number, widthM: number, lengthM: number): [LonLat, LonLat, LonLat, LonLat] {
+  const h = (headingDeg * Math.PI) / 180;
+  const fE = Math.sin(h), fN = Math.cos(h), rE = Math.cos(h), rN = -Math.sin(h);
+  const mLon = 1 / (MAP_M_PER_DEG * Math.cos((at[1] * Math.PI) / 180)), mLat = 1 / MAP_M_PER_DEG;
+  const p = (f: number, r: number): LonLat => [at[0] + (fE * f + rE * r) * mLon, at[1] + (fN * f + rN * r) * mLat];
+  const l = lengthM / 2, w = widthM / 2;
+  return [p(l, -w), p(l, w), p(-l, w), p(-l, -w)];
+}
+
+/** The picture to lay down and its size on the ground: a drawing with its shadow round it, or the photo as the body. */
+interface Picture { url: string; widthM: number; lengthM: number }
+
+/** A drawing made a PNG, its shadow under it (the image source takes no CSS filter). */
+function rasterize(svg: string): Promise<Picture> {
+  const w = Math.round((BOX.w + 2 * PAD_CM) * PX_PER_CM), h = Math.round((BOX.h + 2 * PAD_CM) * PX_PER_CM);
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const g = canvas.getContext("2d")!;
+      g.shadowColor = "rgba(0,0,0,.45)";
+      g.shadowBlur = 14 * PX_PER_CM;
+      g.shadowOffsetY = 4 * PX_PER_CM;
+      g.drawImage(img, PAD_CM * PX_PER_CM, PAD_CM * PX_PER_CM, BOX.w * PX_PER_CM, BOX.h * PX_PER_CM);
+      resolve({ url: canvas.toDataURL("image/png"), widthM: (BOX.w + 2 * PAD_CM) / 100, lengthM: (BOX.h + 2 * PAD_CM) / 100 });
+    };
+    img.onerror = () => reject(new Error("car drawing"));
+    img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg.replace("<svg ", `<svg xmlns="http://www.w3.org/2000/svg" `).replace('width="100%" height="100%"', `width="${BOX.w}" height="${BOX.h}"`))}`;
+  });
+}
+
+/**
+ * The car as an image source on the map, its corners moved with it each frame. Kept the top layer (a layer added
+ * later — the route, the cameras — would draw over it), and put back on a new style.
+ */
+export class CarLayer {
+  private picture: Picture | null = null;
+  private at: LonLat | null = null;
+  private heading = 0;
+  private shown = false;
+  private installed = false;
+  private asked = "";
+
+  constructor(private map: maplibregl.Map) {
+    map.on("style.load", () => { this.installed = false; this.install(); });
+    map.on("idle", () => this.install());
+    map.on("styledata", () => this.keepOnTop());
+  }
+
+  /** The look: drawn in [paint], the arrow, or the server's photo (falling back to the drawing where there is none). */
+  set(icon: CarIcon, paint: string) {
+    const key = `${icon}:${paint}`;
+    if (key === this.asked) return;
+    this.asked = key;
+    const made = icon === "photo"
+      ? Promise.resolve<Picture>({ url: "/api/car-icon", widthM: CAR_WIDTH_M, lengthM: CAR_LENGTH_M })
+      : rasterize(carSvg(icon, paint));
+    void made.then((p) => {
+      if (key !== this.asked) return;
+      this.picture = p;
+      const source = this.source();
+      if (source && this.at) source.updateImage({ url: p.url, coordinates: carCorners(this.at, this.heading, p.widthM, p.lengthM) });
+      else this.install();
+    }, () => {});
+  }
+
+  /** Where the car is and the way it faces: the corners moved, nothing else. */
+  place(at: LonLat, headingDeg = this.heading) {
+    this.at = at;
+    this.heading = headingDeg;
+    const source = this.source();
+    if (source && this.picture) source.setCoordinates(carCorners(at, headingDeg, this.picture.widthM, this.picture.lengthM));
+    else this.install();
+  }
+
+  show(on = true) {
+    this.shown = on;
+    if (this.installed) this.map.setLayoutProperty("car", "visibility", on ? "visible" : "none");
+  }
+
+  private source(): maplibregl.ImageSource | null {
+    return this.installed ? (this.map.getSource("car") as maplibregl.ImageSource | undefined) ?? null : null;
+  }
+
+  private install() {
+    if (this.installed || !this.picture || !this.at) return;
+    try {
+      if (!this.map.getSource("car")) this.map.addSource("car", { type: "image", url: this.picture.url, coordinates: carCorners(this.at, this.heading, this.picture.widthM, this.picture.lengthM) });
+      if (!this.map.getLayer("car")) {
+        this.map.addLayer({
+          id: "car", type: "raster", source: "car",
+          layout: { visibility: this.shown ? "visible" : "none" },
+          paint: { "raster-fade-duration": 0, "raster-resampling": "linear" },
+        });
+      }
+      this.installed = true;
+    } catch { /* the style not in yet: idle tries again */ }
+  }
+
+  private keepOnTop() {
+    if (!this.installed) return;
+    try {
+      const order = this.map.getLayersOrder();
+      if (order[order.length - 1] !== "car" && order.includes("car")) this.map.moveLayer("car");
+    } catch { /* between styles */ }
+  }
 }
 
 function arrowSvg(): string {
@@ -67,19 +186,6 @@ function teslaSvg(paint: string): string {
 <path d="M10 22C14 15 22 11 34 9M182 22C178 15 170 11 158 9" fill="none" stroke="#ffffff" stroke-width="6" stroke-linecap="round"/>
 <path d="M18 486C60 494 132 494 174 486" fill="none" stroke="#ff2b2b" stroke-width="5" stroke-linecap="round"/>
 </svg>`;
-}
-
-/**
- * Pixels a metre on the ground where [at] is drawn, across the screen (the
- * way that is not foreshortened when the map is tilted): a tilted map is
- * larger at the screen's foot, where the car sits, than at its middle.
- */
-export function groundPxPerM(project: (p: [number, number]) => { x: number; y: number }, at: [number, number], bearingDeg: number): number {
-  const across = ((bearingDeg + 90) * Math.PI) / 180;
-  const dLon = (10 * Math.sin(across)) / (111_320 * Math.cos((at[1] * Math.PI) / 180));
-  const dLat = (10 * Math.cos(across)) / 110_540;
-  const a = project(at), b = project([at[0] + dLon, at[1] + dLat]);
-  return Math.hypot(b.x - a.x, b.y - a.y) / 10;
 }
 
 function rgb(hex: string): [number, number, number] {
