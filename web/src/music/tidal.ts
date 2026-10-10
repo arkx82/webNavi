@@ -66,6 +66,17 @@ export class TidalSource implements MusicSource {
    * two before the next track (2026-10-04). Through the change the player stays "playing".
    */
   private switching = false;
+  /**
+   * When the page itself last paused, played, seeked the element, and the volume it last set: an event with none
+   * of these just before it was done from outside (the car's card or wheel on the element, not the media session).
+   */
+  private own = { pause: 0, play: 0, seek: 0, volume: 1 };
+  private outsideListeners: ((what: string) => void)[] = [];
+  private outside(what: string) {
+    for (const l of this.outsideListeners) l(what);
+  }
+  private static readonly OWN_MS = 1500;
+  private mine(at: number) { return Date.now() - at < TidalSource.OWN_MS; }
   /** The next track's stream, asked a little before this one ends: no round trip to TIDAL at the change. */
   private nextStream: { id: string; url: string; at: number } | null = null;
 
@@ -76,6 +87,23 @@ export class TidalSource implements MusicSource {
     this.audio.addEventListener("ended", () => {
       this.switching = true;
       void this.advance();
+    });
+
+    // Each of these, where the page did not do it, is written down (onOutside): the car's next and previous never
+    // reached the media session (no 미디어 세션 line in a 36-minute drive with TIDAL, 2026-10-09), so whatever else
+    // the car does to the sound is the next thing to know.
+    this.audio.addEventListener("play", () => {
+      if (!this.mine(this.own.play)) this.outside("재생");
+    });
+    this.audio.addEventListener("seeking", () => {
+      if (!this.mine(this.own.seek) && !this.switching) this.outside(`탐색 ${Math.round(this.audio.currentTime)}초로`);
+    });
+    this.audio.addEventListener("volumechange", () => {
+      if (this.audio.muted) this.outside("음소거");
+      else if (Math.abs(this.audio.volume - this.own.volume) > 0.01) this.outside(`음량 ${this.audio.volume.toFixed(2)}`);
+    });
+    this.audio.addEventListener("ratechange", () => {
+      if (this.audio.playbackRate !== 1) this.outside(`속도 ${this.audio.playbackRate}`);
     });
 
     this.audio.addEventListener("playing", () => {
@@ -89,6 +117,7 @@ export class TidalSource implements MusicSource {
     this.audio.addEventListener("pause", () => {
       // The pause of a track ending, or of its source changed for the next: not the listener's.
       if (this.switching || this.audio.ended) return;
+      if (!this.mine(this.own.pause)) this.outside("일시정지");
       this.playing = false;
       this.emitNow();
     });
@@ -331,6 +360,7 @@ export class TidalSource implements MusicSource {
     try {
       this.nextStream = null;
       this.audio.src = ready ?? `/api/music/tidal/track/${encodeURIComponent(track.id)}/audio`;
+      this.own.play = Date.now();
       await this.audio.play();
       if (load !== this.load) return;
       this.failure = undefined;
@@ -386,6 +416,7 @@ export class TidalSource implements MusicSource {
   }
 
   async seek(seconds: number): Promise<void> {
+    this.own.seek = Date.now();
     this.audio.currentTime = Math.max(0, seconds);
     this.emitNow();
   }
@@ -394,9 +425,11 @@ export class TidalSource implements MusicSource {
     if (this.playing) {
       // Paused while the next track was being put on: the listener's pause, not the change's — reported.
       this.switching = false;
+      this.own.pause = Date.now();
       this.audio.pause();
       if (this.audio.paused && this.playing) { this.playing = false; this.emitNow(); }
     } else {
+      this.own.play = Date.now();
       await this.audio.play();
     }
   }
@@ -407,6 +440,7 @@ export class TidalSource implements MusicSource {
 
   async previous(): Promise<void> {
     if (this.audio.currentTime > 3) {
+      this.own.seek = Date.now();
       this.audio.currentTime = 0;
       this.emitNow();
       return;
@@ -416,7 +450,12 @@ export class TidalSource implements MusicSource {
   }
 
   setVolume(level: number): void {
-    this.audio.volume = Math.max(0, Math.min(1, level));
+    this.own.volume = Math.max(0, Math.min(1, level));
+    this.audio.volume = this.own.volume;
+  }
+
+  onOutside(listener: (what: string) => void): void {
+    if (!this.outsideListeners.includes(listener)) this.outsideListeners.push(listener);
   }
 
   onState(listener: (now: NowPlaying) => void): void {
@@ -426,6 +465,7 @@ export class TidalSource implements MusicSource {
 
   disconnect(): void {
     this.load++;
+    this.own.pause = Date.now();
     this.audio.pause();
     this.queue = [];
     // The attribute removed, not set to "": an empty src is an error event (MEDIA_ERR_SRC_NOT_SUPPORTED).

@@ -57,6 +57,11 @@ export interface MusicSource {
   /** 0..1; called by the voice around every phrase. */
   setVolume(level: number): void;
   onState(listener: (now: NowPlaying) => void): void;
+  /**
+   * What happened to the sound that the page did not do: a pause, a play, a seek, a volume set from outside —
+   * the car's media card or wheel acting on the element itself rather than through the media session.
+   */
+  onOutside?(listener: (what: string) => void): void;
   disconnect(): void;
 }
 
@@ -89,6 +94,7 @@ export function lazy(id: MusicSource["id"], label: string, load: () => Promise<M
   let real: MusicSource | null = null;
   let loading: Promise<MusicSource> | null = null;
   const pending: ((now: NowPlaying) => void)[] = [];
+  const pendingOutside: ((what: string) => void)[] = [];
   return {
     id, label,
     async connect() {
@@ -96,6 +102,8 @@ export function lazy(id: MusicSource["id"], label: string, load: () => Promise<M
       real ??= await (loading ??= load().catch((e: unknown) => { loading = null; throw e; }));
       for (const l of pending) real.onState(l);
       pending.length = 0;
+      for (const l of pendingOutside) real.onOutside?.(l);
+      pendingOutside.length = 0;
       await real.connect();
     },
     playlists: () => real!.playlists(),
@@ -109,6 +117,7 @@ export function lazy(id: MusicSource["id"], label: string, load: () => Promise<M
     like: (on) => real?.like?.(on) ?? Promise.resolve(),
     setVolume: (level) => real?.setVolume(level),
     onState(listener) { if (real) real.onState(listener); else pending.push(listener); },
+    onOutside(listener) { if (real) real.onOutside?.(listener); else pendingOutside.push(listener); },
     disconnect() { real?.disconnect(); },
   };
 }

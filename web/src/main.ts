@@ -2962,6 +2962,7 @@ async function pickSource(s: MusicSource) {
     await s.connect();
     if (shuffleOn) await s.shuffle?.(true).catch(() => undefined);
     s.onState(showNow);
+    s.onOutside?.(onMusicOutside);
     voice.duckers.add(duckBySource);
     el("player").hidden = false;
     el("mini-artist").textContent = s.label;
@@ -3111,9 +3112,22 @@ function logTrackChange(state: NowPlaying) {
   if (state.trackId) heardTrack = { id: state.trackId, at: Date.now() };
   pausedAt = null;
 }
+/** The sound changed by something other than the page (tidal.ts onOutside): the car's card or wheel on the element. */
+function onMusicOutside(what: string) {
+  log(`음악 바깥 조작 ${what}`);
+}
+/** Whether the media session's state has been written down since the music last started. */
+let sessionToldAt: string | null = null;
 function tellMediaSession(state: NowPlaying) {
   const ms = (navigator as Navigator & { mediaSession?: MediaSession }).mediaSession;
   if (!ms || typeof MediaMetadata === "undefined") return;
+  // Once a session of listening: what the car could read off the page when the sound started, so an in-car check
+  // of the arrows shows the page had told the session (title, playing) at that moment.
+  if (state.playing && state.title && sessionToldAt == null) {
+    sessionToldAt = state.title;
+    queueMicrotask(() => log(`미디어 세션 상태 ${ms.playbackState} · 제목 ${ms.metadata?.title ? "있음" : "없음"} · 화면 ${document.visibilityState}`));
+  }
+  if (!state.title) sessionToldAt = null;
   // Nothing on (the music turned off): no card under the car either.
   if (!state.title) { ms.metadata = null; ms.playbackState = "none"; return; }
   ms.metadata = new MediaMetadata({ title: state.title, artist: state.artist ?? "", artwork: state.art ? [{ src: state.art, sizes: "300x300" }] : [] });
@@ -3181,7 +3195,19 @@ function wireMediaSession(ms: MediaSession) {
  * non-typing key while nothing is being typed into: what the car's wheel sends, if it sends anything, is logged.
  */
 let keyLoggedAt = 0;
-document.addEventListener("keydown", (e) => {
+/** A media key heard as keydown: its keyup is not played again. */
+let mediaKeyDownAt = 0;
+// On the window, in the capture phase: before the map's canvas or a button with focus can keep a key to itself.
+window.addEventListener("keyup", (e) => {
+  // Some embedders send a media key as keyup alone: played then, and written down.
+  if (!e.key.startsWith("Media") || Date.now() - mediaKeyDownAt < 2000) return;
+  const act: Record<string, () => Promise<void> | undefined> = {
+    MediaTrackNext: () => music?.next(), MediaTrackPrevious: () => music?.previous(), MediaPlayPause: () => music?.toggle(),
+  };
+  log(`미디어 키(올림만) ${e.key}`);
+  void act[e.key]?.()?.catch(onMusicError);
+}, true);
+window.addEventListener("keydown", (e) => {
   const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
   const media: Record<string, () => Promise<void> | undefined> = {
     MediaTrackNext: () => music?.next(),
@@ -3194,6 +3220,7 @@ document.addEventListener("keydown", (e) => {
   const act = media[e.key];
   if (act) {
     e.preventDefault();
+    mediaKeyDownAt = Date.now();
     log(`미디어 키 ${e.key}`);
     void act()?.catch(onMusicError);
     return;
@@ -3201,7 +3228,7 @@ document.addEventListener("keydown", (e) => {
   if (typing || e.key.length === 1 || Date.now() - keyLoggedAt < 1000) return;
   keyLoggedAt = Date.now();
   log(`키 ${e.key} (${e.code})`);
-});
+}, true);
 
 const clock = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, "0")}`;
 /** A finger on the seek bar: the bar is theirs until they let go. */
