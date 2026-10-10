@@ -32,6 +32,10 @@ export const OFF_AGAIN_S = 6;
 export const LOST_S = 2;
 export const LOST_ACC_M = 50;
 export const SNAP_S = 1.5;
+/** The longest the slide out of a reckoning takes: its length grows with the miss, so the speed never turns round. */
+export const SNAP_MAX_S = 4;
+/** In the slide the miss is taken out at no more than this share of the car's speed (where SNAP_MAX_S allows). */
+const SNAP_SPEED_SHARE = 0.5;
 /** How far ahead of its last fix the car is carried by its speed before it waits for the next. */
 const PREDICT_S = 2.5;
 /** How quickly the drawn car closes on where the fixes say it is: most of the way in a couple of seconds. */
@@ -109,6 +113,11 @@ interface GuideAlong {
   alongM: number;
 }
 
+/** 0..1 to 0..1, leaving and arriving flat (smoothstep). */
+function smooth(t: number): number {
+  return t * t * (3 - 2 * t);
+}
+
 export class Tracker {
   private line: Line | null = null;
   private route: Route | null = null;
@@ -141,7 +150,16 @@ export class Tracker {
    */
   private snapUntil = 0;
   private snapStart = 0;
-  private snapFromAlong: number | null = null;
+  /**
+   * The slide as two parts: where the fixes say the car is, followed as at any other time (snapBase, at the car's speed
+   * and closing on the fixes), and the reckoning's miss at the start (snapMiss), eased out over snapS seconds by a curve
+   * that leaves and arrives flat. A slide from the reckoned place itself, blended toward the fixes, started at a
+   * standstill and surged to half again the speed — at every fix after a silence of 2 s or more, 76 times on the drives
+   * of 2026-10-09, and backward at three times the speed where the reckoning had run ahead.
+   */
+  private snapBase: number | null = null;
+  private snapMiss = 0;
+  private snapS = SNAP_S;
   private reckonAlong = 0;
   private reckonSince = 0;
   private reckonBy: Reckoner = "speed";
@@ -311,9 +329,15 @@ export class Tracker {
     }
     if (wasReckoning) {
       this.snapStart = now;
-      this.snapUntil = now + SNAP_S * 1000;
-      this.snapFromAlong = this.shownAlong;
-      this.startGlide(target, now, SNAP_S);
+      this.snapBase = this.glideToAlong;
+      this.snapMiss = this.shownAlong != null && this.glideToAlong != null ? this.shownAlong - this.glideToAlong : 0;
+      // Long enough that the miss comes out at no more than half the speed, so the car never stands or turns round for a
+      // few metres. A miss too big for that within SNAP_MAX_S (a long tunnel's: 271 m on 2026-10-09) cannot be put right
+      // without a turn back whatever the length: it is over in SNAP_S, not drawn out.
+      const smoothS = (1.5 * Math.abs(this.snapMiss)) / (SNAP_SPEED_SHARE * Math.max(this.speedMps, 3));
+      this.snapS = smoothS <= SNAP_MAX_S ? Math.max(SNAP_S, smoothS) : SNAP_S;
+      this.snapUntil = now + this.snapS * 1000;
+      this.startGlide(target, now, this.snapS);
     } else if (now < this.snapUntil) {
       // A fix while the slide is on: where it heads moves, the slide goes on from where it began.
       this.glideTo = target;
@@ -409,7 +433,10 @@ export class Tracker {
         : byCar
           ? this.reckonAlong + byCar.m + this.reckonSpeed(this.car!.lastSpeed() ?? this.speedMps) * (Math.max(0, wallNow - byCar.through) / 1000)
           : this.reckonAlong + this.reckonSpeed() * ((now - this.lastFixAt) / 1000);
-      reckoned = this.line.place(ahead);
+      // A slide out of the last reckoning still going (its miss not yet all taken out) goes on over this one: the fixes
+      // falling silent again inside a long slide must not drop what is left of it at once.
+      const sliding = now < this.snapUntil ? this.snapMiss * (1 - smooth(Math.min(1, (now - this.snapStart) / (this.snapS * 1000)))) : 0;
+      reckoned = this.line.place(ahead + sliding);
       this.shownAt = reckoned.at;
       this.shownAlong = reckoned.alongM;
       this.shownBearing = reckoned.bearing;
@@ -440,21 +467,29 @@ export class Tracker {
         // fewer (a busy car computer) moved the car less than it went, and the lag grew to 40 m at 110 km/h (2026-10-05).
         const dt = this.lastFrameAt ? Math.min(1, (now - this.lastFrameAt) / 1000) : 0;
         const predicted = this.glideToAlong + this.speedMps * Math.min(PREDICT_S, (now - this.lastFixAt) / 1000);
-        let along = this.shownAlong ?? predicted;
-        // Past PREDICT_S the place it is steered to stands: the car is carried no further than that, not crept on
-        // for as long as the fixes stay away (a car park, a car too slow to reckon on).
-        along = (now - this.lastFixAt) / 1000 > PREDICT_S ? Math.max(along, Math.min(predicted, along + this.speedMps * dt)) : along + this.speedMps * dt;
-        if (now < this.snapUntil && this.snapFromAlong != null) {
-          // Out of a tunnel: from where the reckoning had the car to where the fixes say, eased over SNAP_S — however
-          // far the two were apart, a slide, not the leap a jump in the fixes is taken with.
-          const ts = Math.min(1, (now - this.snapStart) / (SNAP_S * 1000));
-          along = this.snapFromAlong + (predicted - this.snapFromAlong) * (ts * ts * (3 - 2 * ts));
-        } else {
-          // The error closed with a time constant: a small one melts away, a large one (a leap in the fixes) is taken.
-          const gap = predicted - along;
+        const since = (now - this.lastFixAt) / 1000;
+        // One frame of following the fixes from [from]: on at the car's speed, and the gap to where they say closed with
+        // a time constant — a small one melts away, a large one (a leap in the fixes) is taken. Past PREDICT_S the place
+        // it is steered to stands: the car is carried no further than that, not crept on for as long as the fixes stay
+        // away (a car park, a car too slow to reckon on).
+        const follow = (from: number) => {
+          let a = since > PREDICT_S ? Math.max(from, Math.min(predicted, from + this.speedMps * dt)) : from + this.speedMps * dt;
+          const gap = predicted - a;
           const close = gap * (1 - Math.exp(-dt / CATCH_UP_S));
           const most = Math.max(0.5, this.speedMps * CATCH_UP_SHARE) * dt;
-          along += Math.abs(gap) > LEAP_M ? gap : Math.max(-most, Math.min(most, close));
+          a += Math.abs(gap) > LEAP_M ? gap : Math.max(-most, Math.min(most, close));
+          return a;
+        };
+        let along: number;
+        if (now < this.snapUntil && this.snapBase != null) {
+          // Out of a reckoning: the fixes followed as ever, and the miss eased out on top — however far apart, a slide,
+          // not the leap a jump in the fixes is taken with, and one that keeps the car's own speed as it begins and ends.
+          this.snapBase = follow(this.snapBase);
+          const ts = Math.min(1, (now - this.snapStart) / (this.snapS * 1000));
+          along = this.snapBase + this.snapMiss * (1 - smooth(ts));
+        } else {
+          this.snapBase = null;
+          along = follow(this.shownAlong ?? predicted);
         }
         along = Math.max(0, Math.min(this.line.lengthM, along));
         const placed = this.line.place(along);

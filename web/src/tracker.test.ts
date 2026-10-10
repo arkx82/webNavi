@@ -107,7 +107,8 @@ test("in a tunnel the marker keeps going along the route at the last speed", () 
   assert.equal(shown.mode, "reckoning");
   const expected = offset(start, 0, 500 + 20 * (later / 1000));
   assert.ok(metres(shown.at[0], shown.at[1], expected[0], expected[1]) < 2);
-  // Out the other side: the next fix slides the marker over 1.5 s, not at once.
+  // Out the other side: the next fix slides the marker over 1.5 s, not at once (100 m out: too far to ease without a
+  // surge, so over quickly).
   tracker.feed(fix(offset(start, 0, 700), later, { speed: 20 }), later);
   assert.equal(tracker.frame(later + 500)!.mode, "snapping");
   assert.equal(tracker.frame(later + 1600)!.mode, "gps");
@@ -500,4 +501,47 @@ test("placeless fixes heading across the road (a turn round under cover) carry t
   const shown = tracker.frame(10_000)!;
   assert.equal(shown.reckonBy, "fix");
   assert.ok(Math.abs(shown.alongM! - 200) < 2, `${shown.alongM}`);
+});
+
+test("out of a short silence the car keeps its speed: a few metres' miss is eased out without a standstill or a turn back", () => {
+  for (const missM of [4, -4]) {
+    const tracker = new Tracker();
+    tracker.setRoute(route);
+    // 10 m/s up the road, fixes ten a second; then 3 s of nothing (the car browser's silences), reckoned on.
+    let t = 0;
+    for (; t <= 5000; t += 100) { tracker.feed(fix(offset(start, 0, 100 + 10 * (t / 1000)), t, { speed: 10 }), t); tracker.frame(t); }
+    for (; t < 8000; t += 16) tracker.frame(t);
+    assert.equal(tracker.frame(t)!.mode, "reckoning");
+    // The fix after it says the car is [missM] metres behind (+) or ahead (−) of where the reckoning has it.
+    const drawn = (at: LonLat) => metres(start[0], start[1], at[0], at[1]);
+    const reckoned = drawn(tracker.frame(t)!.at);
+    let was = reckoned, wasAt = t, slowest = Infinity, fastest = 0;
+    for (let k = 0; k < 50; k++, t += 100) {
+      tracker.feed(fix(offset(start, 0, reckoned + missM + 10 * (k / 10)), t, { speed: 10 }), t);
+      for (let f = t + 16; f <= t + 100; f += 16) {
+        const now = drawn(tracker.frame(f)!.at);
+        const v = (now - was) / ((f - wasAt) / 1000);
+        slowest = Math.min(slowest, v);
+        fastest = Math.max(fastest, v);
+        was = now;
+        wasAt = f;
+      }
+    }
+    assert.ok(slowest > 2.5, `miss ${missM}: slowest ${slowest.toFixed(2)} m/s (the car's 10)`);
+    assert.ok(fastest < 17.5, `miss ${missM}: fastest ${fastest.toFixed(2)} m/s`);
+  }
+});
+
+test("a slide still going when the fixes fall silent again carries on over the new reckoning, without a leap", () => {
+  const tracker = new Tracker();
+  tracker.setRoute(route);
+  let t = 0;
+  for (; t <= 5000; t += 100) { tracker.feed(fix(offset(start, 0, 100 + 10 * (t / 1000)), t, { speed: 10 }), t); tracker.frame(t); }
+  for (; t < 8000; t += 16) tracker.frame(t);
+  const drawn = () => { const at = tracker.frame(t)!.at; return metres(start[0], start[1], at[0], at[1]); };
+  // 10 m behind the reckoning (a 3 s slide at 10 m/s), then nothing again: the slide outlasts LOST_S.
+  tracker.feed(fix(offset(start, 0, drawn() - 10), t, { speed: 10 }), t);
+  let was = drawn(), most = 0;
+  for (const end = t + 4000; t <= end; t += 16) { const now = drawn(); most = Math.max(most, Math.abs(now - was)); was = now; }
+  assert.ok(most < 1, `largest step a frame ${most.toFixed(2)} m`);
 });
