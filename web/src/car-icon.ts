@@ -2,10 +2,14 @@ import type maplibregl from "maplibre-gl";
 import type { LonLat } from "./types";
 
 /**
- * "You" on the map at the car's own size: a Model Y L seen from above
- * (4,976 × 1,920 mm, the mirrors 110 mm out each side), the arrow of
- * before sized as the car, or a picture of one's own (the server's
- * CONFIG_DIR/car-icon.png, kept out of the repository).
+ * "You" on the map: a Model Y L seen from above (4,976 × 1,920 mm, the
+ * mirrors 110 mm out each side), the arrow of before, or a picture of
+ * one's own (the server's CONFIG_DIR/car-icon.png, kept out of the
+ * repository) — as wide as the lane it is in, side to side (LANE_WIDTH_M),
+ * its length in the car's own proportion. At the car's true size it was
+ * 5 px long at 100 km/h's zoom (2026-10-11): wide as its lane, it fills
+ * the lane when standing and grows smaller as the camera draws back with
+ * the speed, as the road under it does.
  *
  * Drawn by the map itself, as an image laid on the ground by its four
  * corners in metres (CarLayer): the same scale as the road under it at
@@ -20,6 +24,15 @@ export type CarIcon = "tesla" | "arrow" | "photo";
 /** Model Y L, metres. */
 export const CAR_LENGTH_M = 4.976;
 export const CAR_WIDTH_M = 1.92;
+/**
+ * A lane's width, metres, by 도로의 구조·시설 기준에 관한 규칙: 3.5 on a motorway or car-only road, 3.0–3.5 on a town
+ * road (3.25 the most common for a main road; a little under it so the car stays inside the lines).
+ */
+export const LANE_WIDTH_M = { motorway: 3.5, town: 3.2 } as const;
+/** The drawing's widest part, mirror to mirror (the body 192 cm, the mirrors 11 cm out each side). */
+const DRAWN_WIDTH_M = 2.14;
+/** The arrow's, its white edge included. */
+const ARROW_WIDTH_M = 1.96;
 /** The SVG's box, in centimetres: the body 192 × 498 centred in it, the mirrors and a little room round it. */
 const BOX = { x: -14, y: -4, w: 220, h: 506 };
 /** Room round the drawing for its shadow, cm. */
@@ -57,11 +70,23 @@ export function carCorners(at: LonLat, headingDeg: number, widthM: number, lengt
   return [p(l, -w), p(l, w), p(-l, w), p(-l, -w)];
 }
 
-/** The picture to lay down and its size on the ground: a drawing with its shadow round it, or the photo as the body. */
-interface Picture { url: string; widthM: number; lengthM: number }
+/**
+ * The picture to lay down and its size on the ground at the car's true size: a drawing with its shadow round it, or
+ * the photo as the body; [visibleM] its widest visible part, the one made as wide as the lane.
+ */
+interface Picture { url: string; widthM: number; lengthM: number; visibleM: number }
+
+/**
+ * The scale for a picture [visibleM] wide: as wide as a lane [laneM], and never narrower than [minM] (the route
+ * line's edge and a little, at the car's place on the screen — fast, or where the lanes cannot be told apart, the
+ * lane-wide car came out thinner than the line under it); never under the car's true size.
+ */
+export function carScale(visibleM: number, laneM: number, minM = 0): number {
+  return Math.max(1, laneM / visibleM, minM / visibleM);
+}
 
 /** A drawing made a PNG, its shadow under it (the image source takes no CSS filter). */
-function rasterize(svg: string): Promise<Picture> {
+function rasterize(svg: string, visibleM: number): Promise<Picture> {
   const w = Math.round((BOX.w + 2 * PAD_CM) * PX_PER_CM), h = Math.round((BOX.h + 2 * PAD_CM) * PX_PER_CM);
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -74,7 +99,7 @@ function rasterize(svg: string): Promise<Picture> {
       g.shadowBlur = 14 * PX_PER_CM;
       g.shadowOffsetY = 4 * PX_PER_CM;
       g.drawImage(img, PAD_CM * PX_PER_CM, PAD_CM * PX_PER_CM, BOX.w * PX_PER_CM, BOX.h * PX_PER_CM);
-      resolve({ url: canvas.toDataURL("image/png"), widthM: (BOX.w + 2 * PAD_CM) / 100, lengthM: (BOX.h + 2 * PAD_CM) / 100 });
+      resolve({ url: canvas.toDataURL("image/png"), widthM: (BOX.w + 2 * PAD_CM) / 100, lengthM: (BOX.h + 2 * PAD_CM) / 100, visibleM });
     };
     img.onerror = () => reject(new Error("car drawing"));
     img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg.replace("<svg ", `<svg xmlns="http://www.w3.org/2000/svg" `).replace('width="100%" height="100%"', `width="${BOX.w}" height="${BOX.h}"`))}`;
@@ -92,6 +117,9 @@ export class CarLayer {
   private shown = false;
   private installed = false;
   private asked = "";
+  /** The width of the lane the car is in, which the picture's widest part is made (sizeTo), and the least it may be. */
+  private laneM: number = LANE_WIDTH_M.town;
+  private minM = 0;
 
   constructor(private map: maplibregl.Map) {
     map.on("style.load", () => { this.installed = false; this.install(); });
@@ -105,13 +133,13 @@ export class CarLayer {
     if (key === this.asked) return;
     this.asked = key;
     const made = icon === "photo"
-      ? Promise.resolve<Picture>({ url: "/api/car-icon", widthM: CAR_WIDTH_M, lengthM: CAR_LENGTH_M })
-      : rasterize(carSvg(icon, paint));
+      ? Promise.resolve<Picture>({ url: "/api/car-icon", widthM: CAR_WIDTH_M, lengthM: CAR_LENGTH_M, visibleM: CAR_WIDTH_M })
+      : rasterize(carSvg(icon, paint), icon === "arrow" ? ARROW_WIDTH_M : DRAWN_WIDTH_M);
     void made.then((p) => {
       if (key !== this.asked) return;
       this.picture = p;
       const source = this.source();
-      if (source && this.at) source.updateImage({ url: p.url, coordinates: carCorners(this.at, this.heading, p.widthM, p.lengthM) });
+      if (source && this.at) source.updateImage({ url: p.url, coordinates: this.corners(this.at, this.heading) });
       else this.install();
     }, () => {});
   }
@@ -121,8 +149,22 @@ export class CarLayer {
     this.at = at;
     this.heading = headingDeg;
     const source = this.source();
-    if (source && this.picture) source.setCoordinates(carCorners(at, headingDeg, this.picture.widthM, this.picture.lengthM));
+    if (source && this.picture) source.setCoordinates(this.corners(at, headingDeg));
     else this.install();
+  }
+
+  /**
+   * As wide as a lane of [laneM], and no narrower than [minM] metres on the ground: taken at the next place(), which
+   * moves the corners every frame anyway.
+   */
+  sizeTo(laneM: number, minM = 0) {
+    this.laneM = laneM;
+    this.minM = minM;
+  }
+
+  private corners(at: LonLat, headingDeg: number) {
+    const p = this.picture!, s = carScale(p.visibleM, this.laneM, this.minM);
+    return carCorners(at, headingDeg, p.widthM * s, p.lengthM * s);
   }
 
   show(on = true) {
@@ -137,7 +179,7 @@ export class CarLayer {
   private install() {
     if (this.installed || !this.picture || !this.at) return;
     try {
-      if (!this.map.getSource("car")) this.map.addSource("car", { type: "image", url: this.picture.url, coordinates: carCorners(this.at, this.heading, this.picture.widthM, this.picture.lengthM) });
+      if (!this.map.getSource("car")) this.map.addSource("car", { type: "image", url: this.picture.url, coordinates: this.corners(this.at, this.heading) });
       if (!this.map.getLayer("car")) {
         this.map.addLayer({
           id: "car", type: "raster", source: "car",

@@ -13,6 +13,18 @@ const COLOURS: Record<number, string> = {
   3: "#ff4d4f", // congested
 };
 
+/** The route line's dark edge, its width in screen pixels by zoom: [zoom, px] stops, linear between. */
+export const CASING_STOPS: [number, number][] = [[11, 8], [15, 12], [18, 14]];
+/** The casing's width at [zoom], as the map draws it (the same stops as its layer). */
+export function casingPx(zoom: number): number {
+  const s = CASING_STOPS;
+  if (zoom <= s[0][0]) return s[0][1];
+  for (let i = 1; i < s.length; i++) {
+    if (zoom <= s[i][0]) return s[i - 1][1] + ((zoom - s[i - 1][0]) / (s[i][0] - s[i - 1][0])) * (s[i][1] - s[i - 1][1]);
+  }
+  return s[s.length - 1][1];
+}
+
 export class RouteLayer {
   private ready = false;
   private last: [Route | null, Route[]] = [null, []];
@@ -47,7 +59,7 @@ export class RouteLayer {
     add({
       id: "route-casing", type: "line", source: "route",
       layout: { "line-cap": "round", "line-join": "round" },
-      paint: { "line-color": "#0b1a33", "line-width": ["interpolate", ["linear"], ["zoom"], 11, 8, 15, 12, 18, 14], "line-opacity": 0.9, "line-blur": 0.4 },
+      paint: { "line-color": "#0b1a33", "line-width": ["interpolate", ["linear"], ["zoom"], ...CASING_STOPS.flat()], "line-opacity": 0.9, "line-blur": 0.4 },
     });
     add({
       id: "route-line", type: "line", source: "route",

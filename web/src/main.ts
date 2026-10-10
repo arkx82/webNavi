@@ -5,10 +5,10 @@ import { chime, keepAwake } from "./probes";
 import { Replay } from "./replay";
 import { Simulator } from "./simulate";
 import { CarLink } from "./car-link";
-import { CarLayer, PAINTS } from "./car-icon";
+import { CarLayer, LANE_WIDTH_M, PAINTS } from "./car-icon";
 import { CarTrack } from "./car-track";
 import { DriveTrace } from "./drive-trace";
-import { RouteLayer } from "./route-layer";
+import { RouteLayer, casingPx } from "./route-layer";
 import { OFF_M, Tracker, type Shown } from "./tracker";
 import { Line, bearing, lerpAngle, metres } from "./geo";
 import { arrowSvg, fromBend, maneuverOf, shapedOf, type Bend, type Maneuver } from "./maneuver";
@@ -518,6 +518,26 @@ const frameErrors = new Set<string>();
 let cameraMovedAt = 0;
 /** When the drawn marker was last put in the trace: once a second is enough to see where it went. */
 let tracedAt = 0;
+/** The lane width the car is drawn as wide as, eased toward the road's (car-icon.ts LANE_WIDTH_M). */
+let carLaneM: number = LANE_WIDTH_M.town;
+/** The car at least this many times the route line's edge across, on the screen. */
+const CAR_OVER_ROUTE = 1.3;
+/**
+ * The least width on the ground, metres, that shows the car [CAR_OVER_ROUTE] times as wide as the route line's edge
+ * where it sits on the screen: standing, its lane is wider than that and the car fills the lane; drawn back with the
+ * speed, or where no lane lines are drawn, the lane on the screen is narrower than the line and this holds the car
+ * above it. Measured across the screen at the car's own place, so a tilted view's nearer, larger ground counts.
+ */
+function carFloorM(at: LonLat): number {
+  try {
+    const p = map.project(at);
+    const a = map.unproject([p.x - 20, p.y]), b = map.unproject([p.x + 20, p.y]);
+    const mPerPx = metres(a.lng, a.lat, b.lng, b.lat) / 40;
+    return Number.isFinite(mPerPx) ? casingPx(map.getZoom()) * CAR_OVER_ROUTE * mPerPx : 0;
+  } catch {
+    return 0;
+  }
+}
 function frame() {
   const at = performance.now();
   if (frames.at && document.visibilityState === "visible") frames.longestMs = Math.max(frames.longestMs, at - frames.at);
@@ -535,6 +555,11 @@ function frame() {
       // No fixes in the tunnel to say the speed: the car's own, while it is what moves the marker.
       if (shown.reckonBy === "car") put("speed", Math.round(shown.speedMps * 3.6).toString());
       markerBearing = markerBearing == null ? shown.bearing : lerpAngle(markerBearing, shown.bearing, MARKER_TURN_SHARE);
+      // As wide as the lane it is in: a motorway's lanes are wider than a town road's, the change eased over a second
+      // or so, not a jump at the ramp.
+      const onMotorwayNow = !!route && !!routeLine && shown.alongM != null && motorwayAt(route, routeLine.place(shown.alongM).segment);
+      carLaneM += ((onMotorwayNow ? LANE_WIDTH_M.motorway : LANE_WIDTH_M.town) - carLaneM) * 0.03;
+      carLayer.sizeTo(carLaneM, carFloorM(carAt));
       carLayer.place(carAt, markerBearing);
       zoomSpeed += (shown.speedMps * 3.6 - zoomSpeed) * 0.03;
       turnInM = route ? shown.nextGuide?.inM : undefined;

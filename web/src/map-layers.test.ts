@@ -60,3 +60,11 @@ test("every map layer is one MapLibre accepts", async () => {
   });
   assert.deepEqual(errors.map((e) => e.message), []);
 });
+
+test("the route line's edge width is read off the same stops the layer draws with", async () => {
+  const { casingPx, CASING_STOPS } = await import("./route-layer");
+  for (const [z, px] of CASING_STOPS) assert.equal(casingPx(z), px);
+  assert.equal(casingPx(16.5), 13);
+  assert.equal(casingPx(9), 8);
+  assert.equal(casingPx(20), 14);
+});
