@@ -55,15 +55,29 @@ export function sessionUser(request: FastifyRequest, db: Db, settings: Settings)
   return db.session(id, epoch);
 }
 
-export function registerUsers(app: FastifyInstance, db: Db, settings: Settings, adminGuard: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>, workDir: string) {
+const isSecure = (request: FastifyRequest) => request.protocol === "https" || request.headers["x-forwarded-proto"] === "https";
+const cookie = (request: FastifyRequest, value: string, maxAge: number) =>
+  `${COOKIE}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${isSecure(request) ? "; Secure" : ""}`;
+
+/** Logs [user] in on this browser for a year: the car page's session, which /admin takes too. */
+export function issueSession(request: FastifyRequest, reply: FastifyReply, user: User & { epoch: number }, settings: Settings) {
+  const body = `${user.id}.${user.epoch}.${Date.now() + SESSION_DAYS * 86_400_000}`;
+  reply.header("Set-Cookie", cookie(request, encodeURIComponent(`${body}~${settings.sign(`user:${body}`)}`), SESSION_DAYS * 86_400));
+}
+export function endSession(request: FastifyRequest, reply: FastifyReply) {
+  reply.header("Set-Cookie", cookie(request, "", 0));
+}
+
+export function registerUsers(
+  app: FastifyInstance, db: Db, settings: Settings,
+  adminGuard: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>, workDir: string,
+  /** Anyone logged in to /admin, for what an account changes of its own. */
+  selfGuard: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown> = adminGuard,
+) {
   // Wrong logins by address and by account: a forged address does not free the account (guard.ts).
   const lockout = new Lockout(LOCK_AFTER, LOCK_MS);
-  const isSecure = (request: FastifyRequest) => request.protocol === "https" || request.headers["x-forwarded-proto"] === "https";
 
   const userOf = (request: FastifyRequest): User | null => sessionUser(request, db, settings);
-
-  const cookie = (request: FastifyRequest, value: string, maxAge: number) =>
-    `${COOKIE}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${isSecure(request) ? "; Secure" : ""}`;
 
   app.decorateRequest("user", null);
   /** Last-seen is written at most this often per user. */
@@ -99,14 +113,13 @@ export function registerUsers(app: FastifyInstance, db: Db, settings: Settings, 
       return reply.code(401).send({ error: "아이디 또는 비밀번호가 다릅니다" });
     }
     lockout.passed(keys);
-    const body = `${user.id}.${user.epoch}.${Date.now() + SESSION_DAYS * 86_400_000}`;
-    reply.header("Set-Cookie", cookie(request, encodeURIComponent(`${body}~${settings.sign(`user:${body}`)}`), SESSION_DAYS * 86_400));
+    issueSession(request, reply, user, settings);
     request.log.info({ user: user.name }, "logged in");
     return { user: { id: user.id, name: user.name } };
   });
 
   app.post("/api/logout", async (request, reply) => {
-    reply.header("Set-Cookie", cookie(request, "", 0));
+    endSession(request, reply);
     return { ok: true };
   });
 
@@ -180,6 +193,32 @@ export function registerUsers(app: FastifyInstance, db: Db, settings: Settings, 
     await appendFile(file, lines.join("\n") + "\n");
     request.log.warn({ types: reports.map((r) => r.type) }, "browser report");
     return reply.code(204).send();
+  });
+
+  // /admin: an account's own password, the old one asked first. The account's other devices log in again (the epoch
+  // moves on); this browser is given a new session at once. The built-in admin's is the page's, under 설정.
+  app.post<{ Body: { current?: unknown; password?: unknown } }>("/admin/api/me/password", { preHandler: selfGuard }, async (request, reply) => {
+    const me = userOf(request);
+    if (!me) return reply.code(400).send({ error: "관리 페이지 비밀번호는 위 설정에서 바꿉니다" });
+    const current = typeof request.body?.current === "string" ? request.body.current : "";
+    const next = typeof request.body?.password === "string" ? request.body.password : "";
+    const keys = [`ip:${clientIp(request)}`, `name:${me.name.toLowerCase()}`];
+    const wait = lockout.wait(keys);
+    if (wait) return reply.code(429).send({ error: `잠시 잠김 — ${wait}초 뒤에 다시` });
+    if (!db.check(me.name, current)) {
+      lockout.failed(keys);
+      return reply.code(401).send({ error: "지금 비밀번호가 다릅니다" });
+    }
+    lockout.passed(keys);
+    try {
+      db.setPassword(me.id, next);
+    } catch (e) {
+      return reply.code(400).send({ error: (e as Error).message });
+    }
+    const fresh = db.check(me.name, next);
+    if (fresh) issueSession(request, reply, fresh, settings);
+    request.log.info({ user: me.name }, "own password changed");
+    return { ok: true };
   });
 
   // /admin: the users.

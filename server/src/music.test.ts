@@ -21,7 +21,8 @@ async function site() {
   // The site's one TIDAL login of before, and june's Tesla.
   settings.set({ tidalRefresh: "R-old", tidalUserId: "42", tidalCountryCode: "KR", teslaOwners: JSON.stringify({ june: "T" }) });
   const app = Fastify();
-  registerMusic(app, settings, db, async () => {});
+  // On /admin as a 관리자 (admin-access.test.ts has the 사용자's side).
+  registerMusic(app, settings, db, { selfGuard: async () => {}, isAdmin: () => true, accountFor: (_r, asked) => (typeof asked === "string" ? asked.trim() : "") });
   registerUsers(app, db, settings, async () => {}, dir);
   await app.ready();
   const cookieOf = async (name: string) => {

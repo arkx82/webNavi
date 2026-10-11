@@ -258,6 +258,8 @@ button.ctl.on small { color: #000; }
 /* The zoom pair shorter than the rest: two buttons the size of the others made the column reach the dock. */
 .ctl-pair button.ctl { border-radius: 0; box-shadow: none; height: 44px; min-height: 44px; font-size: 24px; }
 .ctl-pair button.ctl + button.ctl { border-top: 1px solid var(--line); }
+.ctl-pair #zoom-lean { min-height: 0; height: 22px; padding: 0; border: 0; border-radius: 0; background: var(--accent); color: #000; font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.ctl-pair #zoom-lean[hidden] { display: none; }
 #view-ic { transition: transform 0.2s; }
 /* 현위치 in the control column, under the zoom pair: lit blue while following (pressed in), white while off the car,
    asking to be pressed. */

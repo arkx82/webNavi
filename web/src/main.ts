@@ -102,6 +102,8 @@ const SAME_ROAD_SHARE = 0.85;
 const ARRIVE_OFF_ROUTE_M = 250;
 const ARRIVE_NEAR_M = 200;
 
+/** The closest the map goes, by hand or following: the wheel and ± stop at the same place. */
+const ZOOM_MAX = 21;
 const map = openMap();
 
 /**
@@ -116,7 +118,7 @@ function openMap(): maplibregl.Map {
     // antialias: the multisampled canvas takes the stair-steps off the lines and the lanes in the tilted view; off in
     // 빠르게, where the pixels are already few.
     const m = new maplibregl.Map({
-      container: "map", style, center: loadLast() ?? HOME, zoom: 15, pitch: 45, attributionControl: false,
+      container: "map", style, center: loadLast() ?? HOME, zoom: 15, pitch: 45, attributionControl: false, maxZoom: ZOOM_MAX,
       fadeDuration: 0, renderWorldCopies: false, pitchWithRotate: false, pixelRatio: mapPixelRatio, canvasContextAttributes: { antialias: dprMode !== "fast", powerPreference: "high-performance" },
     });
     // A style that fails, or one that simply never comes (a dead link
@@ -281,8 +283,38 @@ let view: View = (() => {
   try { const v = localStorage.getItem("nav-view") as View; return v in VIEWS ? v : "3d"; } catch { return "3d"; }
 })();
 let follow = true;
-/** What a pinch or ± added to the speed's zoom while following; 현위치 clears it. */
+/**
+ * What a pinch, the wheel or ± added to the speed's zoom while following: the driver's own lean, kept by view in this
+ * browser (the car's screen and a PC's are not the same size) and taken up again next time; 현위치 keeps it, and the
+ * badge between ± shows it and puts it back to nothing.
+ */
 let zoomBias = 0;
+const LEAN_MIN = -4;
+const LEAN_MAX = 2.5;
+const LEAN_STEP = 0.5;
+const LEAN_KEY = "nav-zoom-lean";
+function loadLean(v: View): number {
+  try {
+    const x = Number((JSON.parse(localStorage.getItem(LEAN_KEY) ?? "{}") as Record<string, unknown>)[v]);
+    return Number.isFinite(x) ? Math.max(LEAN_MIN, Math.min(LEAN_MAX, x)) : 0;
+  } catch { return 0; }
+}
+/** The lean set and kept: no further in than the map goes at the speed's zoom now, so a press past it is not banked. */
+function setLean(x: number) {
+  const top = ZOOM_MAX - speedZoom();
+  zoomBias = Math.round(Math.max(LEAN_MIN, Math.min(LEAN_MAX, top, x)) * 10) / 10;
+  try {
+    const all = JSON.parse(localStorage.getItem(LEAN_KEY) ?? "{}") as Record<string, number>;
+    all[view] = zoomBias;
+    localStorage.setItem(LEAN_KEY, JSON.stringify(all));
+  } catch { /* private window: kept for this visit only */ }
+  showLean();
+}
+function showLean() {
+  const b = el("zoom-lean");
+  b.hidden = Math.abs(zoomBias) < 0.05;
+  b.textContent = `${zoomBias > 0 ? "+" : "−"}${Math.abs(zoomBias).toFixed(1)}`;
+}
 /** The speed the zoom goes by, smoothed so a jerky fix does not bob the camera. */
 let zoomSpeed = 0;
 let turnInM: number | undefined;
@@ -663,7 +695,7 @@ function followCar(at: LonLat, speedMps = 0) {
   if (layout.lanesBottom > 0) want = { x: want.x, y: Math.max(want.y, layout.lanesBottom + CAR_BELOW_CARD_PX) };
   spot = spot ? { x: approach(spot.x, want.x, k(0.08)), y: approach(spot.y, want.y, k(0.08)) } : want;
   const before = map.getCenter();
-  const zoomTo = close ? zoomToSee(Math.max(0, closeup!.inM), at[1], layout.height * (CLOSEUP_CAR_AT - 0.12)) : Math.max(10, Math.min(20, speedZoom() + zoomBias));
+  const zoomTo = Math.max(10, Math.min(ZOOM_MAX, (close ? zoomToSee(Math.max(0, closeup!.inM), at[1], layout.height * (CLOSEUP_CAR_AT - 0.12)) : speedZoom()) + zoomBias));
   const camera = {
     // Gently (a time constant of a third of a second), and never faster than CAMERA_TURN_DEG_S: the target itself
     // changes smoothly (tracker.ts cameraBearing looks 2.5 s ahead), so a small share is enough to follow it.
@@ -789,7 +821,6 @@ function carSpot(carLow = 0) {
 function setFollow(on: boolean) {
   if (on) {
     if (!follow) returning = true;
-    zoomBias = 0;
   }
   const changed = follow !== on;
   follow = on;
@@ -834,7 +865,7 @@ map.on("move", (e: Moved) => { if (e.originalEvent) touchedAt = Date.now(); });
 map.on("zoomend", (e: Moved) => { if (e.originalEvent) keepHandZoom(); });
 /** A zoom by hand while following is kept as a lean on the speed's zoom, not a fixed level. */
 function keepHandZoom() {
-  if (follow) zoomBias = Math.max(-4, Math.min(2.5, map.getZoom() - speedZoom()));
+  if (follow) setLean(map.getZoom() - (closeup ? map.getZoom() - zoomBias : speedZoom()));
 }
 // A map left alone goes back to the car, driving or not — except while
 // the route cards are up or a place is open on the 주변 sheet, when it was
@@ -851,7 +882,8 @@ function setView(next: View) {
   el("view-label").textContent = v.label;
   el("view-ic").style.transform = view === "3d" ? "perspective(40px) rotateX(28deg)" : "";
   el("view-mode").classList.toggle("on", view === "3d");
-  zoomBias = 0;
+  zoomBias = loadLean(view);
+  showLean();
   nightCity?.refresh();
   showBuildings();
   // Following, the frame eases there; off the car, the map turns on the spot.
@@ -955,10 +987,11 @@ setBase(base, false);
 el("locate").addEventListener("click", () => setFollow(true));
 for (const [id, by] of [["zoom-in", 1], ["zoom-out", -1]] as const) {
   el(id).addEventListener("click", () => {
-    if (follow) zoomBias = Math.max(-4, Math.min(2.5, zoomBias + by));
+    if (follow) setLean(zoomBias + by * LEAN_STEP);
     else { touchedAt = Date.now(); map.easeTo({ zoom: map.getZoom() + by, duration: 300 }); }
   });
 }
+el("zoom-lean").addEventListener("click", () => setLean(0));
 
 /** Where a route starts: the car, or the map's middle before the first fix. */
 function here(): LonLat {

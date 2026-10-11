@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import type { AdminAccess } from "../admin.js";
 import type { Db } from "../db.js";
 import type { Settings } from "../settings.js";
 import { FleetApi, FleetFeed, telemetryCa } from "./fleet.js";
@@ -12,13 +13,13 @@ import { FleetKey } from "./schnorr.js";
  * on /admin, either way (owner.ts or fleet.ts), and each car page given
  * its car's samples as server-sent events on /api/car/stream.
  */
-type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
 
 /** Where Tesla's Fleet login comes back to: the path registered with the app on developer.tesla.com. */
 export const FLEET_CALLBACK = "/admin/car/tesla/callback";
 export const PUBLIC_KEY_PATH = "/.well-known/appspecific/com.tesla.3p.public-key.pem";
 
-export function registerCar(app: FastifyInstance, settings: Settings, db: Db, adminGuard: Guard, configDir: string, workDir: string) {
+export function registerCar(app: FastifyInstance, settings: Settings, db: Db, access: AdminAccess, configDir: string, workDir: string) {
+  const { adminGuard, selfGuard } = access;
   const log = (m: string) => app.log.info(m);
   // Each site account's own Tesla login (owner.ts): an account sees the cars of the Tesla it linked, and none other.
   const tokens = (): Record<string, string> => { try { return JSON.parse(settings.get("teslaOwners") ?? "{}") as Record<string, string>; } catch { return {}; } };
@@ -156,7 +157,24 @@ export function registerCar(app: FastifyInstance, settings: Settings, db: Db, ad
     return reply.code(422).send({ error: (e as Error).message });
   };
 
-  app.get("/admin/car/state", { preHandler: adminGuard }, async (request) => ({
+  // A 사용자 sees their own link and cars only: none of the Fleet app, nor anyone else's.
+  app.get("/admin/car/state", { preHandler: selfGuard }, async (request) => {
+    if (!access.isAdmin(request)) {
+      const me = access.accountFor(request, "")!;
+      const mine = cars().filter((c) => c.user.toLowerCase() === me.toLowerCase());
+      const streams = hub.status();
+      return {
+        source: source(),
+        owners: [{ name: me, role: "user", linked: ownerFor(me).linked }],
+        fleet: null,
+        cars: mine,
+        users: [me],
+        streams: Object.fromEntries(mine.map((c) => [c.vin, streams[c.vin]])),
+      };
+    }
+    return adminState(request);
+  });
+  const adminState = (request: FastifyRequest) => ({
     source: source(),
     owner: { linked: Object.keys(tokens()).length > 0 },
     owners: db.users().map((u) => ({ name: u.name, role: u.role, linked: ownerFor(u.name).linked })),
@@ -174,7 +192,19 @@ export function registerCar(app: FastifyInstance, settings: Settings, db: Db, ad
     cars: cars(),
     users: db.users().map((u) => u.name),
     streams: hub.status(),
-  }));
+  });
+  /**
+   * The account an owner call is for: any a 관리자 names, a 사용자's own. A 사용자 cannot link while the site takes the
+   * cars by Fleet (the one app login, the cars given out by a 관리자): their own login would not be used.
+   */
+  const ownerTarget = (request: FastifyRequest, reply: FastifyReply, asked: unknown, what: string): string | null => {
+    const named = access.accountFor(request, asked);
+    if (named === null) { void reply.code(403).send({ error: "자기 계정만 연결할 수 있습니다" }); return null; }
+    if (!access.isAdmin(request) && source() !== "owner") { void reply.code(409).send({ error: "관리자가 Fleet Telemetry 방식으로 연결해 두었습니다 — 차는 관리자가 계정에 붙여 줍니다" }); return null; }
+    const user = accountOf(named);
+    if (!user) { void reply.code(400).send({ error: `${what} 계정을 고르세요` }); return null; }
+    return user;
+  };
 
   app.post<{ Body: { source?: string } }>("/admin/car/source", { preHandler: adminGuard }, async (request, reply) => {
     const next = request.body?.source;
@@ -185,23 +215,23 @@ export function registerCar(app: FastifyInstance, settings: Settings, db: Db, ad
   });
 
   // The owner login, for the account named: its Tesla, its cars.
-  app.post<{ Body: { user?: string } }>("/admin/car/owner/begin", { preHandler: adminGuard }, async (request, reply) => {
-    const user = accountOf(request.body?.user);
-    if (!user) return reply.code(400).send({ error: "연결할 계정을 고르세요" });
+  app.post<{ Body: { user?: string } }>("/admin/car/owner/begin", { preHandler: selfGuard }, async (request, reply) => {
+    const user = ownerTarget(request, reply, request.body?.user, "연결할");
+    if (!user) return reply;
     return { url: ownerFor(user).begin() };
   });
-  app.post<{ Body: { url?: string; user?: string } }>("/admin/car/owner/finish", { preHandler: adminGuard }, async (request, reply) => {
-    const user = accountOf(request.body?.user);
-    if (!user) return reply.code(400).send({ error: "연결할 계정을 고르세요" });
+  app.post<{ Body: { url?: string; user?: string } }>("/admin/car/owner/finish", { preHandler: selfGuard }, async (request, reply) => {
+    const user = ownerTarget(request, reply, request.body?.user, "연결할");
+    if (!user) return reply;
     try {
       await ownerFor(user).finish(String(request.body?.url ?? ""));
       if (source() !== "owner") settings.set({ teslaSource: "owner" });
       return { cars: await refreshCars(user) };
     } catch (e) { return fail(reply, e); }
   });
-  app.post<{ Body: { token?: string; user?: string } }>("/admin/car/owner/token", { preHandler: adminGuard }, async (request, reply) => {
-    const user = accountOf(request.body?.user);
-    if (!user) return reply.code(400).send({ error: "연결할 계정을 고르세요" });
+  app.post<{ Body: { token?: string; user?: string } }>("/admin/car/owner/token", { preHandler: selfGuard }, async (request, reply) => {
+    const user = ownerTarget(request, reply, request.body?.user, "연결할");
+    if (!user) return reply;
     const token = String(request.body?.token ?? "").trim();
     if (!token) return reply.code(400).send({ error: "refresh token" });
     try {
@@ -247,7 +277,15 @@ export function registerCar(app: FastifyInstance, settings: Settings, db: Db, ad
     return out;
   });
 
-  app.post<{ Body: { user?: string } }>("/admin/car/refresh", { preHandler: adminGuard }, async (request, reply) => {
+  app.post<{ Body: { user?: string } }>("/admin/car/refresh", { preHandler: selfGuard }, async (request, reply) => {
+    if (!access.isAdmin(request)) {
+      const user = ownerTarget(request, reply, request.body?.user, "받을");
+      if (!user) return reply;
+      try {
+        const me = user.toLowerCase();
+        return { cars: (await refreshCars(user)).filter((c) => c.user.toLowerCase() === me) };
+      } catch (e) { return fail(reply, e); }
+    }
     try { return { cars: await refreshCars(accountOf(request.body?.user) ?? undefined) }; } catch (e) { return fail(reply, e); }
   });
   app.post<{ Body: { vin?: string; user?: string } }>("/admin/car/user", { preHandler: adminGuard }, async (request, reply) => {
@@ -259,10 +297,14 @@ export function registerCar(app: FastifyInstance, settings: Settings, db: Db, ad
     hub.reset();
     return { cars: list };
   });
-  app.post<{ Body: { which?: string; user?: string } }>("/admin/car/unlink", { preHandler: adminGuard }, async (request, reply) => {
-    if (request.body?.which === "fleet") fleet.unlink();
-    else {
-      const user = accountOf(request.body?.user);
+  app.post<{ Body: { which?: string; user?: string } }>("/admin/car/unlink", { preHandler: selfGuard }, async (request, reply) => {
+    if (request.body?.which === "fleet") {
+      if (!access.isAdmin(request)) return reply.code(403).send({ error: "관리자만 할 수 있습니다" });
+      fleet.unlink();
+    } else {
+      const named = access.accountFor(request, request.body?.user);
+      if (named === null) return reply.code(403).send({ error: "자기 계정만 해제할 수 있습니다" });
+      const user = accountOf(named);
       if (!user) return reply.code(400).send({ error: "해제할 계정을 고르세요" });
       ownerFor(user).unlink();
       // Its cars go with it.

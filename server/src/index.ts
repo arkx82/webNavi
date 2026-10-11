@@ -33,7 +33,7 @@ import { Settings } from "./settings.js";
 import { registerAdmin } from "./admin.js";
 import { registerMusic } from "./music.js";
 import { Db } from "./db.js";
-import { registerUsers, sessionUser } from "./users.js";
+import { registerUsers } from "./users.js";
 import { RefusedUrl, fetchPublic, isApiPath, registerGuard } from "./guard.js";
 import { hdLanes, registerHdmap } from "./hdmap.js";
 import { registerShare } from "./share.js";
@@ -591,14 +591,11 @@ const admin = registerAdmin(app, settings, {
     };
   },
   prerender: () => prerender(speaker),
-}, join(root, "admin", "index.html"), (request) => {
-  const user = sessionUser(request, db, settings);
-  return user?.role === "admin" ? user.name : null;
-}, () => db.users().some((u) => u.role === "admin"));
-registerMusic(app, settings, db, admin.adminGuard);
-registerUsers(app, db, settings, admin.adminGuard, workDir);
+}, join(root, "admin", "index.html"), db);
+registerMusic(app, settings, db, admin);
+registerUsers(app, db, settings, admin.adminGuard, workDir, admin.selfGuard);
 // The car's own speed for the tunnels (car/): Tesla linked on /admin, the samples to the car page.
-const car = registerCar(app, settings, db, admin.adminGuard, configDir, workDir);
+const car = registerCar(app, settings, db, admin, configDir, workDir);
 registerGuard(app);
 // Places sent from a phone (/share): read, found again, kept a day for the account chosen.
 registerShare(app, db, search);

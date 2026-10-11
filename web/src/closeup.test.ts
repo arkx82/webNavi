@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { closeupFrom, isTricky, zoomToSee } from "./closeup";
+import { SEE_ZOOM_MAX, SEE_ZOOM_MIN, closeupFrom, isTricky, zoomToSee } from "./closeup";
+import { zoomForSpeed } from "./autozoom";
 
 const g = (text: string, name?: string) => ({ text, name });
 
@@ -19,7 +20,12 @@ test("a fork on a motorway, or a junction whose words say so, is shown close up;
 test("the camera draws back as the junction is further, within bounds", () => {
   const far = zoomToSee(500, 37.5, 600), near = zoomToSee(100, 37.5, 600);
   assert.ok(far < near, `${far} < ${near}`);
-  assert.ok(far >= 15.5 && near <= 18.3);
+  assert.ok(far >= SEE_ZOOM_MIN && near <= SEE_ZOOM_MAX);
+});
+
+test("140 m before a fork at a crawl the close-up is no further out than a level below the plain view", () => {
+  // The PC's 1430 px high map and the car's 640: the fork and 60 m past it at the foot's 72 %.
+  for (const h of [1430, 640]) assert.ok(zoomToSee(140, 37.6, h * 0.72) > zoomForSpeed(30) - 1.2, `${h}: ${zoomToSee(140, 37.6, h * 0.72)}`);
 });
 
 test("a re-route drops the junction held from the old route: its metres were measured along another line", async () => {

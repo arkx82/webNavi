@@ -38,11 +38,26 @@ export function closeupFrom(motorway: boolean): number {
  * 512 px tiles; the tilt shortens the far part, which the margin allows for.
  */
 export function zoomToSee(aheadM: number, lat: number, pixels: number): number {
-  const span = Math.max(120, aheadM + CLOSEUP_AFTER_M * 1.5);
+  const span = Math.max(SEE_MIN_M, aheadM + SEE_PAST_M);
   const metresPerPixel = span / Math.max(200, pixels);
-  const z = Math.log2((40_075_016.686 * Math.cos((lat * Math.PI) / 180)) / (512 * metresPerPixel)) + 0.6;
-  return Math.max(15.5, Math.min(18.3, z));
+  const z = Math.log2((40_075_016.686 * Math.cos((lat * Math.PI) / 180)) / (512 * metresPerPixel)) + TILT_GAIN;
+  return Math.max(SEE_ZOOM_MIN, Math.min(SEE_ZOOM_MAX, z));
 }
+/**
+ * Past the junction, enough to see which branch the line takes: it was 150 m, and with the following zoom raised a
+ * level (autozoom.ts, 2026-10-11) the close-up drew back further than the plain view, 140 m before a fork at 30 km/h.
+ */
+const SEE_PAST_M = 60;
+/**
+ * The tilt's reach, in zoom levels: at 60° with the car at 0.84 of the height and the screen's middle the camera's,
+ * the ground from the car up to 0.12 is 2.55 times the flat scale's 0.72 heights (log2 1.35); kept a little short.
+ * It was 0.6, and the fork sat well below the top.
+ */
+const TILT_GAIN = 1.1;
+const SEE_MIN_M = 80;
+/** As close as the plain view at a crawl, and never so far that the fork is a speck. */
+export const SEE_ZOOM_MIN = 16;
+export const SEE_ZOOM_MAX = 19.2;
 
 export interface Closeup { guide: Guide; inM: number; label: string }
 

@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import type { AdminAccess } from "./admin.js";
 import type { Db } from "./db.js";
 import type { Settings } from "./settings.js";
 
@@ -32,8 +33,10 @@ export function registerMusic(
   app: FastifyInstance,
   settings: Settings,
   db: Db,
-  adminOnly: (r: FastifyRequest, reply: FastifyReply) => Promise<unknown>,
+  access: Pick<AdminAccess, "selfGuard" | "isAdmin" | "accountFor">,
 ) {
+  // Each account links its own TIDAL on /admin; a 관리자 may link or unlink any (accountFor).
+  const selfOnly = access.selfGuard;
   const keyOf = (name: string) => name.trim().toLowerCase();
   const links = (): Record<string, TidalLink> => {
     migrate();
@@ -126,7 +129,7 @@ export function registerMusic(
   // ---- Device Code Flow (/admin) -------------------------------------------
 
   /** 1. Start Device Authorization Flow */
-  app.post("/admin/music/tidal/device", { preHandler: adminOnly }, async (_req, reply) => {
+  app.post("/admin/music/tidal/device", { preHandler: selfOnly }, async (_req, reply) => {
     const clientId = settings.get("tidalClientId")!;
     const body = new URLSearchParams({
       client_id: clientId,
@@ -170,9 +173,11 @@ export function registerMusic(
   /** 2. Check Device Authorization Status (polling). A POST: it binds an account, which a link must not be able to do. */
   app.post<{ Body: { deviceCode?: string; user?: string } }>(
     "/admin/music/tidal/check",
-    { preHandler: adminOnly },
+    { preHandler: selfOnly },
     async (req, reply) => {
-      const user = accountOf(req.body?.user);
+      const named = access.accountFor(req, req.body?.user);
+      if (named === null) return reply.code(403).send({ status: "error", error: "자기 계정만 연결할 수 있습니다" });
+      const user = accountOf(named);
       if (!user) return reply.code(400).send({ status: "error", error: "연결할 계정을 고르세요" });
       const deviceCode = typeof req.body?.deviceCode === "string" ? req.body.deviceCode : undefined;
       if (!deviceCode) return reply.code(400).send({ error: "deviceCode required" });
@@ -225,17 +230,22 @@ export function registerMusic(
   );
 
   /** Disconnect the account named. */
-  app.post<{ Body: { user?: string } }>("/admin/music/tidal/disconnect", { preHandler: adminOnly }, async (req, reply) => {
-    const user = accountOf(req.body?.user);
+  app.post<{ Body: { user?: string } }>("/admin/music/tidal/disconnect", { preHandler: selfOnly }, async (req, reply) => {
+    const named = access.accountFor(req, req.body?.user);
+    if (named === null) return reply.code(403).send({ error: "자기 계정만 해제할 수 있습니다" });
+    const user = accountOf(named);
     if (!user) return reply.code(400).send({ error: "해제할 계정을 고르세요" });
     setLink(user, null);
     return { ok: true };
   });
 
   /** Each account and whether its TIDAL is linked, for /admin. */
-  app.get("/admin/music/state", { preHandler: adminOnly }, async () => ({
-    tidal: db.users().map((u) => ({ name: u.name, role: u.role, connected: !!linkOf(u.name)?.refresh })),
-  }));
+  app.get("/admin/music/state", { preHandler: selfOnly }, async (req) => {
+    const me = access.isAdmin(req) ? null : access.accountFor(req, "");
+    return {
+      tidal: db.users().filter((u) => me == null || u.name === me).map((u) => ({ name: u.name, role: u.role, connected: !!linkOf(u.name)?.refresh })),
+    };
+  });
 
   // ---- Player & Music APIs (/api/music/tidal/*) ------------------------------
 
