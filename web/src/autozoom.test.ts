@@ -11,7 +11,7 @@ test("the camera pulls back as the car speeds up, and no further than the table"
   }
   assert.equal(zoomForSpeed(-5), zoomForSpeed(0));
   assert.equal(zoomForSpeed(200), zoomForSpeed(130));
-  assert.ok(Math.abs(zoomForSpeed(50) - (17.9 + 17.4) / 2) < 1e-9);
+  assert.ok(Math.abs(zoomForSpeed(45) - (19.0 + 18.4) / 2) < 1e-9);
 });
 
 test("a turn close ahead draws the camera in, a far one not at all", () => {

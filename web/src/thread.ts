@@ -441,7 +441,20 @@ export function biasTurns(route: Route, line = new Line(route.path)): BiasTurn[]
   }
   return turns.sort((a, b) => a.alongM - b.alongM);
 }
-/** Each vertex of [line]'s side (the next turn's within its reach, else 0) and road (how many turns are behind it). */
+/**
+ * Out of a turn the line is in the lane the turn comes out in — the nearest on its side, the rightmost after a right
+ * turn — for this far, before it moves over to the next turn's (RAMP_M). A right turn 163 m before a left one came out
+ * straight into 1차로 of three, the corner bent into a hook (the pretend drive of 2026-10-11 at 노원구민체육센터앞):
+ * the left turn's side reached back over the corner, and the change of road started no ramp.
+ */
+export const EXIT_M = 30;
+/** Before the next turn the line is to be over in its lane by at least this, whatever is left between the two. */
+const SETTLE_M = 20;
+/**
+ * Each vertex of [line]'s side and road (how many turns are behind it): just out of a turn its exit lane's side
+ * (EXIT_M, shorter where the next turn is near, so the move to its lane still fits), then the next turn's within its
+ * reach, else 0.
+ */
 export function sidesAlong(line: Line, turns: BiasTurn[]): Required<SnapSides> {
   const n = line.path.length;
   const biases = new Array<number>(n).fill(0), pieces = new Array<number>(n).fill(0);
@@ -450,6 +463,12 @@ export function sidesAlong(line: Line, turns: BiasTurn[]): Required<SnapSides> {
     // The guide's own vertex (projected onto itself, give or take a rounding) is the road in's.
     pieces[i] = turns.filter((t) => t.alongM + 0.5 < along).length;
     const t = turns.find((t) => t.alongM - along >= -0.5 && t.alongM - along <= t.reach);
+    const prev = [...turns].reverse().find((p) => p.alongM + 0.5 < along);
+    if (prev) {
+      const gap = t ? t.alongM - prev.alongM : Infinity;
+      const exit = Math.max(0, Math.min(EXIT_M, gap - RAMP_M - SETTLE_M));
+      if (along - prev.alongM <= exit + 0.5) { biases[i] = prev.bias; continue; }
+    }
     if (t) biases[i] = t.bias;
   }
   return { biases, pieces };
@@ -520,7 +539,8 @@ export async function snapRouteWith(route: Route, snap: Snapper): Promise<Route>
     const turns = biasTurns(route);
     const fixed0: boolean[] = [];
     for (const [a, b] of route.threaded ?? []) for (let i = a; i < b; i++) fixed0[i] = true;
-    const dense = densify(route.path, turns.map((t) => [t.alongM - t.reach - DENSE_M, t.alongM] as [number, number]), fixed0);
+    // Dense before each turn (its lane's reach) and just after it (the exit lane and the move on to the next one's).
+    const dense = densify(route.path, turns.flatMap((t) => [[t.alongM - t.reach - DENSE_M, t.alongM], [t.alongM, t.alongM + EXIT_M + RAMP_M + DENSE_M]] as [number, number][]), fixed0);
     const move = (i: number) => dense.map[Math.min(i, n0)];
     const threaded = (route.threaded ?? []).map(([a, b]) => [move(a), move(b)] as [number, number]);
     const fixed: boolean[] = [];

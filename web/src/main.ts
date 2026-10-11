@@ -1677,6 +1677,7 @@ function endDrive() {
   closeup = null;
   backoff.reset();
   el("turn-icon").replaceChildren();
+  showTurnBar(Infinity, 1);
   drawn.clear();
   drawRecents();
   showScreen("search");
@@ -1893,7 +1894,8 @@ function arriveHere() {
     const thisDrive = route;
     setTimeout(() => { if (route && route === thisDrive && arrived) endDrive(); }, END_AFTER_ARRIVE_MS);
   }
-  putHtml("turn-icon", arrowSvg("arrive"));
+  putHtml("turn-icon", arrowSvg("arrive", TURN_ARROW_PX));
+  showTurnBar(Infinity, 1);
   put("turn-in", "도착");
   put("turn-text", drivingTo?.name ?? "");
   el("then").hidden = true;
@@ -1916,6 +1918,47 @@ function putHtml(id: string, html: string) {
   el(id).innerHTML = html;
 }
 
+/** The turn's arrow, px: read at a glance (the card's own box is 84). */
+const TURN_ARROW_PX = 78;
+/** The bar under the turn drains over the last this much: 300 m in town, a kilometre on a motorway. */
+const TURN_BAR_TOWN_M = 300;
+const TURN_BAR_MOTORWAY_M = 1000;
+/** Last share drawn, so the bar is touched only when it moved visibly. */
+let turnBarShare = -1;
+function showTurnBar(inM: number, overM: number) {
+  const bar = el("turn-bar");
+  const share = inM > overM ? -1 : Math.round(Math.max(0, inM / overM) * 200) / 200;
+  if (share === turnBarShare) return;
+  turnBarShare = share;
+  bar.hidden = share < 0;
+  if (share >= 0) (bar.firstElementChild as HTMLElement).style.transform = `scaleX(${share})`;
+}
+/** The turn after is shown under this one from this far behind it: 800 m in town, 2 km on a motorway. */
+const THEN_TOWN_M = 800;
+const THEN_MOTORWAY_M = 2000;
+/** Closer than this behind the turn it is "바로 이어서", with the side to move to: as close as the voice tells it too. */
+const THEN_SOON_TOWN_M = 300;
+const THEN_SOON_MOTORWAY_M = 500;
+function showThen(nextInM: number, then: Shown["thenGuide"]) {
+  const box = el("then");
+  const fast = then ? onMotorway.get(then.guide) ?? false : false;
+  const gap = then ? then.inM - nextInM : Infinity;
+  if (!then || gap >= (fast ? THEN_MOTORWAY_M : THEN_TOWN_M)) {
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+  const m = maneuverFor(then.guide);
+  const soon = gap < (fast ? THEN_SOON_MOTORWAY_M : THEN_SOON_TOWN_M) && hasTurnCard(m);
+  box.classList.toggle("soon", soon);
+  put("then-label", soon ? "바로 이어서" : "그 다음");
+  putHtml("then-icon", arrowSvg(m, 32));
+  put("then-text", `${km(gap)} 후 ${shortOf(then.guide)}`);
+  const side = soon ? sideOf(m) : null;
+  el("then-side").hidden = !side;
+  put("then-side", side ?? "");
+}
+
 function showTurn(shown: Shown) {
   if (!route) return;
   if (shown.remainingM != null && shown.remainingS != null) {
@@ -1928,16 +1971,11 @@ function showTurn(shown: Shown) {
   }
   const g = shown.nextGuide.guide;
   const m = maneuverFor(g);
-  putHtml("turn-icon", arrowSvg(m));
+  putHtml("turn-icon", arrowSvg(m, TURN_ARROW_PX));
   put("turn-in", km(shown.nextGuide.inM));
   put("turn-text", shortOf(g));
-  if (shown.thenGuide && shown.thenGuide.inM - shown.nextGuide.inM < 800) {
-    el("then").hidden = false;
-    putHtml("then-icon", arrowSvg(maneuverFor(shown.thenGuide.guide), 20));
-    put("then-text", `${km(shown.thenGuide.inM - shown.nextGuide.inM)} 후 ${shortOf(shown.thenGuide.guide)}`);
-  } else {
-    el("then").hidden = true;
-  }
+  showTurnBar(shown.nextGuide.inM, (onMotorway.get(g) ?? false) ? TURN_BAR_MOTORWAY_M : TURN_BAR_TOWN_M);
+  showThen(shown.nextGuide.inM, shown.thenGuide);
   const key = junction(g.at);
   const said = turnsSaid.get(key) ?? new Set<number>();
   turnsSaid.set(key, said);
@@ -2088,6 +2126,9 @@ const hasTurnCard = (m: Maneuver) => m !== "straight" && m !== "arrive" && m !==
 /** The turn just passed, kept on the card until the car is through the junction (TURN_HELD_M past it). */
 let heldTurn: { guide: Guide; alongM: number } | null = null;
 const TURN_HELD_M = 40;
+/** Held only this far when another turn comes within TURN_HELD_NEXT_M: its lanes are the ones to get into now. */
+const TURN_HELD_SOON_M = 20;
+const TURN_HELD_NEXT_M = 300;
 /** The next guide as last seen, and where it lies along the route: when it gives way to the one after, it is held. */
 let lastNext: { guide: Guide; alongM: number } | null = null;
 function showLanes(shown: Shown) {
@@ -2100,7 +2141,9 @@ function showLanes(shown: Shown) {
     && hasTurnCard(maneuverFor(lastNext.guide))) heldTurn = lastNext;
   lastNext = next && shown.alongM != null ? { guide: next.guide, alongM: shown.alongM + next.inM } : null;
   // Through the junction the card stays: the guide just passed is still the one to show until 40 m on.
-  if (heldTurn && shown.alongM != null && route && shown.alongM - heldTurn.alongM < TURN_HELD_M && route.guides.includes(heldTurn.guide)) {
+  // With the next turn close behind (the route line moves over to its lane straight after this one), let go sooner.
+  const heldFor = next && hasTurnCard(maneuverFor(next.guide)) && next.inM < TURN_HELD_NEXT_M ? TURN_HELD_SOON_M : TURN_HELD_M;
+  if (heldTurn && shown.alongM != null && route && shown.alongM - heldTurn.alongM < heldFor && route.guides.includes(heldTurn.guide)) {
     next = { guide: heldTurn.guide, inM: heldTurn.alongM - shown.alongM };
   } else heldTurn = null;
   const m = next && route ? maneuverFor(next.guide) : null;

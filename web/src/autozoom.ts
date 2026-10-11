@@ -5,10 +5,12 @@
  * as a turn comes up, so the junction is big when it matters.
  *
  * Zooms are MapLibre's (512 px tiles): 18 is about 0.24 m a pixel here,
- * 16.5 about 0.67.
+ * 16.5 about 0.67. Close enough that the lanes read in town (the car's
+ * screen looks further down the road than a phone's); the road beyond
+ * the screen is the banner's to tell — the next turn and the one after.
  */
 const BY_SPEED: [kmh: number, zoom: number][] = [
-  [0, 18.4], [20, 18.3], [40, 17.9], [60, 17.4], [80, 17.0], [100, 16.6], [130, 16.2],
+  [0, 19.2], [30, 19.0], [60, 18.4], [80, 18.0], [100, 17.6], [130, 17.2],
 ];
 /** From this far out a turn starts drawing the camera in, up to TURN_ZOOM at the junction. */
 export const TURN_M = 300;

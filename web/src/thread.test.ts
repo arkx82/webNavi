@@ -220,6 +220,26 @@ test("a route's line before a right turn is snapped onto the right lane from 300
     if (y(p) < 230) assert.ok(Math.abs(x(p) - 1.75) < 0.6, `the through lane before: ${y(p)} ${x(p)}`);
   }
   assert.ok(asked.some((b) => b === 1) && asked[0] === 0);
-  assert.equal(moved.segments[0].to, moved.path.length - 2, "the corner's vertex moved on with the points put in before it");
+  // The corner's vertex moved on with the points put in before it (and points are put in after it too, for the exit lane).
+  assert.equal(moved.segments[0].to, moved.path.findIndex((p) => y(p) >= 599), "the corner's vertex moved on with the points put in before it");
   assert.equal(moved.segments[1].to, moved.path.length);
+});
+
+test("out of a right turn the line is in the rightmost lane for a while, then moves over to the next turn's; turns close together still leave room to move", async () => {
+  const { sidesAlong, EXIT_M } = await import("./thread");
+  const { Line, offset } = await import("./geo");
+  const start: [number, number] = [127.07, 37.65];
+  const line = new Line(Array.from({ length: 61 }, (_, i) => offset(start, 0, i * 10)));
+  // A right turn at 100 m, a left one at 263 m (163 m on, as at 노원구민체육센터앞).
+  const sides = sidesAlong(line, [{ alongM: 100, bias: 1, reach: 340 }, { alongM: 263, bias: -1, reach: 340 }]);
+  const at = (m: number) => sides.biases[Math.round(m / 10)];
+  assert.equal(at(90), 1, "before the right turn: its side");
+  assert.equal(at(110), 1, "just out of it: still the rightmost");
+  assert.equal(at(100 + EXIT_M - 10), 1);
+  assert.equal(at(100 + EXIT_M + 10), -1, "then the left turn's side");
+  assert.equal(at(260), -1);
+  // Turns 70 m apart: the exit lane shortened so the move still fits before the next.
+  const close = sidesAlong(line, [{ alongM: 100, bias: 1, reach: 340 }, { alongM: 170, bias: -1, reach: 340 }]);
+  assert.equal(close.biases[11], 1, "10 m out: the exit lane");
+  assert.equal(close.biases[12], -1, "20 m out: the next turn's, leaving 40 m to move and 20 to settle");
 });

@@ -115,10 +115,13 @@
             <div id="turn-in"></div>
             <div id="turn-text"></div>
           </div>
+          <!-- What is left to the turn, draining as it comes (the last 300 m in town, a kilometre on a motorway). -->
+          <div id="turn-bar" hidden><i></i></div>
         </div>
+        <!-- The turn after, close behind: hung under the turn's card. -->
+        <div id="then" hidden><span id="then-icon"></span><div class="then-words"><div class="then-top"><span class="then-label" id="then-label">그 다음</span><b id="then-side" hidden></b></div><span id="then-text"></span></div></div>
         <!-- The next traffic light on the route, and the time to it at this speed. -->
         <div id="next-light" hidden><span class="light-ic" aria-hidden="true"><i></i><i></i><i></i></span><span class="nl-words"><span>다음 신호등 <b id="next-light-in"></b></span><small id="next-light-sub"></small></span></div>
-        <div id="then" hidden><span class="then-label">다음</span><span id="then-icon"></span><span id="then-text"></span></div>
         <div id="eta">
           <div><b id="eta-time">--:--</b><small> 도착</small></div>
           <div id="eta-left"></div>
