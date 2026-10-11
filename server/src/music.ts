@@ -73,19 +73,25 @@ export function registerMusic(
   const cached = new Map<string, { token: string; until: number }>();
   /** One refresh at a time an account: two at once would each rotate the refresh token, and the later to finish keep a dead one. */
   const refreshing = new Map<string, Promise<Token>>();
+  /** When each account's player last asked for its TIDAL, and the last refresh that failed: for /admin, since this start. */
+  const usedAt = new Map<string, number>();
+  const failed = new Map<string, { message: string; at: number }>();
 
   const getValidToken = async (user: string | undefined): Promise<Token> => {
     if (!user) throw new Error("login");
     const key = keyOf(user);
     const link = linkOf(user);
     if (!link?.refresh) throw new Error("TIDAL not connected");
+    usedAt.set(key, Date.now());
     const had = cached.get(key);
     if (had && had.until > Date.now()) {
       return { token: had.token, expiresIn: Math.floor((had.until - Date.now()) / 1000), userId: link.userId, countryCode: link.countryCode };
     }
     let p = refreshing.get(key);
     if (!p) {
-      p = refreshToken(user, link).finally(() => refreshing.delete(key));
+      p = refreshToken(user, link)
+        .then((t) => { failed.delete(key); return t; }, (e: unknown) => { failed.set(key, { message: (e as Error).message, at: Date.now() }); throw e; })
+        .finally(() => refreshing.delete(key));
       refreshing.set(key, p);
     }
     return p;
@@ -240,11 +246,27 @@ export function registerMusic(
   });
 
   /** Each account and whether its TIDAL is linked, for /admin. */
+  /** An account's TIDAL as /admin shows it: linked or not, its country, when its player last used it, a refresh that failed. */
+  const accountState = (name: string, role: string) => {
+    const link = linkOf(name);
+    const used = usedAt.get(keyOf(name));
+    const fail = failed.get(keyOf(name));
+    return {
+      name, role, connected: !!link?.refresh, countryCode: link?.countryCode ?? null,
+      usedAgoS: used ? Math.round((Date.now() - used) / 1000) : null,
+      error: fail?.message ?? null,
+    };
+  };
+  const ago = (s: number) => (s < 60 ? `${s}초 전` : s < 3600 ? `${Math.round(s / 60)}분 전` : s < 86_400 ? `${Math.round(s / 3600)}시간 전` : `${Math.round(s / 86_400)}일 전`);
+  /** A line an account, as the 상태 table and the 음악 계정 section show it. */
+  const lineOf = (a: ReturnType<typeof accountState>) =>
+    !a.connected ? `${a.name} — 연결 안 됨 (차 화면에 음악 버튼 없음)`
+      : `${a.name} — TIDAL 연결됨 (${a.countryCode ?? "?"}) · ${a.usedAgoS != null ? `마지막 사용 ${ago(a.usedAgoS)}` : "서버 시작 뒤 아직 안 씀"}${a.error ? ` · 토큰 갱신 실패: ${a.error}` : ""}`;
+
   app.get("/admin/music/state", { preHandler: selfOnly }, async (req) => {
     const me = access.isAdmin(req) ? null : access.accountFor(req, "");
-    return {
-      tidal: db.users().filter((u) => me == null || u.name === me).map((u) => ({ name: u.name, role: u.role, connected: !!linkOf(u.name)?.refresh })),
-    };
+    const tidal = db.users().filter((u) => me == null || u.name === me).map((u) => accountState(u.name, u.role));
+    return { tidal: tidal.map((a) => ({ ...a, line: lineOf(a) })) };
   });
 
   // ---- Player & Music APIs (/api/music/tidal/*) ------------------------------
@@ -442,4 +464,12 @@ export function registerMusic(
   app.get("/api/music/state", async (req) => ({
     tidal: { configured: true, connected: !!(req.user && linkOf(req.user.name)?.refresh) },
   }));
+
+  return {
+    /** /admin's 상태 row: a line an account. */
+    status(): string {
+      const lines = db.users().map((u) => lineOf(accountState(u.name, u.role)));
+      return lines.length ? lines.join("\n") : "계정 없음";
+    },
+  };
 }

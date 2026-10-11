@@ -568,6 +568,7 @@ const admin = registerAdmin(app, settings, {
     "멘트 기록": (() => { const t = db.ttsStats(); return `${t.sentences}문장 · 재사용 ${Math.max(0, t.uses - t.sentences)}회 · ${(t.bytes / 1e6).toFixed(1)} MB`; })(),
     사용자: db.users().length,
     차량: car.status(),
+    "음악 (TIDAL)": music.status(),
   }),
   test: async () => {
     const start: LonLat = [127.0276, 37.4979], goal: LonLat = [127.0363, 37.5006];
@@ -592,7 +593,7 @@ const admin = registerAdmin(app, settings, {
   },
   prerender: () => prerender(speaker),
 }, join(root, "admin", "index.html"), db);
-registerMusic(app, settings, db, admin);
+const music = registerMusic(app, settings, db, admin);
 registerUsers(app, db, settings, admin.adminGuard, workDir, admin.selfGuard);
 // The car's own speed for the tunnels (car/): Tesla linked on /admin, the samples to the car page.
 const car = registerCar(app, settings, db, admin, configDir, workDir);

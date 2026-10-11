@@ -92,12 +92,13 @@
         <p class="hint">TIDAL 계정은 <b>이 사이트의 계정마다</b> 따로 연결합니다. 연결한 계정만 차 화면에 음악 버튼이 나오고, 그 계정의 재생목록·좋아요만 봅니다.</p>
         <p class="hint user-only"><b>TIDAL 연결</b>을 누르면 5자리 코드가 나옵니다. 폰이나 PC에서 <code>link.tidal.com</code> 에 들어가 그 코드를 넣으면 연결됩니다.</p>
         <label class="admin-only">연결할 계정 <select id="tidal-user" style="min-height:36px;background:#111;color:var(--ink);border:1px solid #2c2c31;border-radius:6px"></select></label>
-        <p class="hint admin-only" id="tidal-owners"></p>
+        <p class="hint admin-only" id="tidal-owners" style="white-space:pre-line"></p>
         <div class="row">
           <button type="button" class="primary" id="btn-tidal-connect">TIDAL 연결 (link.tidal.com)</button>
           <button type="button" id="btn-tidal-disconnect">해제</button>
           <span class="hint" id="state-tidal"></span>
         </div>
+        <p class="hint user-only" id="tidal-mine"></p>
         <div id="tidal-box" style="margin-top: 14px; padding: 14px; background: #1f1f23; border: 1px solid var(--accent); border-radius: 8px;" hidden>
           <div style="font-weight: 500; margin-bottom: 6px;">스마트폰 또는 브라우저에서 아래 링크를 열어 코드를 승인하세요:</div>
           <div style="font-size: 16px; margin: 8px 0;"><a id="tidal-link" href="#" target="_blank" style="color: var(--accent); text-decoration: underline;">link.tidal.com</a></div>
@@ -337,8 +338,10 @@ function showTidal(owners) {
   const mine = owners.find((o) => o.name === pick.value);
   $("state-tidal").textContent = mine?.connected ? `${mine.name}: 연결됨` : `${pick.value || "계정"}: 미연결`;
   $("state-tidal").className = "hint" + (mine?.connected ? " saved" : "");
-  const linked = owners.filter((o) => o.connected).map((o) => o.name);
-  $("tidal-owners").textContent = linked.length ? `TIDAL 연결된 계정: ${linked.join(", ")}` : "TIDAL 연결된 계정 없음";
+  // A line an account (music.ts lineOf): linked, its country, when its player last used it, a refresh that failed.
+  $("tidal-owners").textContent = owners.map((o) => o.line).join("\n");
+  // A 사용자 sees their own line under the buttons.
+  $("tidal-mine").textContent = !me.admin && mine ? mine.line : "";
 }
 $("tidal-user").onchange = () => showTidal(tidalOwners);
 

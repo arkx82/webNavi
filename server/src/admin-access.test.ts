@@ -83,6 +83,10 @@ test("a 관리자 still acts for any account", async () => {
   const { login, call } = await site();
   const june = await login("june", "secret1");
   assert.deepEqual((await call(june.cookie, "GET", "/admin/music/state")).json().tidal.map((o: { name: string }) => o.name).sort(), ["june", "test"]);
+  // A line an account, as the page shows it.
+  const lines = (await call(june.cookie, "GET", "/admin/music/state")).json().tidal.map((o: { line: string }) => o.line);
+  assert.deepEqual(lines, ["june — TIDAL 연결됨 (KR) · 서버 시작 뒤 아직 안 씀", "test — TIDAL 연결됨 (KR) · 서버 시작 뒤 아직 안 씀"]);
   assert.equal((await call(june.cookie, "POST", "/admin/music/tidal/disconnect", { user: "test" })).statusCode, 200);
+  assert.equal((await call(june.cookie, "GET", "/admin/music/state")).json().tidal[1].line, "test — 연결 안 됨 (차 화면에 음악 버튼 없음)");
   assert.equal((await call(june.cookie, "GET", "/admin/api/users")).statusCode, 200);
 });
