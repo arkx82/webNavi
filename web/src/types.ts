@@ -30,7 +30,14 @@ export interface Route {
   motorways?: [number, number][];
   /** Index ranges into [path] taken from 정밀도로지도's lanes (web/src/thread.ts): already on a lane, not to be snapped. */
   threaded?: [number, number][];
+  /** The tolls on the way, won, where the provider says. */
+  tollWon?: number;
+  /** What was asked to be avoided that its provider could not (NAVER: school zones; our OSRM: both). */
+  ignored?: Avoid[];
 }
+
+/** What a route can be asked to keep off: toll roads (무료도로 우선) and school zones (어린이 보호구역 회피). */
+export type Avoid = "toll" | "school";
 
 export interface Place {
   name: string;

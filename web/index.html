@@ -92,6 +92,11 @@
           <button id="save-work" type="button">회사로 설정</button>
           <button id="save-fav" type="button">즐겨찾기에 추가</button>
         </div>
+        <!-- The ways' options: 무료도로 우선 for this trip, and 어린이 보호구역 회피 shown when it is on in 안내 설정. -->
+        <div class="route-opts">
+          <button id="opt-toll" class="route-chip" type="button" aria-pressed="false">무료도로 우선</button>
+          <span id="opt-school" class="route-chip on static" hidden>보호구역 회피 중</span>
+        </div>
         <ul id="offers"></ul>
         <div class="hint" id="pv-msg"></div>
         <!-- First the place on the map, to see it is the right one; then the ways there. -->

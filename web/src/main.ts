@@ -1,5 +1,5 @@
 import maplibregl from "maplibre-gl";
-import { api, setHeading } from "./api";
+import { api, setAvoiding, setHeading } from "./api";
 import { Gps, type Fix } from "./gps";
 import { chime, keepAwake } from "./probes";
 import { Replay } from "./replay";
@@ -45,7 +45,7 @@ import { OVERLAY_STYLE, TmapBase, tmapAvailable } from "./tmap-base";
 import { NightCity } from "./night-city";
 import { CHECK, X } from "./icons";
 import { snapRoute } from "./thread";
-import type { Guide, Health, LonLat, Place, Provider, Route } from "./types";
+import type { Avoid, Guide, Health, LonLat, Place, Provider, Route } from "./types";
 
 // The ground: TMAP's or NAVER's own vector map when the server has their
 // keys (Korean roads as they know them: tmap-base.ts, naver-base.ts), else
@@ -1337,10 +1337,10 @@ async function fetchOffers(): Promise<boolean> {
     if (goal !== to) return false;
     for (const e of answer.errors) log(`경로 실패 ${e}`);
     if (answer.routes.length === 0) throw new Error(answer.errors.join("; ") || "경로 없음");
-    offers = answer.routes.filter((r) => OWN_ROUTE || r.provider !== "korea").sort((a, b) => a.durationS - b.durationS);
+    offers = byOptions(answer.routes.filter((r) => OWN_ROUTE || r.provider !== "korea"));
     if (offers.length === 0) throw new Error(answer.errors.join("; ") || "경로 없음");
-    // Keep the driven provider if it answered again, else the quickest.
-    chosen = offers.find((r) => r.provider === (chosen ?? route)?.provider) ?? offers[0];
+    // Keep the driven provider if it answered again and keeps to the options, else the quickest that does.
+    chosen = offers.find((r) => r.provider === (chosen ?? route)?.provider && keeps(r)) ?? offers[0];
     // Without a fix the ways start from the map's middle, and say so.
     el("pv-msg").textContent = gps.last ? "" : "현위치를 모릅니다 — 지도 가운데에서 출발하는 경로입니다";
     drawOffers();
@@ -1353,7 +1353,10 @@ async function fetchOffers(): Promise<boolean> {
     if (OWN_ROUTE && answer.pending?.includes("korea")) koreaLater(goal);
     return true;
   } catch (e) {
-    el("pv-msg").textContent = `경로 실패: ${(e as Error).message}`;
+    // A provider's own words ("osrm: fetch failed") are for the 진단 log, not the driver: a way that did not come is not
+    // shown at all, and when none came the sheet says so plainly — keeping the ways it had, if it had some.
+    log(`경로 없음 ${(e as Error).message}`);
+    el("pv-msg").textContent = offers.length ? "경로를 다시 찾지 못했습니다 — 이전 경로입니다" : "경로를 찾지 못했습니다. 잠시 후 다시 시도해 주세요";
     return false;
   }
 }
@@ -1380,18 +1383,52 @@ function koreaLater(to: Place) {
   }, KOREA_LATER_MS);
 }
 
+/** What a card says where its provider could not keep to an option asked. */
+const IGNORED_WORDS: Record<Avoid, string> = { toll: "유료도로 포함", school: "보호구역 포함" };
+
+/** 무료도로 우선, for the trip: chosen on the route sheet, kept for the next trip until changed. */
+let avoidToll = (() => { try { return localStorage.getItem("avoidToll") === "1"; } catch { return false; } })();
+setAvoiding(() => [...(avoidToll ? ["toll" as const] : []), ...(guide.avoidSchool ? ["school" as const] : [])]);
+/** Whether [r] kept to every option asked (its provider could; NAVER cannot keep off school zones, our OSRM neither). */
+const keeps = (r: Route) => !r.ignored?.length;
+/** The ways in the order offered: those that keep to the options first, each lot quickest first. */
+function byOptions(routes: Route[]): Route[] {
+  return [...routes].sort((a, b) => Number(keeps(b)) - Number(keeps(a)) || a.durationS - b.durationS);
+}
+/** The route sheet's option chips as the options are. */
+function drawRouteOptions() {
+  el("opt-toll").setAttribute("aria-pressed", String(avoidToll));
+  el("opt-school").hidden = !guide.avoidSchool;
+}
+el("opt-toll").addEventListener("click", () => {
+  avoidToll = !avoidToll;
+  try { localStorage.setItem("avoidToll", avoidToll ? "1" : "0"); } catch { /* the choice holds for this page */ }
+  drawRouteOptions();
+  log(`무료도로 우선 ${avoidToll ? "켬" : "끔"}`);
+  // The ways on the sheet were asked without it: asked again.
+  if (goal && !el("s-preview").hidden && !el("go-row").hidden) {
+    el("pv-msg").textContent = "경로 찾는 중…";
+    void fetchOffers();
+  }
+});
+
 function drawOffers() {
+  drawRouteOptions();
   const ul = el<HTMLUListElement>("offers");
   ul.replaceChildren();
-  const quickest = offers[0];
-  const shortest = [...offers].sort((a, b) => a.distanceM - b.distanceM)[0];
+  // The tags among the ways that keep to the options: one that ignores them is no 가장 빠름 to choose by.
+  const kept = offers.filter(keeps);
+  const quickest = [...kept].sort((a, b) => a.durationS - b.durationS)[0];
+  const shortest = [...kept].sort((a, b) => a.distanceM - b.distanceM)[0];
   for (const r of offers) {
     const li = document.createElement("li");
     li.className = "offer" + (r === chosen ? " on" : "");
     const tag = r === quickest ? `<span class="tag">가장 빠름</span>` : r === shortest ? `<span class="tag alt">최단 거리</span>` : "";
     li.innerHTML =
       `<div class="l1"><b>${minutes(r.durationS)}</b><span>${arrivalAt(r.durationS)} 도착</span>${tag}</div>` +
-      `<div class="l2">${km(r.distanceM)} · ${NAMES[r.provider]}${r.segments.some((s) => s.congestion > 0) ? "" : " (교통 정보 없음)"}</div>` +
+      `<div class="l2">${km(r.distanceM)} · ${NAMES[r.provider]}${r.segments.some((s) => s.congestion > 0) ? "" : " (교통 정보 없음)"}` +
+      (r.tollWon != null ? ` · <span class="toll">통행료 ${r.tollWon.toLocaleString("ko-KR")}원</span>` : "") +
+      (r.ignored?.length ? ` · <span class="ignored">${r.ignored.map((a) => IGNORED_WORDS[a]).join(" · ")}</span>` : "") + `</div>` +
       `<div class="bar">${trafficBar(r)}</div>`;
     li.addEventListener("click", () => {
       chosen = r;
@@ -1564,7 +1601,7 @@ async function resumeDrive() {
     next = await api.route(s.provider, here(), s.to.at);
   } catch {
     const answer = await api.routes(here(), s.to.at).catch(() => null);
-    next = answer?.routes.filter((r) => OWN_ROUTE || r.provider !== "korea").sort((a, b) => a.durationS - b.durationS)[0] ?? null;
+    next = byOptions(answer?.routes.filter((r) => OWN_ROUTE || r.provider !== "korea") ?? [])[0] ?? null;
   }
   if (!next || route) return;
   goal = s.to;
@@ -1711,7 +1748,8 @@ async function recheckRoute() {
     // The same road asked again is not another way; the same provider gone another way is.
     // Our own (자체) route is not offered: its time is the limit's wherever ITS has no speed, and on 2026-10-03 it
     // read 1시간 41분 against 카카오's 1시간 58분 — taken, it led round U-turns and off the road five times.
-    const best = answer.routes.filter((r) => !(kept.same && r === fresh) && r.provider !== "korea").sort((a, b) => a.durationS - b.durationS)[0];
+    // Only ways that keep to the options asked: NAVER's quicker way through the school zones is no quicker way to take.
+    const best = answer.routes.filter((r) => !(kept.same && r === fresh) && r.provider !== "korea" && keeps(r)).sort((a, b) => a.durationS - b.durationS)[0];
     // Quicker by enough — and, after a "그대로", by enough more than the way declined.
     if (best && best.durationS < now - BETTER_BY_S && best.durationS < (declinedS == null ? Infinity : declinedS - (Date.now() - declinedAt) / 1000) - BETTER_BY_S) {
       offers = answer.routes;
@@ -1771,8 +1809,8 @@ tracker.onOffRoute = async (at) => {
     } catch (e) {
       log(`재탐색 ${route.provider} 실패 ${(e as Error).message} — 전체로`);
       const answer = await api.routes(at, to.at);
-      const again = answer.routes.filter((r) => OWN_ROUTE || r.provider !== "korea").sort((a, b) => a.durationS - b.durationS);
-      next = again.find((r) => r.provider === route!.provider) ?? again[0] ?? null;
+      const again = byOptions(answer.routes.filter((r) => OWN_ROUTE || r.provider !== "korea"));
+      next = again.find((r) => r.provider === route!.provider && keeps(r)) ?? again[0] ?? null;
       if (next) offers = again;
     }
     // The drive may have ended, gone elsewhere, or been given a quicker route (recheckRoute) while the answer came.
@@ -2846,7 +2884,15 @@ function themed(day: boolean) {
   hdLayer?.setDay(day);
   nightCity?.setNight(!day);
 }
+/** 어린이 보호구역 회피 as last applied: a change asks the route sheet's ways again. */
+let avoidSchoolWas: boolean | null = null;
 function applyGuide() {
+  if (avoidSchoolWas != null && avoidSchoolWas !== guide.avoidSchool) {
+    log(`어린이 보호구역 회피 ${guide.avoidSchool ? "켬" : "끔"}`);
+    drawRouteOptions();
+    if (goal && !el("s-preview").hidden && !el("go-row").hidden) void fetchOffers();
+  }
+  avoidSchoolWas = guide.avoidSchool;
   carLayer.set(guide.carIcon === "photo" && !carPhoto ? "tesla" : guide.carIcon ?? "tesla", guide.carPaint ?? PAINTS[0][0]);
   // 차량 데이터 turned off here: the stream let go and what it had forgotten (a stale "P" would hold the marker).
   if (!carDataOn()) { if (carLink.state !== "off") carLink.stop(); carLink.track.clear(); }
@@ -3529,6 +3575,9 @@ if (demo) map.once("load", async () => {
       { at: path[q(0.33)], text: "테헤란로 방면 우회전", distanceM: 1300, turnType: 12 },
       { at: path[q(0.75)], text: "선릉로 방면 좌회전", distanceM: 1600, turnType: 13 },
     ],
+    // A toll on NAVER's, and its school zones not kept off when asked, as the real ones come.
+    tollWon: provider === "naver" ? 1100 : 0,
+    ...(provider === "naver" && guide.avoidSchool ? { ignored: ["school" as const] } : {}),
     // Traffic is painted on, since the free road has none.
     segments: [
       { from: 0, to: q(0.25), congestion: 1 }, { from: q(0.25), to: q(0.5), congestion: 2 },

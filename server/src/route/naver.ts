@@ -1,4 +1,4 @@
-import { type LonLat, type Route, type RouteProvider, type RouteRequest, type Segment, askJson, coverPath, isMotorwayName, markMotorway } from "./types.js";
+import { type Avoid, type LonLat, type Route, type RouteProvider, type RouteRequest, type Segment, askJson, coverPath, isMotorwayName, markMotorway } from "./types.js";
 
 /**
  * Naver Cloud Directions 5. One `path` of [lon, lat]; guides and sections
@@ -8,29 +8,31 @@ import { type LonLat, type Route, type RouteProvider, type RouteRequest, type Se
 interface NaverAnswer {
   code: number;
   message: string;
-  route?: {
-    traoptimal: {
-      summary: { distance: number; duration: number };
+  /** Keyed by the option asked: traoptimal, or traavoidtoll for 무료 우선. */
+  route?: Record<string, {
+      summary: { distance: number; duration: number; tollFare?: number };
       path: LonLat[];
       guide: { pointIndex: number; type: number; instructions: string; distance: number }[];
       /** The main roads on the way, each named. */
       section: { pointIndex: number; pointCount: number; congestion: number; name?: string }[];
-    }[];
-  };
+    }[]>;
 }
 
 export class Naver implements RouteProvider {
   readonly name = "naver" as const;
+  /** 무료 우선 (traavoidtoll); Directions 5 has no school-zone option. */
+  readonly avoids: readonly Avoid[] = ["toll"];
   constructor(private clientId: () => string | undefined, private clientSecret: () => string | undefined) {}
   get ready() {
     return !!this.clientId() && !!this.clientSecret();
   }
 
-  async route({ start, goal }: RouteRequest): Promise<Route> {
+  async route({ start, goal, avoid = [] }: RouteRequest): Promise<Route> {
+    const option = avoid.includes("toll") ? "traavoidtoll" : "traoptimal";
     const url = new URL("https://maps.apigw.ntruss.com/map-direction/v1/driving");
     url.searchParams.set("start", `${start[0]},${start[1]}`);
     url.searchParams.set("goal", `${goal[0]},${goal[1]}`);
-    url.searchParams.set("option", "traoptimal");
+    url.searchParams.set("option", option);
     const answer = await askJson<NaverAnswer>(
       url.toString(),
       {
@@ -41,7 +43,7 @@ export class Naver implements RouteProvider {
       },
       this.name,
     );
-    const first = answer.route?.traoptimal?.[0];
+    const first = answer.route?.[option]?.[0];
     if (answer.code !== 0 || !first) throw new Error(`naver: ${answer.message}`);
     // A way a few metres long comes with no guides and no sections at all.
     first.guide ??= [];
@@ -51,6 +53,7 @@ export class Naver implements RouteProvider {
       distanceM: first.summary.distance,
       // Naver's duration is milliseconds.
       durationS: Math.round(first.summary.duration / 1000),
+      ...(first.summary.tollFare != null ? { tollWon: first.summary.tollFare } : {}),
       path: first.path,
       guides: first.guide.filter((g) => first.path[g.pointIndex] != null).map((g) => ({
         at: first.path[g.pointIndex],

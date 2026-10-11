@@ -40,7 +40,14 @@ export interface Route {
    * 강변북로 …). No school zone or speed bump is there, whatever is beside it.
    */
   motorways?: [number, number][];
+  /** The tolls on the way, won, where the provider says. */
+  tollWon?: number;
+  /** What was asked to be avoided that this provider cannot avoid (NAVER no school zones, our OSRM neither). */
+  ignored?: Avoid[];
 }
+
+/** What a route can be asked to keep off: toll roads (무료도로 우선) and school zones (어린이 보호구역 회피). */
+export type Avoid = "toll" | "school";
 
 /**
  * Whether a road, by its name, is a motorway or a car-only road. Kakao and
@@ -91,10 +98,14 @@ export interface RouteRequest {
    */
   heading?: number;
   speedKmh?: number;
+  /** What to keep off, where the provider can (RouteProvider.avoids). */
+  avoid?: Avoid[];
 }
 
 export interface RouteProvider {
   readonly name: Provider;
+  /** What it can be asked to keep off; the rest asked is marked [Route.ignored]. */
+  readonly avoids?: readonly Avoid[];
   /** False when its key is not set; the client hides it. */
   readonly ready: boolean;
   route(request: RouteRequest): Promise<Route>;
@@ -121,4 +132,12 @@ export async function askJson<T>(url: string, init: RequestInit, provider: Provi
     throw new ProviderError(provider, answer.status, (await answer.text()).slice(0, 500));
   }
   return (await answer.json()) as T;
+}
+
+/** A route asked with [request.avoid]: marked with what its provider could not keep off, so the page can tell or pass it over. */
+export async function routeAvoiding(p: RouteProvider, request: RouteRequest): Promise<Route> {
+  const route = await p.route(request);
+  const ignored = (request.avoid ?? []).filter((a) => !p.avoids?.includes(a));
+  if (ignored.length) route.ignored = ignored;
+  return route;
 }

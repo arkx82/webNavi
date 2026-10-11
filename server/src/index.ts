@@ -1,4 +1,5 @@
 import Fastify from "fastify";
+import { setDefaultAutoSelectFamilyAttemptTimeout } from "node:net";
 import fastifyStatic from "@fastify/static";
 import { existsSync, readdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
@@ -9,7 +10,7 @@ import { Kakao } from "./route/kakao.js";
 import { Naver } from "./route/naver.js";
 import { Osrm } from "./route/osrm.js";
 import { sayMissedTurns } from "./route/missed.js";
-import { ProviderError, type LonLat, type Provider, type Route, type RouteProvider } from "./route/types.js";
+import { ProviderError, routeAvoiding, type Avoid, type LonLat, type Provider, type Route, type RouteProvider } from "./route/types.js";
 import { SafetyIndex } from "./safety/index.js";
 import { CameraRoads } from "./safety/roads.js";
 import { CAMERAS_MAX_AGE_MS, CAMERAS_VERSION, fetchCameras, keptCameras } from "./safety/cameras.js";
@@ -40,6 +41,11 @@ import { registerCar } from "./car/index.js";
 import fastifyCompress from "@fastify/compress";
 import { Traffic } from "./road/traffic.js";
 import { HdPoints } from "./safety/hd-points.js";
+
+// Each address family tried for a second, not Node's 250 ms: this host has no IPv6 route out, so a far server (the public
+// OSRM in Germany, 0.3 s away) had its IPv4 attempt cut at 250 ms too and every request failed "fetch failed" (ETIMEDOUT),
+// where curl got through.
+setDefaultAutoSelectFamilyAttemptTimeout(1000);
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "..");
@@ -358,7 +364,15 @@ interface RouteQuery {
   /** The car's heading and speed at the start, when moving. */
   heading?: string;
   speed?: string;
+  /** What to keep off: "toll", "school", comma-separated. */
+  avoid?: string;
 }
+
+/** What the page asked to keep off, the known words only. */
+function avoidOf(q: RouteQuery): Avoid[] {
+  return (q.avoid ?? "").split(",").filter((a): a is Avoid => a === "toll" || a === "school");
+}
+
 
 /** The heading asked with a route, if a sensible one was given. */
 function headingOf(q: RouteQuery): { heading?: number; speedKmh?: number } {
@@ -384,7 +398,7 @@ app.get<{ Querystring: RouteQuery }>("/api/route", async (request, reply) => {
     const keyed = Object.values(providers).filter((p) => p.ready && p.name !== "osrm");
     const ready = keyed.length ? keyed : [providers.osrm];
     if (ready.length === 0) return reply.code(503).send({ error: "no provider has a key on this server" });
-    const settled = await Promise.allSettled(ready.map((p) => p.route({ start: s, goal: g, ...headingOf(request.query) })));
+    const settled = await Promise.allSettled(ready.map((p) => routeAvoiding(p, { start: s, goal: g, ...headingOf(request.query), avoid: avoidOf(request.query) })));
     const came = settled.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
     await Promise.all(came.map(sayMissed));
     // Our own route only with live speeds on it: without them it runs at the limit and reads quicker than it is
@@ -406,7 +420,7 @@ app.get<{ Querystring: RouteQuery }>("/api/route", async (request, reply) => {
   const g = lonLat(goal);
   if (!s || !g) return reply.code(400).send({ error: "start and goal are lon,lat" });
   try {
-    const route = await provider.route({ start: s, goal: g, ...headingOf(request.query) });
+    const route = await routeAvoiding(provider, { start: s, goal: g, ...headingOf(request.query), avoid: avoidOf(request.query) });
     await sayMissed(route);
     traffic.touch([s, g, ...route.path.filter((_, i) => i % 20 === 0)]);
     return route;

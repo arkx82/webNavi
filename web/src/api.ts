@@ -1,4 +1,4 @@
-import type { Category, Fuel, Health, LonLat, Place, Poi, Provider, Route, StationDetail } from "./types";
+import type { Avoid, Category, Fuel, Health, LonLat, Place, Poi, Provider, Route, StationDetail } from "./types";
 import { threadRoute } from "./thread";
 
 /** Corners through the painted lanes where 정밀도로지도 has them (quick: only the turns). The whole line goes onto the lanes when a route is driven (main.ts). */
@@ -23,14 +23,25 @@ const moving = () => {
   return h ? { heading: String(Math.round(h.deg)), speed: String(Math.round(h.kmh)) } : {};
 };
 
+/**
+ * What every route asked keeps off (main.ts sets it: 무료도로 우선 on the route sheet, 어린이 보호구역 회피 in 안내 설정):
+ * here, so a re-route, a quicker-way check or a resumed drive asks the same as the ways first chosen.
+ */
+export let avoiding: () => Avoid[] = () => [];
+export function setAvoiding(f: typeof avoiding) { avoiding = f; }
+const avoidParam = () => {
+  const a = avoiding();
+  return a.length ? { avoid: a.join(",") } : {};
+};
+
 export const api = {
   health: () => get<Health>("/api/health", {}),
   search: (q: string, near?: LonLat) => get<Place[]>("/api/search", { q, near: near && pair(near) }),
   // Every route's corners threaded through the painted lanes where 정밀도로지도 has them (thread.ts).
   route: (provider: Provider, start: LonLat, goal: LonLat) =>
-    get<Route>("/api/route", { provider, start: pair(start), goal: pair(goal), ...moving() }).then(onLanes),
+    get<Route>("/api/route", { provider, start: pair(start), goal: pair(goal), ...moving(), ...avoidParam() }).then(onLanes),
   routes: async (start: LonLat, goal: LonLat) => {
-    const a = await get<{ routes: Route[]; errors: string[]; pending?: Provider[] }>("/api/route", { provider: "all", start: pair(start), goal: pair(goal), ...moving() });
+    const a = await get<{ routes: Route[]; errors: string[]; pending?: Provider[] }>("/api/route", { provider: "all", start: pair(start), goal: pair(goal), ...moving(), ...avoidParam() });
     await Promise.all(a.routes.map(onLanes));
     return a;
   },

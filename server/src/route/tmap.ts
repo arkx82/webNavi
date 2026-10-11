@@ -1,4 +1,4 @@
-import { askJson, isMotorwayName, markMotorway, type LonLat, type Route, type RouteProvider, type RouteRequest, type Segment } from "./types.js";
+import { askJson, isMotorwayName, markMotorway, type Avoid, type LonLat, type Route, type RouteProvider, type RouteRequest, type Segment } from "./types.js";
 
 /**
  * TMAP car route (SK open API). The answer is a GeoJSON FeatureCollection:
@@ -13,6 +13,8 @@ interface TmapFeature {
   properties: {
     totalDistance?: number;
     totalTime?: number;
+    /** The tolls on the way, won. */
+    totalFare?: number;
     description?: string;
     turnType?: number;
     distance?: number;
@@ -25,12 +27,16 @@ interface TmapFeature {
 
 export class Tmap implements RouteProvider {
   readonly name = "tmap" as const;
+  readonly avoids: readonly Avoid[] = ["toll", "school"];
   constructor(private appKey: () => string | undefined) {}
   get ready() {
     return !!this.appKey();
   }
 
-  async route({ start, goal, heading, speedKmh }: RouteRequest): Promise<Route> {
+  async route({ start, goal, heading, speedKmh, avoid = [] }: RouteRequest): Promise<Route> {
+    // searchOption is one choice: 19 교통최적+어린이보호구역 회피, 1 교통최적+무료우선, 0 교통최적+추천. Both asked, the school
+    // zones take it and the tolls are asked by tollgateFareOption 8 (무료 우선) beside it.
+    const school = avoid.includes("school"), toll = avoid.includes("toll");
     const answer = await askJson<{ features: TmapFeature[] }>(
       "https://apis.openapi.sk.com/tmap/routes?version=1",
       {
@@ -39,7 +45,8 @@ export class Tmap implements RouteProvider {
         body: JSON.stringify({
           startX: start[0], startY: start[1], endX: goal[0], endY: goal[1],
           reqCoordType: "WGS84GEO", resCoordType: "WGS84GEO",
-          searchOption: "0", trafficInfo: "Y",
+          searchOption: school ? "19" : toll ? "1" : "0", trafficInfo: "Y",
+          ...(toll ? { tollgateFareOption: "8" } : {}),
           ...(heading != null ? { angle: Math.round(heading), speed: Math.round(speedKmh ?? 0) } : {}),
         }),
       },
@@ -50,6 +57,7 @@ export class Tmap implements RouteProvider {
       const p = feature.properties;
       if (p.totalDistance != null) route.distanceM = p.totalDistance;
       if (p.totalTime != null) route.durationS = p.totalTime;
+      if (p.totalFare != null) route.tollWon = p.totalFare;
       if (feature.geometry.type === "Point") {
         route.guides.push({
           at: feature.geometry.coordinates,
