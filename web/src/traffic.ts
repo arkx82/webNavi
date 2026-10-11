@@ -52,3 +52,22 @@ export function repaint(cur: Route, fresh: Route, fromAlongM: number): Repaint {
   cur.segments = segments;
   return out;
 }
+
+/**
+ * How much of [cur] ahead of [fromAlongM] another answer [other] drives too: the share of its vertices within ON_M of
+ * [other]'s line. Nothing on [cur] is changed (repaint, by contrast, takes the fresh colours).
+ */
+export function sharedShare(cur: Route, other: Route, fromAlongM: number): number {
+  if (cur.path.length < 2 || other.path.length < 2) return 0;
+  const line = new Line(cur.path), otherLine = new Line(other.path);
+  let ahead = 0, matched = 0, seg = 0;
+  for (let i = 0; i < cur.path.length; i++) {
+    if (line.along[i] < fromAlongM) continue;
+    ahead++;
+    const p = otherLine.project(cur.path[i], seg, 80);
+    if (p.offM > ON_M) continue;
+    seg = p.segment;
+    matched++;
+  }
+  return ahead ? matched / ahead : 0;
+}

@@ -1,6 +1,7 @@
 import { createReadStream, existsSync, renameSync, statSync, unlinkSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
+import { ARROW_TURNS, type ArrowIndex } from "./arrows.js";
 import type { LonLat } from "./route/types.js";
 
 /**
@@ -107,6 +108,22 @@ const TRAIL_JOIN_M = 3;
 const SNAP_M = 15;
 const SNAP_DEG = 25;
 const CARRIAGEWAY_M = 12;
+/**
+ * A lane's arrows: those painted in its last ARROW_BACK_M before the stop line (on the link before it too, where
+ * that link leads only into this lane), within ARROW_OFF_M of its middle. The one nearest the stop line is the
+ * lane's: one 64 m back is often from before a pocket opened (직진 there, 우회전 at the line).
+ */
+const ARROW_BACK_M = 60;
+const ARROW_OFF_M = 1.6;
+/** A link through the junction that stops (no link after it, or a loop cut off) this soon, bent this much, turns. */
+const SHORT_TURN_M = 60;
+const SHORT_TURN_DEG = 10;
+/** A way on that comes back past this after turning right (a P-turn), or round past it turning right (a cloverleaf): a loop, not a U-turn. */
+const LOOP_DEG = 140;
+/** The stop-line lanes' own heading in, over their last this many metres. */
+const LANE_IN_M = 20;
+/** Where no lane reads as going the guide's way, the lane whose way on keeps nearest the route, if within this. */
+const NEAREST_OFF_M = 10;
 
 /** The nearest point of [line] to [p], how far it is, and the line's bearing there. */
 function nearestOn(p: LonLat, line: LonLat[]): { at: LonLat; off: number; bearing: number } | null {
@@ -129,7 +146,8 @@ export class LaneIndex {
   private stmts: Statements | null = null;
   private building = false;
 
-  constructor(private linksFile: string, private dbFile: string, private log: (msg: string) => void = () => {}) {}
+  /** [arrows]: the painted arrows (arrows.ts), read first for where each lane goes; without them, the links alone. */
+  constructor(private linksFile: string, private dbFile: string, private log: (msg: string) => void = () => {}, private arrows: ArrowIndex | null = null) {}
 
   get ready() {
     return !!this.open();
@@ -414,9 +432,12 @@ export class LaneIndex {
       // One lane, the one that serves the way on, never between two (a 4-lane road's middle was drawn on the line
       // between 2차로 and 3차로): into a turn, the lane on its side; else a through lane, left of the middle — not
       // the outermost, where the buses and the right turns are, nor the innermost, where the left turns are.
+      // Two lanes have no middle, and left of it was 1차로: the left-turn pocket in town, the overtaking lane on a
+      // motorway (지정차로: 편도 2차로 고속도로, 1차로 앞지르기), and a right turn drawn from there crossed both
+      // lanes once the bias began. With no turn ahead the line keeps right: 2차로.
       const bias = biases?.[i] ?? 0;
       const n = withSide.length;
-      const index = bias <= -0.34 ? 0 : bias >= 0.34 ? n - 1 : Math.floor((n - 1) / 2);
+      const index = bias <= -0.34 ? 0 : bias >= 0.34 ? n - 1 : n === 2 ? 1 : Math.floor((n - 1) / 2);
       return withSide[index].at;
     });
   }
@@ -437,25 +458,21 @@ export class LaneIndex {
       };
       for (let l = withEnd(this.byId(db, seed.l)), guard = 0; l && guard < 12; l = withEnd(this.byId(db, l.l)), guard++) row.unshift(l);
       for (let r = withEnd(this.byId(db, seed.r)), guard = 0; r && guard < 12; r = withEnd(this.byId(db, r.r)), guard++) row.push(r);
-      const read = row.map((lane) => {
-        const path = JSON.parse(lane.coords) as LonLat[];
+      const paths = row.map((lane) => JSON.parse(lane.coords) as LonLat[]);
+      // The way in as the lanes come to their stop line, not the route's line: the provider's line, 30 m back
+      // to the guide, came in 11° off at 창동교 (2026-10-11), and its right-turn lane's 35° read as straight on.
+      // Of the lanes that come in the seed's way (a pocket's last metres can curve off it).
+      const seedIn = headingIn(paths[row.indexOf(seed)], LANE_IN_M);
+      const laneIn = meanDeg(paths.map((p) => headingIn(p, LANE_IN_M)).filter((d) => Math.abs(diff(seedIn, d)) <= 35)) ?? inDeg;
+      const shapedRow = row.map((lane, i) => {
+        const path = paths[i];
         const end = path[path.length - 1];
-        const turns = new Set<Turn>();
+        const shaped = new Set<Turn>();
         /** How far this lane's way on stays from the route (its nearest link through), and how much it pulls away: 120 m on against 30 m. */
         let off = Infinity, grows = Infinity;
         for (const s of (lane.b ? (next.all(lane.b) as unknown as Link[]) : [])) {
-          // Where the link through the junction heads, 40 m on (or at its end), and the links after it to 150 m.
-          let trail = JSON.parse(s.coords) as LonLat[];
-          let last: Link = s;
-          for (let hop = 0; hop < 4 && lengthOf(trail) < 150 && last.b; hop++) {
-            const on = next.all(last.b) as unknown as Link[];
-            if (on.length === 0) break;
-            const heading = bearingOf(trail[trail.length - 2], trail[trail.length - 1]);
-            const pick = on.reduce((a, b) => (Math.abs(diff(heading, firstDeg(a))) <= Math.abs(diff(heading, firstDeg(b))) ? a : b));
-            trail = trail.concat((JSON.parse(pick.coords) as LonLat[]).slice(1));
-            last = pick;
-          }
-          turns.add(turnOf(inDeg, bearingOf(end, along(trail, Math.min(40, lengthOf(trail))))));
+          const { trail, stopped } = this.wayOn(db, s, laneIn);
+          shaped.add(turnOfTrail(laneIn, end, trail, stopped));
           if (after.length >= 2) {
             const probes = [30, 60, 90, 120].filter((m) => m <= lengthOf(trail)).map((m) => offLine(along(trail, m), after));
             if (probes.length) {
@@ -464,11 +481,31 @@ export class LaneIndex {
             }
           }
         }
-        return { turns: order([...turns]), off, grows };
+        return { lane, path, shaped: order([...shaped]), off, grows };
+      });
+      // What is painted on the lane first; where nothing is, where its links go. Only at a junction: where every
+      // lane's links run straight on (a lane parting, 50 m before the stop line) the paint is the stop line's ahead.
+      const atJunction = shapedRow.some((o) => o.shaped.length === 0 || o.shaped.some((t) => t !== "straight"));
+      const paint = shapedRow.map((l) => (atJunction ? this.arrowTurns(db, l.lane, l.path) : null));
+      // Paint out of order across the road is the map's slip, not the road's: a 좌회전 arrow (or 직진·좌회전) on
+      // the outermost lane, right of a lane painted without a left (국도 43 at 38.1360 and 38.0537, 2026-10-11), is
+      // read by the lane's links instead; and the other way round, a right without a left on the innermost. Only
+      // the outermost: beside a 중앙버스전용차로, painted 직진, the left-turn lane is right of it.
+      const lefty = (t: Turn[]) => t.includes("left") || t.includes("uturn");
+      const n = paint.length;
+      const outOfOrder = paint.map((t, i) => !!t && (
+        (i === n - 1 && lefty(t) && !t.includes("right") && paint.slice(0, i).some((o) => !!o && !lefty(o)))
+        || (i === 0 && t.includes("right") && !lefty(t) && paint.slice(1).some((o) => !!o && !o.includes("right")))));
+      const read = shapedRow.map((l, i) => {
+        const painted = outOfOrder[i] ? null : paint[i];
+        // A U-turn is signed, not painted: the innermost lane's link round keeps it beside the paint (a pocket
+        // painted 좌회전 into a side road the map does not have, its only link the U-turn).
+        const turns = painted ? order(i === 0 && l.shaped.includes("uturn") && !painted.includes("uturn") ? [...painted, "uturn"] : [...painted]) : l.shaped;
+        return { turns, painted: !!painted, off: l.off, grows: l.grows };
       });
       // The lanes to be in: those going the route's way after the junction; where every lane goes
       // that way (a motorway fork, a straight road), the ones whose way on stays nearest the route.
-      const told = way ?? routeTurn(inDeg, after, seed.before);
+      const told = way ?? routeTurn(laneIn, after, seed.before);
       const going = read.filter((l) => told && l.turns.includes(told));
       const byWay = going.length > 0 && going.length < read.length;
       // At a fork, the lanes whose way on does not pull away from the route.
@@ -481,27 +518,168 @@ export class LaneIndex {
       const grows = read.map((l) => l.grows).filter(Number.isFinite);
       const parts = grows.length > 1 && Math.max(...grows) - Math.min(...grows) > 5;
       // Whether these lanes can take the route's way at all: a stop line where none can is another road's.
-      return { lanes, fits: told ? read.some((l) => l.turns.includes(told)) : parts };
+      return { lanes, fits: told ? read.some((l) => l.turns.includes(told)) : parts, offs: read.map((l) => l.off), painted: read.map((l) => l.painted) };
     };
     // Stop lines nearest the guide first; the one where the lanes part (a turn, or the route taking
     // only some of them) is the junction meant — a stretch where every lane goes straight on is not.
     const seen = new Set<string>();
     let fitting: { lanes: LaneInfo["lanes"]; seed: End } | null = null;
+    /** The nearest stop line whose lanes could be read, kept for when none can take the guide's way. */
+    let nearest: { lanes: LaneInfo["lanes"]; offs: number[]; painted: boolean[]; seed: End } | null = null;
     for (const seed of ends.sort((a, b) => Math.abs(a.before) + Math.abs(a.side) * 1.5 - (Math.abs(b.before) + Math.abs(b.side) * 1.5))) {
       const key = `${Math.round(seed.before / 8)}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      const { lanes, fits } = readRow(seed);
-      if (!fits || lanes.length < 2 || lanes.some((l) => l.turns.length === 0)) continue;
+      const { lanes, fits, offs, painted } = readRow(seed);
+      if (lanes.length < 2 || lanes.some((l) => l.turns.length === 0)) continue;
+      if (!fits) { nearest ??= { lanes, offs, painted, seed }; continue; }
       fitting ??= { lanes, seed };
       const parts = lanes.some((l) => l.turns.some((t) => t !== "straight")) || (lanes.some((l) => l.best) && lanes.some((l) => !l.best));
       if (parts) return { lanes, stopM: Math.round(seed.before), stop: seed.end };
     }
-    // Nowhere the lanes part and can take the route's way: nothing is better than a wrong lane.
-    if (!fitting || !fitting.lanes.some((l) => l.best) || fitting.lanes.every((l) => l.best)) return null;
-    const { lanes, seed } = fitting;
-    return { lanes, stopM: Math.round(seed.before), stop: seed.end };
+    if (fitting && fitting.lanes.some((l) => l.best) && !fitting.lanes.every((l) => l.best)) {
+      const { lanes, seed } = fitting;
+      return { lanes, stopM: Math.round(seed.before), stop: seed.end };
+    }
+    // The guide told a way no lane here reads as taking by its links (a 도류화 left that bends 10° in the first
+    // 40 m and 58° by 150 m, 별내 2026-10-11): the lane whose way on keeps nearest the route is the one, and goes
+    // the route's way — its links follow the route there. Only for a guide's own way, only where that lane's way
+    // on keeps within NEAREST_OFF_M of the route, and never against the paint (a lane painted another way at the
+    // nearest stop line: the stop line is another road's); else nothing, which is better than a wrong lane.
+    if (!fitting && way && nearest) {
+      const least = Math.min(...nearest.offs);
+      const { lanes, offs, painted, seed } = nearest;
+      const chosen = offs.map((o) => o <= least + 0.5);
+      if (least <= NEAREST_OFF_M && !chosen.some((c, i) => c && painted[i])) {
+        return {
+          lanes: lanes.map((l, i) => (chosen[i] ? { turns: order([...l.turns, way]), best: true } : { turns: l.turns, best: false })),
+          stopM: Math.round(seed.before),
+          stop: seed.end,
+        };
+      }
+    }
+    return null;
   }
+
+  /**
+   * The way on from a stop line through link [s]: the links after it to 150 m, each hop the one heading on
+   * nearest the way it goes. [stopped] where the links end (no link after: a side road the map does not
+   * have) or come round into a loop, which is cut off: a link that heads back more than LOOP_DEG from the way
+   * in after the way has turned right — a right-turn lane into a P-turn (right, then 240° round to the left)
+   * read -34° at 40 m and -171° at the end, 좌회전 and 유턴 for a lane painted 우회전 (2026-10-11, 국도 43).
+   * A U-turn drawn as two links (7 m on, then round to the left) goes on round.
+   */
+  private wayOn(db: Statements, s: Link, laneIn: number): { trail: LonLat[]; stopped: boolean } {
+    let trail = JSON.parse(s.coords) as LonLat[];
+    // The link through the junction a loop itself: the right turn into it is the lane's way.
+    if (loopsRight(laneIn, trail)) return { trail: cutAtRight(laneIn, trail), stopped: true };
+    let last: Link = s;
+    for (let hop = 0; hop < 4 && lengthOf(trail) < 150; hop++) {
+      const on = last.b ? (db.next.all(last.b) as unknown as Link[]) : [];
+      if (on.length === 0) return { trail, stopped: true };
+      const heading = bearingOf(trail[trail.length - 2], trail[trail.length - 1]);
+      const pick = on.reduce((a, b) => (Math.abs(diff(heading, firstDeg(a))) <= Math.abs(diff(heading, firstDeg(b))) ? a : b));
+      const path = JSON.parse(pick.coords) as LonLat[];
+      const longer = trail.concat(path.slice(1));
+      const back = Math.abs(diff(laneIn, bearingOf(path[Math.max(0, path.length - 2)], path[path.length - 1]))) > LOOP_DEG;
+      if ((back && turned(laneIn, trail) > 30) || loopsRight(laneIn, longer)) return { trail, stopped: true };
+      trail = longer;
+      last = pick;
+    }
+    return { trail, stopped: false };
+  }
+
+  /**
+   * What the arrows painted on [lane] in its last ARROW_BACK_M say, the one nearest the stop line; null
+   * where none is (no arrows file, or nothing painted there).
+   */
+  private arrowTurns(db: Statements, lane: Link, path: LonLat[]): Turn[] | null {
+    if (!this.arrows?.ready) return null;
+    let line = path;
+    if (lengthOf(path) < ARROW_BACK_M) {
+      const before = this.before(db, lane, path);
+      if (before) line = before.concat(path.slice(dist(before[before.length - 1], path[0]) < TRAIL_JOIN_M ? 1 : 0));
+    }
+    const total = lengthOf(line);
+    // The box about the lane's last ARROW_BACK_M: the point that far back and every vertex after it.
+    const pts: LonLat[] = [along(line, Math.max(0, total - ARROW_BACK_M))];
+    for (let i = line.length - 1, left = total; i >= 0 && left >= total - ARROW_BACK_M; left -= i > 0 ? dist(line[i - 1], line[i]) : 0, i--) pts.push(line[i]);
+    const pad = 4 / M, padX = pad / Math.cos((path[0][1] * Math.PI) / 180);
+    const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+    let best: { turns: Turn[]; back: number; off: number } | null = null;
+    for (const a of this.arrows.within(Math.min(...xs) - padX, Math.min(...ys) - pad, Math.max(...xs) + padX, Math.max(...ys) + pad)) {
+      const turns = ARROW_TURNS[a.code];
+      if (!turns) continue;
+      const off = offLine(a.at, line);
+      const back = total - projectAlong(a.at, line);
+      if (off > ARROW_OFF_M || back > ARROW_BACK_M || back < -3) continue;
+      if (!best || back < best.back - 3 || (Math.abs(back - best.back) <= 3 && off < best.off)) best = { turns, back, off };
+    }
+    return best ? order([...best.turns]) : null;
+  }
+
+  /** The link that leads into [lane] and into nothing else (where a lane parts from another, the paint before is the other's). */
+  private before(db: Statements, lane: Link, path: LonLat[]): LonLat[] | null {
+    if (!lane.a) return null;
+    const p = path[0];
+    const d = 3 / M, k = d / Math.cos((p[1] * Math.PI) / 180);
+    const into = (db.near.all(p[0] + k, p[0] - k, p[1] + d, p[1] - d) as unknown as Link[]).filter((l) => l.b === lane.a);
+    if (into.length === 0) return null;
+    const lead = into[0];
+    if (into.some((l) => l.coords !== lead.coords)) return null;
+    if ((db.next.all(lane.a) as unknown as Link[]).length !== 1) return null;
+    return JSON.parse(lead.coords) as LonLat[];
+  }
+}
+
+/**
+ * Where a lane's way on through the junction goes, from its end at the stop line [end] heading [inDeg]:
+ * by the heading to its point 40 m on (or its end); and where the links stop short of 60 m — into a side road
+ * the map does not have — bent 10° or more that way, a turn: the right-turn lanes of 국도 43 end 16–43 m on
+ * at 13–28°, and read as straight on at ±30°.
+ */
+export function turnOfTrail(inDeg: number, end: LonLat, trail: LonLat[], stopped: boolean): Turn {
+  const total = lengthOf(trail);
+  const t = turnOf(inDeg, bearingOf(end, along(trail, Math.min(40, total))));
+  if (t !== "straight" || !stopped || total > SHORT_TURN_M) return t;
+  const bend = diff(inDeg, bearingOf(end, trail[trail.length - 1]));
+  return bend >= SHORT_TURN_DEG ? "right" : bend <= -SHORT_TURN_DEG ? "left" : "straight";
+}
+
+/** The heading of [path]'s last [m] metres (from the point that far back to its end). */
+function headingIn(path: LonLat[], m: number): number {
+  const total = lengthOf(path);
+  return bearingOf(along(path, Math.max(0, total - m)), path[path.length - 1]);
+}
+
+/** The mean of headings, as directions (350° and 10° make 0°); null for none. */
+function meanDeg(degs: number[]): number | null {
+  if (degs.length === 0) return null;
+  const x = degs.reduce((s, d) => s + Math.sin((d * Math.PI) / 180), 0), y = degs.reduce((s, d) => s + Math.cos((d * Math.PI) / 180), 0);
+  return ((Math.atan2(x, y) * 180) / Math.PI + 360) % 360;
+}
+
+/** How far [path] turns from [inDeg] by its end, summed bend by bend (right +, left −): a full loop is ±360, not 0. */
+function turned(inDeg: number, path: LonLat[]): number {
+  let heading = inDeg, sum = 0;
+  for (let i = 0; i + 1 < path.length; i++) {
+    if (dist(path[i], path[i + 1]) < 0.5) continue;
+    const b = bearingOf(path[i], path[i + 1]);
+    sum += diff(heading, b);
+    heading = b;
+  }
+  return sum;
+}
+
+/** Whether [path] comes round past LOOP_DEG by turning right: a loop, never a U-turn (those turn left). */
+function loopsRight(inDeg: number, path: LonLat[]): boolean {
+  return turned(inDeg, path) > LOOP_DEG;
+}
+
+/** [path] up to where it has turned right by 90°: the loop's first part, the right turn into it. */
+function cutAtRight(inDeg: number, path: LonLat[]): LonLat[] {
+  for (let i = 2; i <= path.length; i++) if (turned(inDeg, path.slice(0, i)) > 90) return path.slice(0, i);
+  return path;
 }
 
 /** The way the route goes at the junction: its heading from a little before the stop line to 60 m past it. */
@@ -544,8 +722,9 @@ export function lanesAlong(index: LaneIndex, path: LonLat[]): (LaneInfo & { stop
     const way = turnOf(inDeg, bearingOf(path[k], path[m]));
     const info = index.lanes(path[i], inDeg, after, way);
     if (!info?.stop || info.lanes.length < 2) continue;
-    // Only where it matters: some lane at the stop line cannot go the route's way.
-    if (info.lanes.every((l) => l.turns.includes(way))) continue;
+    // Only where it matters: some lane at the stop line cannot go the route's way — and some can (a stop line
+    // where none reads as going it is told by the lane nearest the route, for a guide; not a warning).
+    if (info.lanes.every((l) => l.turns.includes(way)) || !info.lanes.some((l) => l.turns.includes(way))) continue;
     out.push({ ...(info as LaneInfo & { stop: LonLat }), way });
   }
   return out;

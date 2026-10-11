@@ -174,7 +174,8 @@ export class Voice {
   private url(text: string, voice: string | null): string {
     // The browser keeps each answer a year under its address: v is raised when what the server has for a sentence
     // changed. v=3: sentences cut off at the end made again (tts.ts). v=4: 92 of Sohee's that were Cherry's made again.
-    return `/api/tts?text=${encodeURIComponent(text)}&v=4${voice ? `&voice=${encodeURIComponent(voice)}` : ""}`;
+    // v=5: 60 of Cherry's whose first syllable an older model drew out ("삼~백미터 앞") made again on qwen3-tts-flash.
+    return `/api/tts?text=${encodeURIComponent(text)}&v=5${voice ? `&voice=${encodeURIComponent(voice)}` : ""}`;
   }
 
   /** [text] now, even if it was just said: for hearing a voice before choosing it. */

@@ -2,6 +2,7 @@ import Flatbush from "flatbush";
 import { parse } from "csv-parse/sync";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { beforeOf, dedupeCameras, type Merged } from "./dedupe.js";
 
 /**
  * What the road has in store: enforcement cameras, speed bumps, school
@@ -25,10 +26,15 @@ export interface Feature {
   zone?: "school" | "senior";
   /** A 구간 단속 camera's other end (the start's end, the end's start): which way along a road its stretch runs. */
   pair?: [number, number];
-  /** A 구간 단속 camera's 설치장소, which names its stretch ("…종점(이촌동, 성수JC→원효대교)", "…서울방향 시점"). */
+  /**
+   * A camera's 설치장소: a 구간 단속's names its stretch ("…종점(이촌동, 성수JC→원효대교)", "…서울방향 시점"), and many
+   * a camera's the way it faces ("운천제2교차로 (포천->김화)") — what tells two rows of one camera apart (dedupe.ts).
+   */
   site?: string;
+  /** How far before the place its coordinates are the site puts the camera ("양문사거리전400m지점"): not one camera with what stands there. */
+  beforeM?: number;
   /** The carriageways the camera stands on: the way each runs and the camera put on it (safety/roads.ts). */
-  ways?: { deg: number; at: [number, number] }[];
+  ways?: { deg: number; at: [number, number]; far?: boolean }[];
   name?: string;
   /** For an area rather than a point (an accident hotspot, a school zone): how far round the centre it reaches. */
   radiusM?: number;
@@ -43,6 +49,8 @@ const M_PER_DEG_LAT = 111_320;
 export class SafetyIndex {
   private tree: Flatbush | null = null;
   readonly features: Feature[] = [];
+  /** The cameras the last build() kept as one (dedupe.ts), for the log. */
+  merged: Merged[] = [];
 
   /** Loads every CSV in [dir]; the file name says which loader applies. */
   static fromDirectory(dir: string): SafetyIndex {
@@ -73,6 +81,10 @@ export class SafetyIndex {
   }
 
   build(): this {
+    // One camera given twice (two agencies, two lanes) as one, before anything is read off the cameras.
+    const { features, merged } = dedupeCameras(this.features);
+    if (features !== this.features) { this.features.length = 0; this.add(features); }
+    this.merged = merged;
     zoneLimits(this.features);
     sectionPairs(this.features);
     if (this.features.length === 0) {
@@ -239,7 +251,8 @@ export function featuresOf(rows: Record<string, string | undefined>[], source: s
       direction: row["도로노선방향"] || undefined,
       name: row["도로노선명"] || row["도로명"] || row["설치장소"] || undefined,
       ...(zoneOf(row["보호구역구분"]) ? { zone: zoneOf(row["보호구역구분"]) } : {}),
-      ...(kind === "section-start" || kind === "section-end") && row["설치장소"] ? { site: row["설치장소"] } : {},
+      ...(!bumps && row["설치장소"] ? { site: row["설치장소"].trim() } : {}),
+      ...(!bumps && beforeOf(row["설치장소"]) ? { beforeM: beforeOf(row["설치장소"]) } : {}),
     });
   });
   return out;

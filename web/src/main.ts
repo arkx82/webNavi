@@ -29,7 +29,7 @@ import { ALERT_KINDS, alertPhrase, type AlertKind } from "../../server/src/phras
 import { Nearby } from "./nearby";
 import { autoZoom } from "./autozoom";
 import { EVENTS, facilityOf, straightMatters, turnRungs, turnSay } from "./speech";
-import { repaint } from "./traffic";
+import { repaint, sharedShare } from "./traffic";
 import { junctionKind, junctionOf, laneHint, motorwayAt, motorwaySides, namedTurnPhrase } from "./highway";
 import { CLOSEUP_CAR_AT, CLOSEUP_PITCH, CloseupHold, zoomToSee, type Closeup } from "./closeup";
 import { RerouteBackoff } from "./reroute-backoff";
@@ -94,6 +94,13 @@ const NAMES: Record<Provider, string> = { tmap: "티맵", kakao: "카카오", na
 /** How often the road is asked again for a better way, and how much better it must be. */
 const RECHECK_MS = 6 * 60_000;
 const BETTER_BY_S = 3 * 60;
+/** And by this share of the time left too: three minutes off an hour and a half is an estimate's noise, not a way. */
+const BETTER_SHARE = 0.1;
+/** Another provider's way that drives this much of the road ahead is the same way timed differently: not offered. */
+const SAME_ROAD_SHARE = 0.85;
+/** The drive's end this near (along the route, or straight to the place) and off the route is arriving, not lost. */
+const ARRIVE_OFF_ROUTE_M = 250;
+const ARRIVE_NEAR_M = 200;
 
 const map = openMap();
 
@@ -110,7 +117,7 @@ function openMap(): maplibregl.Map {
     // 빠르게, where the pixels are already few.
     const m = new maplibregl.Map({
       container: "map", style, center: loadLast() ?? HOME, zoom: 15, pitch: 45, attributionControl: false,
-      fadeDuration: 0, renderWorldCopies: false, pitchWithRotate: false, pixelRatio: mapPixelRatio, canvasContextAttributes: { antialias: dprMode !== "fast" },
+      fadeDuration: 0, renderWorldCopies: false, pitchWithRotate: false, pixelRatio: mapPixelRatio, canvasContextAttributes: { antialias: dprMode !== "fast", powerPreference: "high-performance" },
     });
     // A style that fails, or one that simply never comes (a dead link
     // hangs rather than refuses), gives way to the plain ground so the
@@ -170,7 +177,7 @@ window.addEventListener("unhandledrejection", (e) => log(`처리 안 된 오류 
 const pageStarted = Date.now();
 // What the page did, for the half-minute line: frames drawn and the longest gap between two, the main thread's long
 // tasks (50 ms and more) — the "점점 버벅" made a number.
-const frames = { n: 0, longestMs: 0, at: 0 };
+const frames = { n: 0, longestMs: 0, at: 0, renders: 0 };
 const longTasks = { n: 0, ms: 0 };
 try {
   new PerformanceObserver((l) => { for (const e of l.getEntries()) { longTasks.n++; longTasks.ms += e.duration; } }).observe({ type: "longtask", buffered: false });
@@ -193,8 +200,8 @@ setInterval(() => {
   let layers = "?";
   try { layers = String(map.getLayersOrder().length); } catch { /* the style changing */ }
   lastMemory = `메모리 ${mem ? `${mb(mem.usedJSHeapSize)}/${mb(mem.totalJSHeapSize)} MB (한도 ${mb(mem.jsHeapSizeLimit)})` : "?"} · 켠 지 ${Math.round((Date.now() - pageStarted) / 60_000)}분 · 위치 ${gps.samples.length} · 카메라 ${cameraLayer?.size ?? 0} · 기록 대기 ${unsent.length}`
-    + ` · 화면 ${frames.n}장/30초 (최장 ${Math.round(frames.longestMs)} ms) · 긴 작업 ${longTasks.n}번 ${Math.round(longTasks.ms)} ms · 타일 ${tilesHeld()} · 레이어 ${layers} · DOM ${document.getElementsByTagName("*").length}`;
-  frames.n = 0; frames.longestMs = 0; longTasks.n = 0; longTasks.ms = 0;
+    + ` · 화면 ${frames.n}장/30초 (최장 ${Math.round(frames.longestMs)} ms) · 지도 그림 ${frames.renders}번 · 긴 작업 ${longTasks.n}번 ${Math.round(longTasks.ms)} ms · 타일 ${tilesHeld()} · 레이어 ${layers} · DOM ${document.getElementsByTagName("*").length}`;
+  frames.n = 0; frames.longestMs = 0; frames.renders = 0; longTasks.n = 0; longTasks.ms = 0;
   log(lastMemory);
   // Sent at once, not at the next half-minute: a page that dies takes the unsent with it (on 10-09 the last 30 s).
   sendLog();
@@ -239,11 +246,17 @@ el<HTMLDetailsElement>("diag").addEventListener("toggle", () => { if (el<HTMLDet
 // The car on the road at its own size, laid on the map by its corners (car-icon.ts): a Model Y L seen from above, the
 // arrow, or the owner's own picture, as 안내 설정 says. The map draws it, so it is the road's scale wherever it is.
 const carLayer = new CarLayer(map);
+carLayer.onModelFailed = (why) => log(`3D 차 모델 못 씀 — 그림으로 ${why}`);
+// How often the map drew itself (the 30 s diagnostic line): a standing car with the map redrawn every frame is work for nothing.
+map.on("render", () => { frames.renders++; });
 /** The car's place as last drawn. */
 let carAt: LonLat = HOME;
 /** The server has the owner's own picture of the car (CONFIG_DIR/car-icon.png): 안내 설정's 내 사진 draws it. */
 let carPhoto = false;
 void fetch("/api/car-icon", { method: "HEAD" }).then((a) => { carPhoto = a.ok; if (carPhoto) applyGuide(); }).catch(() => {});
+/** Whether the server has the 3D model (CONFIG_DIR/car-model.glb): without it 3D is drawn as the Model Y L picture. */
+let carModel = false;
+void fetch("/api/car-model", { method: "HEAD" }).then((a) => { carModel = a.ok; if (carModel) applyGuide(); }).catch(() => {});
 
 // ---- the camera ------------------------------------------------------------
 // Three ways to look, as the car apps offer them: 3D (tilted, heading up,
@@ -457,10 +470,29 @@ gps.onError = (m) => {
 };
 /** A fix older than this and the car is not being tracked: the line under the speed says so. */
 const GPS_STALE_MS = 15_000;
+/** Standing by the last fix, with no word from the car: this long before the silence is called a loss. */
+const GPS_STANDING_STALE_MS = 120_000;
+/**
+ * Whether the car is standing where the last fix put it: the car's own word of late (stopped or in P), or else a sharp
+ * fix that said it was not moving. The car's browser sends no fix while the car stands (2026-10-11: "위치 신호 없음"
+ * thirteen times at lights, all in D at a standstill, the fix after each at the same place), and that is no loss.
+ */
+function standingStill(last: { speed: number | null; accM: number }): boolean {
+  const car = tracker.car;
+  if (car?.lastAt != null && Date.now() - car.lastAt < 10_000) return car.parked() || (car.lastSpeed() ?? 1) < 0.5;
+  return (last.speed ?? 1) < 0.5 && last.accM <= 15;
+}
 function gpsState(): string | null {
+  if (softwareGpu) return "GPU 가속이 꺼져 있어 지도가 느립니다 — 브라우저 설정에서 하드웨어 가속을 켜세요";
   const last = gps.last;
   // Fixes coming (the browser's, a replay's or the pretend drive's): nothing to warn of.
   if (last && Date.now() - last.t <= GPS_STALE_MS) return null;
+  // Standing still: the browser's silence, not a lost signal — the car's word says so, or the last fix did, a while.
+  if (last && standingStill(last)) {
+    const car = tracker.car;
+    if (car?.lastAt != null && Date.now() - car.lastAt < 10_000) return null;
+    if (Date.now() - last.t <= GPS_STANDING_STALE_MS) return null;
+  }
   if (!window.isSecureContext) return "https 주소가 아니라 위치를 받을 수 없습니다 — Cloudflare 주소로 여세요";
   if (gpsRefused === 1) return "위치 권한이 꺼져 있습니다 — 브라우저 설정에서 허용하세요";
   if (!last) return "위치를 찾는 중…";
@@ -1749,9 +1781,15 @@ async function recheckRoute() {
     // Our own (자체) route is not offered: its time is the limit's wherever ITS has no speed, and on 2026-10-03 it
     // read 1시간 41분 against 카카오's 1시간 58분 — taken, it led round U-turns and off the road five times.
     // Only ways that keep to the options asked: NAVER's quicker way through the school zones is no quicker way to take.
-    const best = answer.routes.filter((r) => !(kept.same && r === fresh) && r.provider !== "korea" && keeps(r)).sort((a, b) => a.durationS - b.durationS)[0];
+    // Another provider's answer down the same road is the same way timed by another clock (2026-10-11: three offers of
+    // 3–6 minutes, NAVER against Kakao on the road being driven, none taken and none that would have gained): not a way.
+    const along = tracker.frame()?.alongM ?? 0;
+    const another = (r: Route) => !(kept.same && r === fresh) && r.provider !== "korea" && keeps(r)
+      && (r.provider === route!.provider || sharedShare(route!, r, along) < SAME_ROAD_SHARE);
+    const best = answer.routes.filter(another).sort((a, b) => a.durationS - b.durationS)[0];
+    const enough = Math.max(BETTER_BY_S, now * BETTER_SHARE);
     // Quicker by enough — and, after a "그대로", by enough more than the way declined.
-    if (best && best.durationS < now - BETTER_BY_S && best.durationS < (declinedS == null ? Infinity : declinedS - (Date.now() - declinedAt) / 1000) - BETTER_BY_S) {
+    if (best && best.durationS < now - enough && best.durationS < (declinedS == null ? Infinity : declinedS - (Date.now() - declinedAt) / 1000) - BETTER_BY_S) {
       offers = answer.routes;
       log(`더 빠른 길: ${best.provider} ${minutes(best.durationS)} (지금 ${minutes(now)})`);
       offerFaster(best, to, now - best.durationS);
@@ -1791,6 +1829,14 @@ function freshTraffic(fresh: Route): { same: boolean; timed: boolean } {
 const backoff = new RerouteBackoff();
 tracker.onOffRoute = async (at) => {
   if (!drivingTo || !route || rerouting) return;
+  // At the drive's end, off the route is the way in (a car park's entrance, the other side of the street): arrived,
+  // not re-routed round the block (2026-10-11: 51 m from the place, a U-turn by a roundabout offered; 186 m and 67 m out,
+  // re-routed twice before the driver ended it).
+  const leftM = routeLine ? routeLine.lengthM - routeLine.project(at, 0, routeLine.path.length).alongM : Infinity;
+  if (leftM < ARRIVE_OFF_ROUTE_M || metres(at[0], at[1], drivingTo.at[0], drivingTo.at[1]) < ARRIVE_NEAR_M) {
+    if (!arrived) { log(`목적지 근처에서 경로를 벗어나 도착으로 처리 (남은 경로 ${Math.round(leftM)} m)`); arriveHere(); }
+    return;
+  }
   const wait = backoff.ask();
   if (wait > 0) {
     log(`경로 이탈 — 재탐색은 ${Math.ceil(wait)}초 뒤 (연달아 ${route.provider})`);
@@ -1836,6 +1882,22 @@ const warningsSaid = new Map<string, Set<number>>();
 const junction = (at: LonLat) => `${Math.round(at[0] * 5000)},${Math.round(at[1] * 5000)}`;
 let arrived = false;
 const END_AFTER_ARRIVE_MS = 10_000;
+/** The drive's end: said, shown, and (도착하면 안내 종료) back to the search screen once it has been said. */
+function arriveHere() {
+  if (arrived || !route) return;
+  arrived = true;
+  saveDrive(null);
+  voice.say(EVENTS.arrived);
+  // 도착하면 안내 종료: back to the search screen once the arrival has been said, unless the driver ended it already.
+  if (guide.endOnArrive) {
+    const thisDrive = route;
+    setTimeout(() => { if (route && route === thisDrive && arrived) endDrive(); }, END_AFTER_ARRIVE_MS);
+  }
+  putHtml("turn-icon", arrowSvg("arrive"));
+  put("turn-in", "도착");
+  put("turn-text", drivingTo?.name ?? "");
+  el("then").hidden = true;
+}
 
 /**
  * What the panel last showed, by element: written only when it changes. The
@@ -1861,20 +1923,7 @@ function showTurn(shown: Shown) {
     put("eta-left", `${minutes(shown.remainingS)} · ${km(shown.remainingM)} · ${NAMES[route.provider]}`);
   }
   if (!shown.nextGuide) {
-    if (shown.remainingM != null && shown.remainingM < 30 && !arrived) {
-      arrived = true;
-      saveDrive(null);
-      voice.say(EVENTS.arrived);
-      // 도착하면 안내 종료: back to the search screen once the arrival has been said, unless the driver ended it already.
-      if (guide.endOnArrive) {
-        const thisDrive = route;
-        setTimeout(() => { if (route && route === thisDrive && arrived) endDrive(); }, END_AFTER_ARRIVE_MS);
-      }
-      putHtml("turn-icon", arrowSvg("arrive"));
-      put("turn-in", "도착");
-      put("turn-text", drivingTo?.name ?? "");
-      el("then").hidden = true;
-    }
+    if (shown.remainingM != null && shown.remainingM < 30 && !arrived) arriveHere();
     return;
   }
   const g = shown.nextGuide.guide;
@@ -2893,7 +2942,7 @@ function applyGuide() {
     if (goal && !el("s-preview").hidden && !el("go-row").hidden) void fetchOffers();
   }
   avoidSchoolWas = guide.avoidSchool;
-  carLayer.set(guide.carIcon === "photo" && !carPhoto ? "tesla" : guide.carIcon ?? "tesla", guide.carPaint ?? PAINTS[0][0]);
+  carLayer.set((guide.carIcon === "photo" && !carPhoto) || (guide.carIcon === "model3d" && !carModel) ? "tesla" : guide.carIcon ?? "tesla", guide.carPaint ?? PAINTS[0][0]);
   // 차량 데이터 turned off here: the stream let go and what it had forgotten (a stale "P" would hold the marker).
   if (!carDataOn()) { if (carLink.state !== "off") carLink.stop(); carLink.track.clear(); }
   document.body.classList.toggle("layout-mini", guide.layout === "mini");
@@ -3660,6 +3709,9 @@ if (new URLSearchParams(location.search).has("debug")) {
   };
 }
 
+/** A renderer that is the CPU's: Chrome's SwiftShader, Mesa's llvmpipe or softpipe, Windows' basic renderer. */
+const SOFTWARE_GPU = /SwiftShader|llvmpipe|softpipe|Software|Microsoft Basic Render/i;
+let softwareGpu = false;
 /** Once a load: what draws the maps — a real GPU or software, how many pixels — and what the machine has. */
 function logEnvironment() {
   let gpu = "?", maxTex = "?";
@@ -3668,6 +3720,10 @@ function logEnvironment() {
     const info = gl?.getExtension("WEBGL_debug_renderer_info");
     if (gl) { gpu = info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : String(gl.getParameter(gl.RENDERER)); maxTex = String(gl.getParameter(gl.MAX_TEXTURE_SIZE)); }
   } catch { /* none */ }
+  // Drawn by the CPU, not a GPU (the browser's hardware acceleration off, or the GPU refused): said, as it is the
+  // driver's to turn on — the car's own browser draws on its Radeon (2026-10-11), a desktop may not.
+  softwareGpu = SOFTWARE_GPU.test(gpu);
+  if (softwareGpu) log(`GPU 가속 꺼짐 — 소프트웨어로 그림 (${gpu})`);
   const canvases = [...document.querySelectorAll("canvas")].map((c) => `${c.width}×${c.height}`).join(", ");
   const nav = navigator as Navigator & { deviceMemory?: number };
   log(`환경 GPU ${gpu} · 화면 ${screen.width}×${screen.height} · DPR ${realDpr} (지도 ${mapPixelRatio}) · 캔버스 ${canvases} · 최대 텍스처 ${maxTex} · 메모리 ${nav.deviceMemory ?? "?"} GB · 코어 ${navigator.hardwareConcurrency ?? "?"} · 프레임 ${guide.followFps} · 해상도 ${guide.mapDpr}`);

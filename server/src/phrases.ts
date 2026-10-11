@@ -175,7 +175,9 @@ export const EVENTS = {
   start: "안내를 시작합니다",
   changed: "목적지를 변경합니다",
   faster: "더 빠른 길로 안내합니다",
-  off: "경로를 벗어나 다시 탐색합니다",
+  // Short, as the car apps say it: the long "경로를 벗어나 다시 탐색합니다" (2.5 s) held the new route's first turn and the
+  // cameras behind it 4–5 s after each re-route on 2026-10-11, and one camera warning was dropped as late.
+  off: "경로를 재탐색합니다",
   nearGoal: "잠시 후 목적지에 도착합니다",
   arrived: "목적지에 도착했습니다. 안내를 종료합니다",
   weakGps: "GPS 신호가 약합니다",

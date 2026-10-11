@@ -1,5 +1,6 @@
 import type maplibregl from "maplibre-gl";
 import type { LonLat } from "./types";
+import { CarModelLayer, MODEL_WIDTH_M } from "./car-model";
 
 /**
  * "You" on the map: a Model Y L seen from above (4,976 × 1,920 mm, the
@@ -19,7 +20,7 @@ import type { LonLat } from "./types";
  * the screen came out the wrong shape.
  */
 
-export type CarIcon = "tesla" | "arrow" | "photo";
+export type CarIcon = "tesla" | "arrow" | "photo" | "model3d";
 
 /** Model Y L, metres. */
 export const CAR_LENGTH_M = 4.976;
@@ -121,36 +122,87 @@ export class CarLayer {
   private laneM: number = LANE_WIDTH_M.town;
   private minM = 0;
 
+  /** The car in three dimensions (car-model.ts), when that is the look chosen and the model could be had. */
+  private model: CarModelLayer | null = null;
+  private useModel = false;
+  /** Told when the model could not be had: the drawing stands in, and why is written down. */
+  onModelFailed: (why: string) => void = () => {};
+
   constructor(private map: maplibregl.Map) {
-    map.on("style.load", () => { this.installed = false; this.install(); });
-    map.on("idle", () => this.install());
+    map.on("style.load", () => { this.installed = false; this.install(); this.installModel(); });
+    map.on("idle", () => { this.install(); this.installModel(); });
     map.on("styledata", () => this.keepOnTop());
   }
 
-  /** The look: drawn in [paint], the arrow, or the server's photo (falling back to the drawing where there is none). */
+  /** The look: drawn in [paint], the arrow, the server's photo (falling back to the drawing where there is none), or the 3D model. */
   set(icon: CarIcon, paint: string) {
     const key = `${icon}:${paint}`;
     if (key === this.asked) return;
     this.asked = key;
+    this.useModel = icon === "model3d" && !this.model?.failed;
+    if (this.useModel) {
+      this.model ??= new CarModelLayer("/api/car-model", (why) => {
+        // No model after all (no file, no WebGL for it): the drawing in the same paint, and the reason in the log.
+        this.useModel = false;
+        this.onModelFailed(why);
+        this.asked = "";
+        this.set("tesla", paint);
+        this.map.triggerRepaint();
+      }, () => {
+        // In: the drawing that stood in while it loaded goes, and the model is laid where the car is.
+        this.laid = "";
+        this.show(this.shown);
+        if (this.at) this.place(this.at, this.heading);
+      });
+      this.model.setPaint(paint);
+      this.installModel();
+    }
+    if (this.model) this.model.shown = this.shown && this.useModel;
+    this.show(this.shown);
+    // The drawing is made all the same: it stands in at once if the model fails, and while it loads.
     const made = icon === "photo"
       ? Promise.resolve<Picture>({ url: "/api/car-icon", widthM: CAR_WIDTH_M, lengthM: CAR_LENGTH_M, visibleM: CAR_WIDTH_M })
-      : rasterize(carSvg(icon, paint), icon === "arrow" ? ARROW_WIDTH_M : DRAWN_WIDTH_M);
+      : rasterize(carSvg(icon === "model3d" ? "tesla" : icon, paint), icon === "arrow" ? ARROW_WIDTH_M : DRAWN_WIDTH_M);
     void made.then((p) => {
       if (key !== this.asked) return;
       this.picture = p;
       const source = this.source();
+      this.laid = "";
       if (source && this.at) source.updateImage({ url: p.url, coordinates: this.corners(this.at, this.heading) });
       else this.install();
     }, () => {});
   }
 
-  /** Where the car is and the way it faces: the corners moved, nothing else. */
+  /** The corners last laid, rounded: the same again is not laid again. */
+  private laid = "";
+
+  /**
+   * Where the car is and the way it faces: the corners moved, nothing else — and only when they moved. Each
+   * setCoordinates is a content change: the map reloads the image's tile and draws the whole map again, so a car
+   * standing still had the city (lanes, buildings, tiles) redrawn sixty times a second (2026-10-11: 28.7 s of long
+   * tasks in a 30 s standing at a light in 도봉).
+   */
   place(at: LonLat, headingDeg = this.heading) {
     this.at = at;
     this.heading = headingDeg;
+    if (this.useModel && this.model) {
+      // The model moved only when it moved (the map drawn again then), at the drawing's lane-wide size.
+      const scale = carScale(MODEL_WIDTH_M, this.laneM, this.minM);
+      const key = `m${at[0].toFixed(7)},${at[1].toFixed(7)},${headingDeg.toFixed(1)},${scale.toFixed(3)}`;
+      if (key === this.laid) return;
+      this.laid = key;
+      this.model.place(at, headingDeg, scale);
+      this.map.triggerRepaint();
+      return;
+    }
     const source = this.source();
-    if (source && this.picture) source.setCoordinates(this.corners(at, headingDeg));
-    else this.install();
+    if (!source || !this.picture) { this.install(); return; }
+    const corners = this.corners(at, headingDeg);
+    // A centimetre and a tenth of a degree: below what a frame could show.
+    const key = `${corners[0][0].toFixed(7)},${corners[0][1].toFixed(7)},${corners[2][0].toFixed(7)},${corners[2][1].toFixed(7)}`;
+    if (key === this.laid) return;
+    this.laid = key;
+    source.setCoordinates(corners);
   }
 
   /**
@@ -169,7 +221,17 @@ export class CarLayer {
 
   show(on = true) {
     this.shown = on;
-    if (this.installed) this.map.setLayoutProperty("car", "visibility", on ? "visible" : "none");
+    if (this.installed) this.map.setLayoutProperty("car", "visibility", on && !(this.useModel && this.model?.ready) ? "visible" : "none");
+    if (this.model) { this.model.shown = on && this.useModel; this.map.triggerRepaint(); }
+  }
+
+  /** The model's layer on the map (again after a new style), on top; the drawing hidden once the model draws. */
+  private installModel() {
+    if (!this.model || !this.useModel || this.model.failed) return;
+    try {
+      if (!this.map.getLayer(this.model.id)) this.map.addLayer(this.model);
+      if (this.model.ready && this.installed) this.map.setLayoutProperty("car", "visibility", "none");
+    } catch { /* the style not in yet: idle tries again */ }
   }
 
   private source(): maplibregl.ImageSource | null {
@@ -195,7 +257,8 @@ export class CarLayer {
     if (!this.installed) return;
     try {
       const order = this.map.getLayersOrder();
-      if (order[order.length - 1] !== "car" && order.includes("car")) this.map.moveLayer("car");
+      const top = this.useModel && order.includes("car-model") ? "car-model" : "car";
+      if (order[order.length - 1] !== top && order.includes(top)) this.map.moveLayer(top);
     } catch { /* between styles */ }
   }
 }

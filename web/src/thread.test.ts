@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { applySnap, headingsOf, roundCorners, splice, turnsOf } from "./thread.js";
+import { applySnap, densify, headingsOf, roundCorners, snapRouteWith, splice, turnsOf } from "./thread.js";
 import type { LonLat, Route } from "./types.js";
 
 /** Metres east/north of 강남역 as lon/lat. */
@@ -146,4 +146,80 @@ test("a right turn into the outer lane, 8 m beside the provider's line all the w
   const trail: LonLat[] = [at(0, 170), at(2, 182), at(8, 189), at(18, 192), at(40, 192), at(70, 192), at(100, 192)];
   assert.ok(splice(r, trail));
   assert.ok(r.path.some((p) => Math.abs(p[1] - at(0, 192)[1]) < 1e-7));
+});
+
+test("before a turn, of snaps out of step with each other the ones on the turn's side stay, not the one nearer the line", () => {
+  // 창동교 (2026-10-11 14:00): a lone snap 1.4 m over onto a stray link, then two on the right lane 10.7 and 10.5 m over.
+  const path: LonLat[] = Array.from({ length: 10 }, (_, i) => at(0, i * 20));
+  const dx = (moved: LonLat[], i: number) => (moved[i][0] - path[i][0]) * 111_320 * Math.cos((37.4979 * Math.PI) / 180);
+  const snapped: (LonLat | null)[] = path.map((p, i) => (i === 4 ? at(1.4, 80) : i === 5 ? at(10.7, 100) : i === 6 ? at(10.5, 120) : null));
+  const right = applySnap(path, snapped, [], { biases: path.map(() => 1) });
+  assert.ok(Math.abs(dx(right, 5) - 10.7) < 0.01 && Math.abs(dx(right, 6) - 10.5) < 0.01, `${dx(right, 5)}, ${dx(right, 6)}`);
+  // With no turn ahead the old rule holds: the one nearer the line as drawn.
+  const ahead = applySnap(path, snapped);
+  assert.ok(Math.abs(dx(ahead, 4) - 1.4) < 0.01, `${dx(ahead, 4)}`);
+  // A lone stray toward the turn's side does not beat a run of the turn's lane three times as long.
+  const stray: (LonLat | null)[] = path.map((p, i) => (i >= 2 && i <= 5 ? at(3.5, i * 20) : i === 6 ? at(14, 120) : null));
+  const kept = applySnap(path, stray, [], { biases: path.map(() => 1) });
+  assert.ok(Math.abs(dx(kept, 4) - 3.5) < 0.01 && dx(kept, 6) < 4, `${dx(kept, 4)}, ${dx(kept, 6)}`);
+  // Two long runs (a lane added on the right) both stay: the line steps from one to the other.
+  const wider: (LonLat | null)[] = path.map((p, i) => at(i < 5 ? 3.5 : 8.5, i * 20));
+  const both = applySnap(path, wider, [], { biases: path.map(() => 1) });
+  assert.ok(Math.abs(dx(both, 2) - 3.5) < 0.01 && Math.abs(dx(both, 7) - 8.5) < 0.01, `${dx(both, 2)}, ${dx(both, 7)}`);
+});
+
+test("the snap at a turn's guide is not weighed against the road after it", () => {
+  // 17:52: the guide's vertex snapped 14 m over onto the right lane; the next, on the ramp past it, 2 m the other way.
+  const path: LonLat[] = Array.from({ length: 10 }, (_, i) => at(0, i * 50));
+  const dx = (moved: LonLat[], i: number) => (moved[i][0] - path[i][0]) * 111_320 * Math.cos((37.4979 * Math.PI) / 180);
+  const snapped: (LonLat | null)[] = path.map((p, i) => (i === 5 ? at(14, 250) : i === 6 ? at(-2, 300) : null));
+  const sides = { biases: path.map((_, i) => (i <= 5 ? 1 : 0)), pieces: path.map((_, i) => (i <= 5 ? 0 : 1)) };
+  const moved = applySnap(path, snapped, [], sides);
+  assert.ok(Math.abs(dx(moved, 5) - 14) < 0.01 && Math.abs(dx(moved, 6) + 2) < 0.01, `${dx(moved, 5)}, ${dx(moved, 6)}`);
+  // Weighed against each other (as before), the one 14 m over went and the line fell back onto the provider's.
+  assert.ok(Math.abs(dx(applySnap(path, snapped), 5)) < 1);
+});
+
+test("before a turn a vertex without a snap takes the shift between its neighbours', not the provider's line", () => {
+  // Vertices 80 m apart (further than BLEND_M): the middle one has no lane of its own.
+  const path: LonLat[] = Array.from({ length: 5 }, (_, i) => at(0, i * 80));
+  const dx = (moved: LonLat[], i: number) => (moved[i][0] - path[i][0]) * 111_320 * Math.cos((37.4979 * Math.PI) / 180);
+  const snapped: (LonLat | null)[] = path.map((p, i) => (i === 1 ? at(7, 80) : i === 3 ? at(7, 240) : null));
+  assert.ok(Math.abs(dx(applySnap(path, snapped, [], { biases: path.map(() => 1) }), 2) - 7) < 0.01);
+  assert.ok(Math.abs(dx(applySnap(path, snapped), 2)) < 0.01, "with no turn ahead, as drawn");
+});
+
+test("the stretch before a turn is filled in every 20 m, with a point where it starts and the indices mapped", () => {
+  const path: LonLat[] = [at(0, 0), at(0, 200), at(0, 210)];
+  const { path: dense, map } = densify(path, [[50, 210]]);
+  assert.deepEqual(map, [0, dense.length - 2, dense.length - 1, dense.length]);
+  const ys = dense.map((p) => (p[1] - 37.4979) * 111_320);
+  assert.ok(ys.some((y) => Math.abs(y - 50) < 0.01), "a point at the stretch's start");
+  for (let i = 2; i < dense.length; i++) assert.ok(ys[i] - ys[i - 1] <= 20.01 && ys[i] > ys[i - 1], `${ys[i - 1]} → ${ys[i]}`);
+  assert.ok(!ys.some((y) => y > 1 && y < 49), "none before it");
+});
+
+test("a route's line before a right turn is snapped onto the right lane from 300 m out, every 20 m, the indices moved with it", async () => {
+  // North 600 m on a road whose two lanes are at x = 1.75 and 5.25, then right; the provider gave only the ends.
+  const r: Route = {
+    provider: "kakao", distanceM: 800, durationS: 90, path: [at(0, 0), at(0, 600), at(200, 600)],
+    guides: [{ at: at(0, 600), text: "우회전", distanceM: 600, turnType: 2 }, { at: at(200, 600), text: "도착", distanceM: 0, turnType: 101 }],
+    segments: [{ from: 0, to: 1, congestion: 1 }, { from: 1, to: 3, congestion: 3 }],
+  };
+  let asked: number[] = [];
+  const moved = await snapRouteWith(r, async (points, headings, biases) => {
+    asked = biases;
+    return points.map((p, i) => (Math.abs(headings[i]) < 30 ? [at(biases[i] > 0 ? 5.25 : 1.75, 0)[0], p[1]] as LonLat : null));
+  });
+  const x = (p: LonLat) => (p[0] - 127.0276) * 111_320 * Math.cos((37.4979 * Math.PI) / 180);
+  const y = (p: LonLat) => (p[1] - 37.4979) * 111_320;
+  const north = moved.path.filter((p) => y(p) < 599);
+  assert.ok(north.length > 15, `${north.length} points north`);
+  for (const p of north) {
+    if (y(p) >= 300 && y(p) < 590) assert.ok(Math.abs(x(p) - 5.25) < 0.01, `in the right lane 300 m out: ${y(p)} ${x(p)}`);
+    if (y(p) < 230) assert.ok(Math.abs(x(p) - 1.75) < 0.6, `the through lane before: ${y(p)} ${x(p)}`);
+  }
+  assert.ok(asked.some((b) => b === 1) && asked[0] === 0);
+  assert.equal(moved.segments[0].to, moved.path.length - 2, "the corner's vertex moved on with the points put in before it");
+  assert.equal(moved.segments[1].to, moved.path.length);
 });

@@ -82,7 +82,7 @@ docker compose up -d --build   # NUC: nav · osrm (caddy 는 주석 처리, HTTP
 전용 차로), 지도에 차선 · 노면표시, 신호등 · 방지턱 보강, 보호구역의 도로 폭 판정. **없어도 내비는 그대로 동작한다** — 경로선은 업체가
 준 선(코너는 둥글게), 차로 카드는 방향만, 신호등 · 방지턱은 공공데이터로.
 
-가공한 결과물(`lanes.db`, `hdmap.mbtiles`, `*.geojsons`)은 국토지리정보원 자료의 2차 가공물이라 **저장소에 넣지 않는다**. 쓰려면 각자 받아 만든다:
+가공한 결과물(`lanes.db`, `arrows.db`, `hdmap.mbtiles`, `*.geojsons`)은 국토지리정보원 자료의 2차 가공물이라 **저장소에 넣지 않는다**. 쓰려면 각자 받아 만든다:
 
 1. [국토정보플랫폼 → 정밀도로지도 공개](https://map.ngii.go.kr/ms/pblictn/precise)에서 회원 가입 후 필요한 노선 · 지역의 zip 을 신청 · 내려받는다
    (전국 약 670개, 500 GB 남짓 — 사는 지역 · 자주 가는 도로만 받아도 된다).
@@ -92,7 +92,7 @@ docker compose up -d --build   # NUC: nav · osrm (caddy 는 주석 처리, HTTP
    python3 tools/hdmap/build.py /mnt/data/hdmap /mnt/data/webnavi/hdmap            # 전부
    python3 tools/hdmap/build.py /mnt/data/hdmap /mnt/data/webnavi/hdmap --only 여의도,동작   # 일부만
    ```
-   결과가 서버의 `WORK_DIR/hdmap`(도커에선 `/work/hdmap`)에 생기면 서버가 한 시간 안에 알아서 읽는다(`lanes.db` 는 처음 한 번 색인).
+   결과가 서버의 `WORK_DIR/hdmap`(도커에선 `/work/hdmap`)에 생기면 서버가 한 시간 안에 알아서 읽는다(`lanes.db` 는 처음 한 번 색인, 노면 화살표 `arrows.db` 는 `marks.geojsons` 에서 몇 초).
    잘린 다운로드는 끝에 이름을 알려 주고 나머지는 그대로 만든다.
 
 같은 방식으로 **표준노드링크**(자체 경로, 아래)도 선택이다. 없으면 `docker compose` 의 `osrm` 서비스는 빼고, `KOREA_OSRM_URL` 을 비운다

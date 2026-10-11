@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
+import { ArrowIndex } from "./arrows.js";
 import { AFTER_POINTS, LaneIndex, lanesAlong, type Turn } from "./lanes.js";
 import type { LonLat } from "./route/types.js";
 
@@ -78,9 +79,15 @@ export let hdLanes: LaneIndex | null = null;
 export function registerHdmap(app: FastifyInstance, workDir: string) {
   const tiles = new HdTiles(join(workDir, "hdmap", "hdmap.mbtiles"));
   // The lane links' index, built beside them when a new links file comes (checked hourly).
-  const lanes = new LaneIndex(join(workDir, "hdmap", "links.geojsons"), join(workDir, "hdmap", "lanes.db"), (m) => app.log.info(m));
+  // The arrows painted on the lanes, read first for where each lane at a stop line goes: arrows.db, built
+  // beside the road markings (marks.geojsons) when a newer one comes, or put there ready-made.
+  const arrows = new ArrowIndex(join(workDir, "hdmap", "marks.geojsons"), join(workDir, "hdmap", "arrows.db"), (m) => app.log.info(m));
+  const lanes = new LaneIndex(join(workDir, "hdmap", "links.geojsons"), join(workDir, "hdmap", "lanes.db"), (m) => app.log.info(m), arrows);
   hdLanes = lanes;
-  const refresh = () => void lanes.refresh().catch((e) => app.log.warn({ err: (e as Error).message }, "lanes index"));
+  const refresh = () => {
+    void lanes.refresh().catch((e) => app.log.warn({ err: (e as Error).message }, "lanes index"));
+    void arrows.refresh().catch((e) => app.log.warn({ err: (e as Error).message }, "arrows index"));
+  };
   refresh();
   setInterval(refresh, 3_600_000).unref();
   // The lanes at the junction ahead: at=lon,lat of the guide, in=heading into it, way=the provider's turn,

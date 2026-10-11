@@ -24,6 +24,8 @@ import type { Guide, LonLat, Route } from "./types";
  */
 export const OFF_M = 35;
 export const OFF_S = 3;
+/** Within this of the route's start the car's heading against the road calls nothing off (feed: aligned). */
+export const START_GRACE_M = 80;
 export const OFF_FAR_M = 60;
 export const OFF_FAR_S = 1;
 /** A fix believed for OFF_FAR_M: GPS between towers can put one 60 m out. */
@@ -42,6 +44,24 @@ const PREDICT_S = 2.5;
 const CATCH_UP_S = 1.2;
 /** The closing never adds or takes more than this share of the car's speed: a fix's wander must not be felt as a surge. */
 const CATCH_UP_SHARE = 0.3;
+/**
+ * Stopping: the drawn car is carried on by the fixes' speed and pulled to their place at only a share of it, and as the
+ * speed came to nothing it stood 4 m past the fixes (12 m at most) on 2026-10-11, crept back at 0.5 m/s and then leapt
+ * the rest. Ahead of the fixes below SLOW_MPS it may be pulled back by a larger share; below CRAWL_MPS it closes on them
+ * with a time constant alone, inside a deadband that leaves a standing car's last metre of wander alone.
+ */
+const SLOW_MPS = 5;
+const SLOW_SHARE = 0.6;
+const CRAWL_MPS = 1.5;
+const CRAWL_CATCH_UP_S = 0.8;
+const STAND_DEADBAND_M = 1.2;
+/**
+ * Standing: the car's browser sends no fix while the car does not move (2026-10-11: 177 silences of 2 s and more at
+ * lights, the fix after each at the same place to 0.2 m). Below STAND_MPS by the fixes and the car, and the car's own
+ * distance since the last fix under STAND_MOVED_M, the silence is no tunnel: nothing is reckoned, the marker stays.
+ */
+const STAND_MPS = 0.5;
+const STAND_MOVED_M = 3;
 /** Off the road with the car's figures gone too, the marker is carried on no further than this. */
 const FREE_BEYOND_MAX_M = 300;
 /** A fix this far from the drawn car (a leap) is taken at once, not slid to. */
@@ -286,7 +306,10 @@ export class Tracker {
       this.lastProj = proj;
       // Snapped only when close and pointing the road's way; a car on a
       // parallel street is not on this road.
-      const aligned = fix.course == null || angleBetween(fix.course, proj.bearing) < 60 || (fix.speed ?? 0) < 2;
+      // Near the route's start the way the car points is no test: out of a car park it may well leave the other way
+      // first (2026-10-11: re-routed at 10 m off and 3 m/s, then again 5 s later, "좌회전 그리고 우회전" and its
+      // opposite one after the other). Off by distance still counts there.
+      const aligned = fix.course == null || angleBetween(fix.course, proj.bearing) < 60 || (fix.speed ?? 0) < 2 || proj.alongM < START_GRACE_M;
       if (proj.offM <= OFF_M && aligned) {
         target = proj.at;
         // The glide from where the car is drawn along the road to this fix's place on it (a first fix, or one
@@ -403,7 +426,18 @@ export class Tracker {
     // (its entrance). A sharper fix still moves it (feed), from here.
     if (parked && !this.wasParked && this.shownAt) {
       this.glideFrom = this.glideTo = this.shownAt;
-      if (this.shownAlong != null) { this.glideFromAlong = this.glideToAlong = this.shownAlong; this.reckonAlong = this.shownAlong; }
+      if (this.shownAlong != null) {
+        // A slide still going (into a reckoning that put the car back at its last fix, say) is finished, not cut: the
+        // car is held where the slide was taking it, and the rest of it goes on (the snapBase slide in the follow).
+        const left = now < this.snapUntil ? this.snapMiss * (1 - smooth(Math.min(1, (now - this.snapStart) / (this.snapS * 1000)))) : 0;
+        const hold = this.shownAlong - left;
+        this.glideFromAlong = this.glideToAlong = hold;
+        this.reckonAlong = hold;
+        if (left && this.line) {
+          this.snapBase = hold;
+          this.glideFrom = this.glideTo = this.line.place(hold).at;
+        }
+      }
       this.reckonSince = 0;
       this.reckonFree = false;
     }
@@ -412,7 +446,10 @@ export class Tracker {
     // Only a car really moving (or that says how it moves), on a route, and for a tunnel's length: past that it waits for a fix.
     // The placeless fixes still coming: the car's speed is known, whatever it is (a stop in a tunnel stands still).
     const byFix = lost && !parked && this.vagueAt > 0 && now - this.vagueAt < VAGUE_FRESH_MS;
-    const reckon = lost && !parked && (byFix || (lostForS <= (byCar ? RECKON_CAR_MAX_S : RECKON_MAX_S) && (byCar != null || this.speedMps >= RECKON_MIN_MPS)));
+    // Standing where the last good fix put it (STAND_MPS): the silence is the browser's at a standstill, not a tunnel.
+    const standing = lost && !byFix && byCar != null && this.lastFix.accM <= LOST_ACC_M && this.speedMps < STAND_MPS
+      && byCar.m < STAND_MOVED_M && (this.car!.lastSpeed() ?? 0) < STAND_MPS;
+    const reckon = lost && !parked && !standing && (byFix || (lostForS <= (byCar ? RECKON_CAR_MAX_S : RECKON_MAX_S) && (byCar != null || this.speedMps >= RECKON_MIN_MPS)));
     // Off the road (no route, or declared off it) — a terminal, a car park — only on the car's word, and only where
     // its heading or its own idea of its place is seen to live on without the fixes (car-track.ts freePath).
     const free = lost && !parked && this.car && (!this.line || this.declaredOff) && lostForS <= RECKON_CAR_MAX_S ? this.car.freePath(this.fixWall, wallNow) : null;
@@ -423,7 +460,8 @@ export class Tracker {
       // Reckoning: advance along the route from the place the last fix put us, by the car's own distance — and
       // past where it stops (the link gone too), at the speed it last said — or, without it, at the last fix's speed.
       mode = "reckoning";
-      if (this.reckonSince === 0) this.reckonSince = now;
+      const entering = this.reckonSince === 0;
+      if (entering) this.reckonSince = now;
       // The placeless fixes first: as good as the car's stream, and there where it stalls (the car's link gone in the
       // tunnel, its last speed was held at 25 m/s while the car slowed to 18). Then the stream; then the speed held.
       this.reckonBy = byFix ? "fix" : byCar ? "car" : "speed";
@@ -433,6 +471,17 @@ export class Tracker {
         : byCar
           ? this.reckonAlong + byCar.m + this.reckonSpeed(this.car!.lastSpeed() ?? this.speedMps) * (Math.max(0, wallNow - byCar.through) / 1000)
           : this.reckonAlong + this.reckonSpeed() * ((now - this.lastFixAt) / 1000);
+      // Into the reckoning from where the car is drawn, not from the last fix's place: the difference (a stop's overrun,
+      // the catch-up not done) is eased out as a slide out of one is, not taken in a frame (a 10.9 m leap back at a light,
+      // 2026-10-11).
+      if (entering && this.shownAlong != null && Math.abs(this.shownAlong - ahead) > 0.3 && Math.abs(this.shownAlong - ahead) <= LEAP_M) {
+        this.snapStart = now;
+        this.snapMiss = this.shownAlong - ahead;
+        const smoothS = (1.5 * Math.abs(this.snapMiss)) / (SNAP_SPEED_SHARE * Math.max(this.speedMps, 3));
+        this.snapS = smoothS <= SNAP_MAX_S ? Math.max(SNAP_S, smoothS) : SNAP_MAX_S;
+        this.snapUntil = now + this.snapS * 1000;
+        this.snapBase = null;
+      }
       // A slide out of the last reckoning still going (its miss not yet all taken out) goes on over this one: the fixes
       // falling silent again inside a long slide must not drop what is left of it at once.
       const sliding = now < this.snapUntil ? this.snapMiss * (1 - smooth(Math.min(1, (now - this.snapStart) / (this.snapS * 1000)))) : 0;
@@ -475,10 +524,17 @@ export class Tracker {
         const follow = (from: number) => {
           let a = since > PREDICT_S ? Math.max(from, Math.min(predicted, from + this.speedMps * dt)) : from + this.speedMps * dt;
           const gap = predicted - a;
+          if (Math.abs(gap) > LEAP_M) return a + gap;
+          // Crawling or standing: closed with a time constant alone, a standing car's last metre of wander left be.
+          if (this.speedMps < CRAWL_MPS) {
+            if (this.speedMps < STAND_MPS && Math.abs(gap) < STAND_DEADBAND_M) return a;
+            return a + gap * (1 - Math.exp(-dt / CRAWL_CATCH_UP_S));
+          }
           const close = gap * (1 - Math.exp(-dt / CATCH_UP_S));
-          const most = Math.max(0.5, this.speedMps * CATCH_UP_SHARE) * dt;
-          a += Math.abs(gap) > LEAP_M ? gap : Math.max(-most, Math.min(most, close));
-          return a;
+          // Ahead of the fixes while slowing: pulled back by more of the speed, so the car stops where they stop.
+          const share = gap < 0 && this.speedMps < SLOW_MPS ? SLOW_SHARE : CATCH_UP_SHARE;
+          const most = Math.max(0.5, this.speedMps * share) * dt;
+          return a + Math.max(-most, Math.min(most, close));
         };
         let along: number;
         if (now < this.snapUntil && this.snapBase != null) {

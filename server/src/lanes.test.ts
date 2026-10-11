@@ -120,11 +120,25 @@ test("a route vertex is moved onto one lane running its way — a through lane, 
   const [north, south, away, right] = index.snap([at(0, 50), at(0, 50), at(300, 50), at(0, 50)], [0, 180, 0, 0], [0, 0, 0, 1]);
   const xOf = (p: LonLat) => (p[0] - O[0]) * M * Math.cos((O[1] * Math.PI) / 180);
   // On a lane, never between two (the line was drawn on the paint between 2차로 and 3차로).
-  assert.ok(north && Math.abs(xOf(north) - 1.75) < 0.05, `northbound, going on → its first lane: ${north && xOf(north)}`);
+  assert.ok(north && Math.abs(xOf(north) - 5.25) < 0.05, `northbound on two lanes, going on → 2차로, not the left-turn and overtaking lane: ${north && xOf(north)}`);
   assert.ok(right && Math.abs(xOf(right) - 5.25) < 0.05, `northbound, a right turn ahead → the right lane: ${right && xOf(right)}`);
   // The southbound lanes are not each other's neighbours in this map: the nearest alone.
   assert.ok(south && Math.abs(xOf(south) + 1.75) < 0.05, `southbound → its nearest lane: ${south && xOf(south)}`);
   assert.equal(away, null);
+});
+
+test("with no turn ahead the line takes a through lane: 2차로 of two, the middle of three, left of the middle of four; a left turn ahead, 1차로", async () => {
+  // Lanes north at x = 1.75 + 3.5k, neighbours of each other, for three roads apart: two lanes, three, four.
+  const road = (id: string, x0: number, n: number) => Array.from({ length: n }, (_, k) =>
+    link({ id: `A219D${id}${k}`, lane: k + 1, a: `${id}0`, b: `${id}${k + 1}`, l: k > 0 ? `A219D${id}${k - 1}` : null, r: k + 1 < n ? `A219D${id}${k + 1}` : null },
+      [[x0 + 1.75 + 3.5 * k, -100], [x0 + 1.75 + 3.5 * k, 100]]));
+  const index = await indexOf([...road("200", 0, 2), ...road("300", 1000, 3), ...road("400", 2000, 4)]);
+  const xOf = (p: LonLat) => (p[0] - O[0]) * M * Math.cos((O[1] * Math.PI) / 180);
+  const [two, three, four, twoLeft] = index.snap([at(0, 0), at(1000, 0), at(2000, 0), at(0, 0)], [0, 0, 0, 0], [0, 0, 0, -1]);
+  assert.ok(two && Math.abs(xOf(two) - 5.25) < 0.05, `two lanes → 2차로: ${two && xOf(two)}`);
+  assert.ok(three && Math.abs(xOf(three) - 1005.25) < 0.05, `three → 2차로: ${three && xOf(three)}`);
+  assert.ok(four && Math.abs(xOf(four) - 2005.25) < 0.05, `four → 2차로: ${four && xOf(four)}`);
+  assert.ok(twoLeft && Math.abs(xOf(twoLeft) - 1.75) < 0.05, `two, a left turn ahead → 1차로: ${twoLeft && xOf(twoLeft)}`);
 });
 
 test("an exit ramp just parted from the motorway is its own road: the line stays on it, not taken back to the motorway's middle", async () => {

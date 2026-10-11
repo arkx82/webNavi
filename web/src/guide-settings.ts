@@ -105,7 +105,7 @@ export interface GuideSettings {
 export type Mode = "voice" | "show" | "off";
 
 export const DEFAULTS: GuideSettings = {
-  voice: true, voiceName: null, volume: 1, turns: true, junctionNames: true, laneHints: true, merges: true, closeups: true, sendLogs: true, layout: "classic", hdLanes: true, hdLanesWhen: "turns", laneGuide: true, colorLines: true, theme: "auto", nightCity: false, carIcon: "tesla", carPaint: PAINTS[0][0], endOnArrive: true, mapDpr: "auto", followFps: "auto", ducking: "soft", fasterRoute: "ask", avoidSchool: false, carData: "auto", rev: 3, uiScale: 1, lightsOnMap: "route", camerasOnMap: "route", nextLight: true, flashSignals: true,
+  voice: true, voiceName: null, volume: 1, turns: true, junctionNames: true, laneHints: true, merges: true, closeups: true, sendLogs: true, layout: "classic", hdLanes: true, hdLanesWhen: "turns", laneGuide: true, colorLines: true, theme: "auto", nightCity: false, carIcon: "model3d", carPaint: PAINTS[0][0], endOnArrive: true, mapDpr: "auto", followFps: "auto", ducking: "soft", fasterRoute: "ask", avoidSchool: false, carData: "auto", rev: 4, uiScale: 1, lightsOnMap: "route", camerasOnMap: "route", nextLight: true, flashSignals: true,
   cameras: true, cameraFromM: 600, sections: true, schools: true,
   bumps: "show", curves: "off", accidents: "show", bikeAccidents: "show",
   overspeed: true, overspeedBy: 0,
@@ -156,6 +156,13 @@ export function migrate(s: GuideSettings): GuideSettings {
   if ((s.rev ?? 1) < 3) {
     if (s.curves === "show") s.curves = "off";
     s.rev = 3;
+  }
+  // rev 4 (2026-10-11): the car in 3D by default — the flat picture looked wrong on the tilted map. One left at the old
+  // default (the Model Y L picture) becomes 3D; the arrow or one's own photo is kept. Without the model on the server
+  // 3D is drawn as the picture anyway (main.ts).
+  if ((s.rev ?? 1) < 4) {
+    if (s.carIcon === "tesla") s.carIcon = "model3d";
+    s.rev = 4;
   }
   return s;
 }
@@ -274,7 +281,7 @@ const GROUPS: Group[] = [
   ] },
   { id: "display", title: "디스플레이", sub: "테마 · 자차 · 배치 · 크기 · 해상도", rows: [
     { key: "theme", label: "화면 테마", kind: "choice", options: [["auto", "자동 (해 기준)"], ["light", "밝게"], ["dark", "어둡게"]], sub: "밤에는 바탕 지도도 어둡게" },
-    { key: "carIcon", label: "자차 모양", kind: "choice", options: [["tesla", "Model Y L"], ["arrow", "화살표"], ["photo", "내 사진"]], sub: "지도 위 내 차를 지도와 같은 축척, 실제 차 크기(4.98 × 1.92 m)로. 내 사진: 서버 설정 폴더의 car-icon.png (위에서 본 모습, 앞이 위)" },
+    { key: "carIcon", label: "자차 모양", kind: "choice", options: [["model3d", "3D"], ["tesla", "Model Y L"], ["arrow", "화살표"], ["photo", "내 사진"]], sub: "지도 위 내 차를 지도와 같은 축척, 차로 폭에 맞춰. 3D: 서버 설정 폴더의 car-model.glb (기울인 지도에서 입체로 서 있음 · 3D 모델: BloxBloger · Sketchfab, CC BY-NC 4.0). 내 사진: 서버 설정 폴더의 car-icon.png (위에서 본 모습, 앞이 위)" },
     { key: "carPaint", label: "차 색", kind: "choice", options: PAINTS, sub: "Model Y L 모양일 때의 색" },
     { key: "layout", label: "화면 배치", kind: "choice", options: [["classic", "기본"], ["mini", "미니"]], sub: "미니: 왼쪽 창을 좁게, 시계 · 다음 신호등 · 그다음 안내는 숨김" },
     { key: "uiScale", label: "화면 크기", kind: "choice", options: [[0.85, "작게"], [1, "보통"], [1.15, "크게"], [1.3, "더 크게"]], sub: "패널 · 카드 · 버튼의 크기 (지도는 그대로). 기기마다 화면 픽셀 크기가 달라 글씨가 크거나 작게 보일 때" },

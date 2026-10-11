@@ -205,6 +205,15 @@ export class Speaker {
       } catch { /* the first take stands */ }
       repaired = true;
     }
+    // Its first syllable drawn out ("삼~백미터 앞에서", an older model's habit — 64 of Cherry's kept sentences, 2026-10-11):
+    // asked once more on the same model, and the take with the shorter first syllable kept.
+    if (model && firstSyllableMs(wav) > DRAWN_OUT_MS) {
+      const tier = CHAIN.find((t) => t.model === model)!;
+      try {
+        const again = tightenWav(await this.render(key, tier, text, voice));
+        if (!isClipped(again) && firstSyllableMs(again) < firstSyllableMs(wav)) wav = again;
+      } catch { /* the first take stands */ }
+    }
     // Kept under the voice it is in: a model with few voices speaks Sohee's sentence as Cherry, and filed as Sohee's
     // it stayed Cherry for good (92 such, 2026-10-02) — filed as Cherry's, Sohee's is asked again next time.
     const tier = CHAIN.find((t) => t.model === model);
@@ -214,6 +223,40 @@ export class Speaker {
     if (repaired) this.ledger?.repaired?.(this.fileFor(text, 2, spoken));
     return wav;
   }
+}
+
+/** A sentence's first syllable longer than this is drawn out: a plain one is 150–280 ms, a drawn-out "삼" 360–650. */
+export const DRAWN_OUT_MS = 320;
+/**
+ * How long a sentence's first syllable sounds, ms: its loudness in 10 ms steps (smoothed over 50 ms), from where it
+ * starts to the first dip between syllables (a low point of its ±40 ms that the speech before it is 1.6 times over); 0 where
+ * no such dip is found.
+ */
+export function firstSyllableMs(wav: Buffer): number {
+  const parsed = pcmOfWav(wav);
+  if (!parsed) return 0;
+  const { pcm, rate } = parsed;
+  const n = Math.floor(pcm.length / 2), hop = Math.max(1, Math.floor(rate / 100));
+  const e: number[] = [];
+  for (let i = 0; i + hop <= n; i += hop) {
+    let sum = 0;
+    for (let k = 0; k < hop; k++) { const v = pcm.readInt16LE((i + k) * 2); sum += v * v; }
+    e.push(Math.sqrt(sum / hop));
+  }
+  const sm = e.map((_, i) => { const w = e.slice(Math.max(0, i - 2), i + 3); return w.reduce((a, b) => a + b, 0) / w.length; });
+  const top = Math.max(0, ...sm);
+  const on = sm.findIndex((v) => v > top * 0.08);
+  if (on < 0) return 0;
+  let loudest = 0;
+  for (let i = on; i < sm.length - 4; i++) {
+    loudest = Math.max(loudest, sm[i]);
+    if (i - on < 6 || i < 4) continue;
+    // A dip between syllables: the low point of its ±40 ms, well under the speech before it, and the next syllable
+    // rising again after it (a sentence fading out at its end has no such rise).
+    if (sm[i] <= Math.min(...sm.slice(i - 4, i + 5)) && loudest > sm[i] * 1.6 && Math.max(...sm.slice(i + 1, i + 9)) > sm[i] * 1.3) return (i - on) * 10;
+  }
+  // No dip between syllables found (one held sound, a test's tone): nothing to judge by.
+  return 0;
 }
 
 /** The loudest sample of a sentence, and the loudest in its last 30 ms. */

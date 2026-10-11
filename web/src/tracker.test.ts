@@ -545,3 +545,49 @@ test("a slide still going when the fixes fall silent again carries on over the n
   for (const end = t + 4000; t <= end; t += 16) { const now = drawn(); most = Math.max(most, Math.abs(now - was)); was = now; }
   assert.ok(most < 1, `largest step a frame ${most.toFixed(2)} m`);
 });
+
+test("stopping at a light with the fixes falling silent: the car stands where the fixes stopped — no overrun, no reckoning, no leap", () => {
+  const tracker = new Tracker();
+  tracker.setRoute(route);
+  const car = new CarTrack();
+  tracker.car = car;
+  // 12 m/s slowing to a stop over 6 s at 300 m; the fixes ten a second, the car's speed every 0.5 s; then 20 s of
+  // nothing from the browser (it sends no fix while the car stands), the car saying 0 all the while.
+  const along = (t: number) => (t < 6000 ? 300 - 12 * ((6000 - t) / 1000) + 1 * ((6000 - t) / 1000) ** 2 : 300);
+  const speed = (t: number) => (t < 6000 ? 12 - 2 * (t / 1000) : 0);
+  let t = 0;
+  for (; t <= 6000; t += 16) {
+    if (t % 100 < 16) tracker.feed(fix(offset(start, 0, along(t)), t, { speed: speed(t) }), t);
+    if (t % 500 < 16) car.add({ t, speedMps: speed(t) }, t);
+    tracker.frame(t);
+  }
+  const drawn = () => { const at = tracker.frame(t)!.at; return metres(start[0], start[1], at[0], at[1]); };
+  let most = 0, was = drawn(), past = 0;
+  for (const end = t + 20_000; t <= end; t += 16) {
+    if (t % 500 < 16) car.add({ t, speedMps: 0 }, t);
+    const now = drawn();
+    assert.notEqual(tracker.frame(t)!.mode, "reckoning");
+    most = Math.max(most, Math.abs(now - was));
+    past = Math.max(past, now - 300);
+    was = now;
+  }
+  assert.ok(most < 0.2, `largest step a frame ${most.toFixed(2)} m`);
+  assert.ok(past < 2.5, `stood ${past.toFixed(1)} m past the fixes`);
+});
+
+test("out of a car park the other way at the route's start: no off-route call for the heading alone; further on the heading counts again", () => {
+  const offs: number[] = [];
+  const at = (m: number, side = 10) => offset(offset(start, 0, m), 90, side);
+  // 20 m up the road and 10 m beside it, pointing the other way (course 180) at 3 m/s, for 6 s: still at the start.
+  const near = new Tracker();
+  near.setRoute(route);
+  near.onOffRoute = () => offs.push(1);
+  for (let t = 0; t <= 6000; t += 200) { near.feed(fix(at(20), t, { speed: 3, course: 180 }), t); near.frame(t); }
+  assert.equal(offs.length, 0);
+  // The same 500 m on: off the route.
+  const far = new Tracker();
+  far.setRoute(route);
+  far.onOffRoute = () => offs.push(2);
+  for (let t = 0; t <= 6000; t += 200) { far.feed(fix(at(500), t, { speed: 3, course: 180 }), t); far.frame(t); }
+  assert.deepEqual(offs, [2]);
+});

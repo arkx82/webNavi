@@ -368,3 +368,173 @@ test("a stretch's start the route passes going across, never nearer its end (영
   assert.deepEqual(watch.sections(), []);
   assert.equal(watch.limitAt(1700), null);
 });
+
+/** [m] metres along the route's northbound leg, [side] metres east of it. */
+const north_ = (m: number, side = 0) => offset(offset(start, 0, m), 90, side);
+
+test("a camera at a junction put on the other carriageway and a side road is the other way's; one on a side road alone, or on both ways, is kept", () => {
+  const watch = new RouteWatch(route);
+  watch.add([
+    // 운천제2교차로's northbound camera met going south (2026-10-11): 호국로 the other way, and a side road.
+    { id: "junction-theirs", kind: "speed", ...lonLat(north_(300, 8)), limit: 70, ways: [{ deg: 180, at: north_(300, 8) }, { deg: 90, at: north_(300, 4) }] },
+    // The side road alone (a road across, 45–135° off the route): says nothing either way.
+    { id: "side-only", kind: "speed", ...lonLat(north_(500, 8)), limit: 70, ways: [{ deg: 90, at: north_(500, 6) }] },
+    { id: "both-ways", kind: "speed", ...lonLat(north_(700, 4)), limit: 70, ways: [{ deg: 0, at: north_(700, 2) }, { deg: 180, at: north_(700, 6) }] },
+  ]);
+  assert.deepEqual(watch.ahead(0).map((a) => a.feature.id), ["side-only", "both-ways"]);
+});
+
+test("two rows of one camera give one limit whichever comes first: the row on our carriageway's, else the lower", () => {
+  const rows = (a: Feature, b: Feature) => {
+    const watch = new RouteWatch(route);
+    watch.add([a, b]);
+    return watch.ahead(0).map((x) => `${x.feature.kind} ${x.feature.limit}`);
+  };
+  const eighty: Feature = { id: "80", kind: "speed", ...lonLat(north_(600, 3)), limit: 80 };
+  const seventy: Feature = { id: "70", kind: "speed", ...lonLat(north_(603, 3)), limit: 70 };
+  assert.deepEqual(rows(eighty, seventy), ["speed 70"]);
+  assert.deepEqual(rows(seventy, eighty), ["speed 70"]);
+  // The 80 stands on our carriageway, the 70 only on the cross street: the 80 is ours.
+  const ours = { ...eighty, ways: [{ deg: 0, at: north_(600, 2) }] };
+  const across = { ...seventy, ways: [{ deg: 90, at: north_(603, 5) }] };
+  assert.deepEqual(rows(ours, across), ["speed 80"]);
+  assert.deepEqual(rows(across, ours), ["speed 80"]);
+  // A signal row's limit gives way to a speed row's.
+  assert.deepEqual(rows({ ...seventy, kind: "signal", limit: 60 }, eighty), ["speed-signal 80"]);
+});
+
+test("two speed cameras 77 m apart with two limits are one warning at the first, with the lower (민락, 2026-10-11)", () => {
+  const watch = new RouteWatch(route);
+  watch.add([
+    { id: "sixty", kind: "speed", ...lonLat(north_(500, 3)), limit: 60 },
+    { id: "fifty", kind: "speed", ...lonLat(north_(577, 3)), limit: 50 },
+    // The same limit 100 m on: its own warning, as before.
+    { id: "fifty-again", kind: "speed", ...lonLat(north_(677, 3)), limit: 50 },
+  ]);
+  const ahead = watch.ahead(0);
+  assert.deepEqual(ahead.map((a) => [a.feature.limit, Math.round(a.alongM)]), [[50, 500], [50, 677]]);
+  const due = watch.due(0);
+  assert.deepEqual(due.map((d) => phraseFor(d)), ["육백미터 앞에 과속 단속 카메라가 있습니다, 제한 속도 오십입니다"]);
+  assert.equal(watch.limitAt(0)?.limit, 50);
+});
+
+test("a camera its site puts 400 m before the junction is not merged with the junction's signal camera at its point (양문사거리)", () => {
+  const watch = new RouteWatch(route);
+  watch.add([
+    { id: "F6124", kind: "signal", ...lonLat(north_(800, 3)), limit: 80 },
+    { id: "F6204", kind: "speed", ...lonLat(north_(800, 3)), limit: 80, beforeM: 400 },
+  ]);
+  assert.deepEqual(watch.ahead(0).map((a) => a.feature.kind).sort(), ["signal", "speed"]);
+});
+
+test("a 구간 단속 start with its pair is judged by its pair, not by the carriageway its point is on; it ends where the route leaves the motorway", () => {
+  // The route north on a motorway for its first 700 m (vertices 0–14), then off it and on, then east.
+  const motorway: Route = { ...route, motorways: [[0, 14]] };
+  const southStart: Feature = { id: "start", kind: "section-start", ...lonLat(north_(300, 30)), limit: 80, direction: "1",
+    // Its point on the other carriageway's line (동부간선's 상계 start, J8831), its end 3 km on the way we go.
+    ways: [{ deg: 180, at: north_(300, 30) }], pair: north_(3300, 0) };
+  const watch = new RouteWatch(motorway);
+  watch.add([southStart]);
+  const [s] = watch.sections();
+  assert.equal(s?.feature.id, "start");
+  assert.ok(Math.abs(s.alongM - 300) < 5 && Math.abs(s.endM - 700) < 5, `${s.alongM}–${s.endM}`);
+  assert.deepEqual(watch.limitAt(500), { limit: 80, why: "section" });
+  assert.notEqual(watch.limitAt(800)?.why, "section");
+  // Its end behind the car (the route the other way along the road): no stretch, said or shown.
+  const behind = new RouteWatch(motorway);
+  behind.add([{ ...southStart, pair: offset(start, 180, 2700) }]);
+  assert.deepEqual(behind.sections(), []);
+  assert.deepEqual(behind.ahead(0, 2100).map((a) => a.feature.id), []);
+});
+
+test("off the motorways a stretch ends where the route leaves the line from its start to its end", () => {
+  // Start at 100 m, its end 5 km on to the north-north-east: the route bends away at the corner (1 km) to the east,
+  // still nearing the end for a while.
+  const watch = new RouteWatch(route);
+  watch.add([{ id: "start", kind: "section-start", ...lonLat(north_(100, 3)), limit: 60, direction: "1", pair: offset(north_(100), 15, 5000) }]);
+  const [s] = watch.sections();
+  // 0.1 × 5 km = 500 m off the line: some 500–700 m along the east leg, not the 2 km the route goes on nearing it.
+  assert.ok(s && s.endM > 1300 && s.endM < 1800, `${s?.endM}`);
+});
+
+test("a camera the list puts far off its road is where the server put it on its road, if that runs our way (G5870, 143 m off)", () => {
+  const watch = new RouteWatch(route);
+  watch.add([
+    { id: "ours", kind: "speed", ...lonLat(north_(500, 143)), limit: 100, ways: [{ deg: 0, at: north_(500, 2) }] },
+    { id: "theirs", kind: "speed", ...lonLat(north_(800, 143)), limit: 100, ways: [{ deg: 180, at: north_(800, 2) }] },
+    { id: "nowhere", kind: "speed", ...lonLat(north_(900, 143)), limit: 100 },
+  ]);
+  const ahead = watch.ahead(0);
+  assert.deepEqual(ahead.map((a) => a.feature.id), ["ours"]);
+  assert.ok(Math.abs(ahead[0].alongM - 500) < 3);
+});
+
+test("a 보호구역 on a wide road is the road's with a camera of it on the other carriageway, and takes its limit (영중초, 2026-10-11)", () => {
+  const watch = new RouteWatch(route);
+  watch.add([
+    { id: "zone", kind: "school-zone", ...lonLat(north_(300, 36)), ways: [{ deg: -1, at: north_(300, 8), lanes: 3 }] },
+    // Its camera faces the other way (신북->철원): left out as a camera, but the zone is the road's both ways.
+    { id: "cam", kind: "speed", ...lonLat(north_(320, 9)), limit: 50, zone: "school", ways: [{ deg: 180, at: north_(320, 9) }] },
+  ]);
+  const ids = watch.ahead(0, 2100).map((a) => a.feature.id);
+  assert.deepEqual(ids, ["zone"]);
+  assert.deepEqual(watch.limitAt(300), { limit: 50, why: "school" });
+});
+
+/** A speed bump [sideM] east of the north leg [m] along, on a lane of the HD map running [deg] (−1: not known). */
+function bumpOnLane(id: string, m: number, sideM: number, deg: number): Feature {
+  const at = offset(offset(start, 0, m), 90, sideM);
+  return { id, kind: "bump", ...lonLat(at), lane: { deg, at } };
+}
+
+test("a bump on a lane of the HD map is the route's only on the route's lane: not on a road beside it, nor across it", () => {
+  const watch = new RouteWatch(route);
+  watch.add([
+    bumpOnLane("own-lane", 300, 2, 0),
+    // A two-way road's bump on the other way's lane is still the road's.
+    bumpOnLane("other-way-lane", 400, -3.5, 180),
+    bumpOnLane("lane-unknown", 450, 1, -1),
+    // 포천's side lane (5.6 m, the route's way) and 철원's frontage road (12 m): passed at 80–90 km/h, 2026-10-11.
+    bumpOnLane("side-lane", 500, 5.6, 0),
+    bumpOnLane("frontage", 600, 12, 2),
+    // On a road across, 3 m in from the route (the slip road 9.7 m off at 43°, 2026-10-11).
+    bumpOnLane("across", 700, 3, 60),
+  ]);
+  assert.deepEqual(watch.ahead(0, 2000).map((a) => a.feature.id), ["own-lane", "other-way-lane", "lane-unknown"]);
+});
+
+test("a public bump the HD map has no lane for is placed as before, 20 m off; one put on a lane is judged by it", () => {
+  const watch = new RouteWatch(route);
+  const rough = offset(offset(start, 0, 300), 90, 20);
+  const pub = offset(offset(start, 0, 500), 90, 4);
+  watch.add([
+    { id: "town-road", kind: "bump", ...lonLat(rough) },
+    // Its own point 4 m off; the lane it is on (the server's snap) the other carriageway's, 11 m off.
+    { id: "snapped-away", kind: "bump", ...lonLat(pub), lane: { deg: 180, at: offset(offset(start, 0, 500), 90, 11) } },
+  ]);
+  assert.deepEqual(watch.ahead(0, 2000).map((a) => a.feature.id), ["town-road"]);
+});
+
+test("no bump in an underpass: from the guide that enters it to the next guide, UNDERPASS_M at most", () => {
+  const under: Route = {
+    ...route,
+    guides: [
+      { at: offset(start, 0, 200), text: "만가대교차로에서 '동두천, 양주, 포천' 방면으로 왼쪽 지하차도 진입", distanceM: 200, turnType: 64 },
+      { at: corner, text: "우회전", distanceM: 1000, turnType: 2 },
+    ],
+  };
+  const watch = new RouteWatch(under);
+  watch.add([
+    bumpOnLane("before", 150, 1, 0),
+    // NAVER's line on the frontage road over the underpass: the bumps 1–3 m off it (2026-10-11).
+    bumpOnLane("above", 500, 1.5, 0),
+    { id: "above-public", kind: "bump", ...lonLat(offset(offset(start, 0, 800), 90, 15)) },
+    // Past the next guide the underpass is over.
+    { id: "after", kind: "bump", ...lonLat(offset(corner, 90, 300)), lane: { deg: 90, at: offset(corner, 90, 300) } },
+  ]);
+  assert.deepEqual(watch.ahead(0, 2000).map((a) => a.feature.id), ["before", "after"]);
+  // A road beside one ("지하차도 옆길") is not in it.
+  const beside = new RouteWatch({ ...under, guides: [{ ...under.guides[0], text: "지하차도 옆길로 진입" }, under.guides[1]] });
+  beside.add([bumpOnLane("above", 500, 1.5, 0)]);
+  assert.deepEqual(beside.ahead(0, 2000).map((a) => a.feature.id), ["above"]);
+});

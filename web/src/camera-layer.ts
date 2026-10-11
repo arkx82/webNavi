@@ -158,8 +158,10 @@ export class CameraLayer {
         "icon-image": ["get", "icon"],
         "icon-size": ["interpolate", ["exponential", 1.6], ["zoom"], 14, 0.3, 16, 0.55, 18, 0.85],
         "icon-allow-overlap": true,
-        // On the road, not standing up off it: far ones smaller in the tilted view, as the road is.
-        "icon-pitch-alignment": "map",
+        // Standing up on the road, facing the driver, as a signal head does — not lying flat on it, which in the tilted
+        // view read as painted on the asphalt (2026-10-11). Raised by half its height so its foot is at its place.
+        "icon-pitch-alignment": "viewport",
+        "icon-offset": [0, -10],
       },
     }, before);
     // The next camera: a red ring on the road round it, beneath its sign.
@@ -180,13 +182,17 @@ export class CameraLayer {
         // Small as the map draws back, full size close in: a sign the size of a street block at zoom 13 looked adrift.
         // The zoom curve must be the outermost expression (MapLibre drops the layer otherwise); the next one's 1.5 goes in each stop.
         "icon-size": ["interpolate", ["exponential", 1.6], ["zoom"], ...[[12, 0.35], [14, 0.55], [16, 0.8], [18, 1]].flatMap(([z, s]) => [z, ["*", ["case", ["get", "next"], 1.5, 1], s]])] as maplibregl.ExpressionSpecification,
-        "icon-pitch-alignment": "map",
-        "text-pitch-alignment": "map",
+        // Standing on its place facing the driver, as the car apps draw a camera sign (2026-10-11: flat on the road it
+        // read as painted on): raised by half its height (30 css px at pixel ratio 2, times icon-size), the limit on
+        // its face raised by the same — 1.1 em at every zoom, the icon and text sizes keeping one ratio.
+        "icon-pitch-alignment": "viewport",
+        "text-pitch-alignment": "viewport",
+        "icon-offset": [0, -15],
         "icon-allow-overlap": true,
         "text-allow-overlap": true,
         "text-field": ["get", "text"],
         // On the sign's face, which sits a little below the icon's centre under the camera body.
-        "text-offset": [0, 0.35],
+        "text-offset": [0, -0.75],
         "text-font": ["Noto Sans Bold"],
         "text-size": ["interpolate", ["exponential", 1.6], ["zoom"], 12, 5, 14, 7.5, 16, 11, 18, 13],
         "symbol-sort-key": ["get", "z"],

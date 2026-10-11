@@ -25,3 +25,6 @@ hdmap/
 nodelink/
 !tools/hdmap/
 !tools/nodelink/
+
+# Claude Code agents' working copies (git worktrees), not the project.
+.claude/worktrees/

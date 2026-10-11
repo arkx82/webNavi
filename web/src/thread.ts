@@ -214,6 +214,19 @@ const SLOPE_TOL_M = 1;
 /** A bend the snapping put into the line (none this sharp in the provider's) is undone there. */
 const KINK_DEG = 50;
 const KINK_ROUNDS = 3;
+/**
+ * Before a turn the line is snapped at least this often: the providers' vertices are often 100–200 m apart on a
+ * straight, and one of them snapped onto a stray link (or dropped) pulled the line diagonally across the road all
+ * the way back to the last (into 1차로 before a right turn, 2026-10-11 17:52 and 14:00).
+ */
+const DENSE_M = 20;
+/** Where the turn's lane is first asked for, the line moves over to it over this far, not in one step between two vertices. */
+const RAMP_M = 40;
+/** Before a turn, a vertex without a snap of its own (or with one passed over) takes the shift between the snaps either side up to this far apart, on the same road. */
+const BIAS_GAP_M = 200;
+/** Of two runs of snaps that disagree before a turn, one of at least MIN_RUN snaps is a lane of the road; one off the turn's side still beats a shorter one on it with this many times its snaps. */
+const RUN_OUTWEIGHS = 3;
+const MIN_RUN = 3;
 
 /**
  * The route's heading at each vertex: from the nearest different point
@@ -234,6 +247,13 @@ export function headingsOf(path: LonLat[]): number[] {
 }
 
 /**
+ * Which lane each vertex was snapped toward and on which road: [biases] as asked of the server (-1 the turn's lane
+ * on the left, +1 on the right, 0 a through lane), [pieces] a number that changes past each turn's guide — the
+ * road in and the road out are different roads, and their snaps are not weighed against each other.
+ */
+export interface SnapSides { biases?: number[]; pieces?: number[] }
+
+/**
  * [path] moved beside each vertex's snap where there is one and it agrees
  * with its neighbours (only sideways: a lane's nearest point to a vertex
  * on a bend lies metres ahead of or behind it, which would bunch the
@@ -242,14 +262,30 @@ export function headingsOf(path: LonLat[]): number[] {
  * line slides onto the lanes and off them without a jog. [fixed] marks
  * vertices already on a lane (a threaded corner): they stay, and the
  * line slides onto them like onto a snapped one.
+ *
+ * Snaps are weighed against each other only on one road ([sides].pieces)
+ * with one lane asked for ([sides].biases). Before a turn, of two runs of
+ * snaps that disagree, a short one off the turn's side goes (the server was
+ * asked for the turn's lane; the other found a stray link or a ramp), two
+ * long ones both stay; elsewhere, of two neighbours that disagree, the one
+ * nearer the line as drawn stays. A vertex passed over before a turn takes
+ * the shift between the snaps either side, not the provider's line.
  */
-export function applySnap(path: LonLat[], snapped: (LonLat | null)[], fixed: boolean[] = []): LonLat[] {
+export function applySnap(path: LonLat[], snapped: (LonLat | null)[], fixed: boolean[] = [], sides: SnapSides = {}): LonLat[] {
   const n = path.length;
   const headings = headingsOf(path);
   const along: number[] = [0];
   for (let i = 1; i < n; i++) along.push(along[i - 1] + metres(path[i - 1][0], path[i - 1][1], path[i][0], path[i][1]));
   const kx = 111_320 * Math.cos(((path[0]?.[1] ?? 0) * Math.PI) / 180), ky = 111_320;
+  const bias = (i: number) => sides.biases?.[i] ?? 0;
+  const piece = (i: number) => sides.pieces?.[i] ?? 0;
+  const sameRoad = (i: number, j: number) => piece(i) === piece(j) && bias(i) === bias(j);
   const keep = snapped.map((s, i) => (s && !fixed[i] && Number.isFinite(headings[i]) ? s : null));
+  // Where the turn's lane is first asked for on a road, the line moves over to it between the snaps either side of RAMP_M.
+  for (let i = 1, start = -Infinity; i < n; i++) {
+    if (!sameRoad(i, i - 1)) start = piece(i) === piece(i - 1) && bias(i) !== 0 ? along[i] : -Infinity;
+    if (along[i] - start < RAMP_M) keep[i] = null;
+  }
   const bendAt = (q: LonLat[], i: number): number => {
     let a = i - 1, b = i + 1;
     while (a >= 0 && metres(q[a][0], q[a][1], q[i][0], q[i][1]) < 0.3) a--;
@@ -258,8 +294,7 @@ export function applySnap(path: LonLat[], snapped: (LonLat | null)[], fixed: boo
     return Math.abs(((bearing(q[i][0], q[i][1], q[b][0], q[b][1]) - bearing(q[a][0], q[a][1], q[i][0], q[i][1]) + 540) % 360) - 180);
   };
   for (let round = 0; round <= KINK_ROUNDS; round++) {
-    // Each snap's sideways part, in the route's frame there; one out of step with both neighbours (which agree) goes;
-    // then of two neighbours out of step with each other, the one further from the line as drawn.
+    // Each snap's sideways part, in the route's frame there (+ to the right).
     const lateral = keep.map((s, i) => {
       if (!s) return NaN;
       const dx = (s[0] - path[i][0]) * kx, dy = (s[1] - path[i][1]) * ky, h = (headings[i] * Math.PI) / 180;
@@ -268,15 +303,66 @@ export function applySnap(path: LonLat[], snapped: (LonLat | null)[], fixed: boo
     const agree = (i: number, j: number) => Math.abs(lateral[i] - lateral[j]) <= SLOPE * Math.abs(along[i] - along[j]) + SLOPE_TOL_M;
     const have = keep.map((s, i) => (s ? i : -1)).filter((i) => i >= 0);
     const drop = new Set<number>();
+    // One out of step with both neighbours on its road (which agree) goes.
     for (let k = 1; k + 1 < have.length; k++) {
       const a = have[k - 1], i = have[k], b = have[k + 1];
-      if (agree(a, b) && !agree(i, a) && !agree(i, b)) drop.add(i);
+      if (sameRoad(a, i) && sameRoad(i, b) && agree(a, b) && !agree(i, a) && !agree(i, b)) drop.add(i);
     }
-    let last = -1;
+    // Then road by road (the snaps of one road, one lane asked for). Where no turn is near, of two neighbours out of
+    // step with each other the one further from the line as drawn goes. Before a turn, runs of snaps each in step
+    // with the one before: of two side by side, a short one off the turn's side goes (it found a stray link, a ramp,
+    // the middle of a road it read as narrower) — nearer the line was no sign of right there: the snap 14 m over
+    // onto the right lane where the turn was lost to the ramp's next vertex 2 m over, and the line slid into 1차로
+    // (2026-10-11 17:52). Two long runs both stay (a road widening, a lane added): the line steps between them.
+    const roads: number[][] = [];
     for (const i of have) {
       if (drop.has(i)) continue;
-      if (last < 0 || agree(last, i)) { last = i; continue; }
-      if (Math.abs(lateral[i]) > Math.abs(lateral[last])) drop.add(i); else { drop.add(last); last = i; }
+      const road = roads[roads.length - 1];
+      if (road && sameRoad(road[road.length - 1], i)) road.push(i); else roads.push([i]);
+    }
+    for (const road of roads) {
+      const side = bias(road[0]);
+      if (side === 0) {
+        let last = -1;
+        for (const i of road) {
+          if (last < 0 || agree(last, i)) { last = i; continue; }
+          if (Math.abs(lateral[i]) > Math.abs(lateral[last])) drop.add(i); else { drop.add(last); last = i; }
+        }
+        continue;
+      }
+      const runsOf = (ids: number[]) => {
+        const runs: number[][] = [];
+        for (const i of ids) {
+          const run = runs[runs.length - 1];
+          if (run && agree(run[run.length - 1], i)) run.push(i); else runs.push([i]);
+        }
+        return runs;
+      };
+      const mean = (run: number[]) => run.reduce((sum, i) => sum + lateral[i], 0) / run.length;
+      /**
+       * Of two runs side by side, the one that goes; null when both stay. A run of MIN_RUN snaps or more is a lane
+       * the road has there (dropped, the line cut diagonally over the lanes from the snaps before to those after it):
+       * it goes only against a run on the turn's side, and stays beside one; a shorter one on the turn's side goes
+       * only beside a run of RUN_OUTWEIGHS times its snaps.
+       */
+      const loserOf = (a: number[], b: number[]): number[] | null => {
+        if (a.length >= MIN_RUN && b.length >= MIN_RUN) return null;
+        const [toward, other] = side * mean(a) >= side * mean(b) ? [a, b] : [b, a];
+        if (other.length < MIN_RUN) return other;
+        return other.length >= RUN_OUTWEIGHS * toward.length ? toward : null;
+      };
+      let ids = road;
+      for (let runs = runsOf(ids); runs.length > 1; runs = runsOf(ids)) {
+        let loser: number[] | null = null;
+        for (let k = 0; k + 1 < runs.length; k++) {
+          const l = loserOf(runs[k], runs[k + 1]);
+          if (l && (!loser || l.length < loser.length)) loser = l;
+        }
+        if (!loser) break;
+        const gone = new Set(loser);
+        for (const i of gone) drop.add(i);
+        ids = ids.filter((i) => !gone.has(i));
+      }
     }
     for (const i of drop) keep[i] = null;
     const shift: (readonly [number, number] | null)[] = keep.map((s, i) => {
@@ -284,18 +370,29 @@ export function applySnap(path: LonLat[], snapped: (LonLat | null)[], fixed: boo
       const h = (headings[i] * Math.PI) / 180;
       return [(lateral[i] * Math.cos(h)) / kx, (-lateral[i] * Math.sin(h)) / ky] as const;
     });
+    const between = (i: number, before: number, after: number) => {
+      const span = along[after] - along[before], t = span > 0 ? (along[i] - along[before]) / span : 0.5;
+      return [shift[before]![0] + (shift[after]![0] - shift[before]![0]) * t, shift[before]![1] + (shift[after]![1] - shift[before]![1]) * t] as const;
+    };
     const moved = path.map((p, i) => {
       if (shift[i]) return [p[0] + shift[i]![0], p[1] + shift[i]![1]] as LonLat;
+      // Before a turn: between the snaps either side on this road, not back onto the provider's line.
+      if (bias(i) !== 0) {
+        let before = -1, after = -1;
+        for (let j = i - 1; j >= 0 && along[i] - along[j] <= BIAS_GAP_M && piece(j) === piece(i); j--) if (shift[j]) { before = j; break; }
+        for (let j = i + 1; j < n && along[j] - along[i] <= BIAS_GAP_M && piece(j) === piece(i); j++) if (shift[j]) { after = j; break; }
+        if (before >= 0 && after >= 0 && along[after] - along[before] <= BIAS_GAP_M) {
+          const [sx, sy] = between(i, before, after);
+          return [p[0] + sx, p[1] + sy] as LonLat;
+        }
+      }
       let before: number | null = null, after: number | null = null;
       for (let j = i - 1; j >= 0 && along[i] - along[j] <= BLEND_M; j--) if (shift[j]) { before = j; break; }
       for (let j = i + 1; j < n && along[j] - along[i] <= BLEND_M; j++) if (shift[j]) { after = j; break; }
       if (before === null && after === null) return p;
       let sx: number, sy: number;
-      if (before !== null && after !== null) {
-        const span = along[after] - along[before], t = span > 0 ? (along[i] - along[before]) / span : 0.5;
-        sx = shift[before]![0] + (shift[after]![0] - shift[before]![0]) * t;
-        sy = shift[before]![1] + (shift[after]![1] - shift[before]![1]) * t;
-      } else {
+      if (before !== null && after !== null) [sx, sy] = between(i, before, after);
+      else {
         const j = (before ?? after)!, share = 1 - Math.abs(along[i] - along[j]) / BLEND_M;
         sx = shift[j]![0] * share; sy = shift[j]![1] * share;
       }
@@ -318,17 +415,19 @@ export function applySnap(path: LonLat[], snapped: (LonLat | null)[], fixed: boo
 /**
  * The side each vertex's lane is taken on (server lanes.ts snap): -1 the leftmost, +1 the rightmost, 0 a through
  * lane — the lane the next turn wants, from BIAS_TOWN_M before it in town and BIAS_FAST_M on a motorway (where the
- * exit is said from 1 km and the lanes are changed early), as the car apps draw the line in the lane to be in.
+ * exit is said from 1 km and the lanes are changed early), as the car apps draw the line in the lane to be in. The
+ * lane is asked for RAMP_M further back, so the line is over in it by then. In town 300 m, not 250: a turn's lane
+ * is said 300 m out, and at 250 the line came over to it only 250 m out (from 210 m with the ramp), the first
+ * stretch on a two-lane road in the wrong one (the drives of 2026-10-11: 76% of the last 300 m before the 26 turns
+ * with lanes drawn in the turn's lane; 96% with this and the snaps weighed by the turn's side).
  */
-const BIAS_TOWN_M = 250;
+const BIAS_TOWN_M = 300;
 const BIAS_FAST_M = 600;
-function computeBiases(route: Route): number[] {
-  const n = route.path.length;
-  const biases = new Array<number>(n).fill(0);
-  if (!route.guides || route.guides.length === 0 || n < 2) return biases;
-
-  const line = new Line(route.path);
-  const turns: { alongM: number; bias: number; reach: number }[] = [];
+export interface BiasTurn { alongM: number; bias: number; reach: number }
+/** The turns of [route] that want a lane on their side: where they are along [line], which side, and from how far before. */
+export function biasTurns(route: Route, line = new Line(route.path)): BiasTurn[] {
+  const turns: BiasTurn[] = [];
+  if (!route.guides || route.path.length < 2) return turns;
   for (const g of route.guides) {
     const m = maneuverOf(route.provider, g);
     let bias = 0;
@@ -337,42 +436,105 @@ function computeBiases(route: Route): number[] {
     if (bias !== 0) {
       const p = line.project(g.at, 0, line.path.length);
       const fast = route.motorways?.some(([a, b]) => p.segment >= a && p.segment < b) ?? false;
-      turns.push({ alongM: p.alongM, bias, reach: fast ? BIAS_FAST_M : BIAS_TOWN_M });
+      turns.push({ alongM: p.alongM, bias, reach: (fast ? BIAS_FAST_M : BIAS_TOWN_M) + RAMP_M });
     }
   }
-  if (turns.length === 0) return biases;
-
+  return turns.sort((a, b) => a.alongM - b.alongM);
+}
+/** Each vertex of [line]'s side (the next turn's within its reach, else 0) and road (how many turns are behind it). */
+export function sidesAlong(line: Line, turns: BiasTurn[]): Required<SnapSides> {
+  const n = line.path.length;
+  const biases = new Array<number>(n).fill(0), pieces = new Array<number>(n).fill(0);
   for (let i = 0; i < n; i++) {
     const along = line.along[i];
-    const t = turns.find((t) => t.alongM - along >= 0 && t.alongM - along <= t.reach);
+    // The guide's own vertex (projected onto itself, give or take a rounding) is the road in's.
+    pieces[i] = turns.filter((t) => t.alongM + 0.5 < along).length;
+    const t = turns.find((t) => t.alongM - along >= -0.5 && t.alongM - along <= t.reach);
     if (t) biases[i] = t.bias;
   }
-  return biases;
+  return { biases, pieces };
 }
+
+/**
+ * [path] with points put in along [stretches] (from, to along it, in metres) so that none there is further than
+ * DENSE_M from the next, and one at each stretch's start; not between two [fixed] vertices (a threaded arc).
+ * [map] takes each old index to its new one (map[n] the new length), for the indices into the path.
+ */
+export function densify(path: LonLat[], stretches: [number, number][], fixed: boolean[] = []): { path: LonLat[]; map: number[] } {
+  const line = new Line(path);
+  const out: LonLat[] = [];
+  const map: number[] = [];
+  for (let i = 0; i < path.length; i++) {
+    map.push(out.length);
+    out.push(path[i]);
+    if (i + 1 >= path.length || (fixed[i] && fixed[i + 1])) continue;
+    const a = line.along[i], b = line.along[i + 1], len = b - a;
+    const cuts: number[] = [];
+    for (const [s, e] of stretches) {
+      const u = Math.max(a, s), v = Math.min(b, e);
+      if (v <= u) continue;
+      const k = Math.ceil((v - u) / DENSE_M);
+      for (let j = 0; j <= k; j++) cuts.push(u + ((v - u) * j) / k);
+    }
+    let last = a;
+    for (const c of cuts.sort((x, y) => x - y)) {
+      if (c < last + 1 || c > b - 1) continue;
+      const t = (c - a) / len;
+      out.push([path[i][0] + (path[i + 1][0] - path[i][0]) * t, path[i][1] + (path[i + 1][1] - path[i][1]) * t]);
+      last = c;
+    }
+  }
+  map.push(out.length);
+  return { path: out, map };
+}
+
+/** The server's snap (lanes.ts) of [points] with the route's [headings] there and the lane side each wants; null when it could not answer. */
+export type Snapper = (points: LonLat[], headings: number[], biases: number[]) => Promise<(LonLat | null)[] | null>;
+
+const askServer: Snapper = async (points, headings, biases) => {
+  const out: (LonLat | null)[] = [];
+  for (let i = 0; i < points.length; i += SNAP_BATCH) {
+    const a = await fetch("/api/hdmap/snap", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ points: points.slice(i, i + SNAP_BATCH), headings: headings.slice(i, i + SNAP_BATCH), biases: biases.slice(i, i + SNAP_BATCH) }),
+    });
+    if (!a.ok) return null;
+    out.push(...((await a.json()) as { at: (LonLat | null)[] }).at);
+  }
+  return out;
+};
 
 /** [route] with its line on the travel-direction lanes wherever 정밀도로지도 has them; as it came elsewhere. */
 export async function snapRoute(route: Route): Promise<Route> {
+  return snapRouteWith(route, askServer);
+}
+
+/**
+ * [snapRoute] with the lanes asked of [snap]. Before each turn the line gets a vertex every DENSE_M (the indices into
+ * the path — congestion, motorways, threaded corners — moved with them), so each stretch is snapped where it is.
+ */
+export async function snapRouteWith(route: Route, snap: Snapper): Promise<Route> {
   try {
+    const n0 = route.path.length;
+    const turns = biasTurns(route);
+    const fixed0: boolean[] = [];
+    for (const [a, b] of route.threaded ?? []) for (let i = a; i < b; i++) fixed0[i] = true;
+    const dense = densify(route.path, turns.map((t) => [t.alongM - t.reach - DENSE_M, t.alongM] as [number, number]), fixed0);
+    const move = (i: number) => dense.map[Math.min(i, n0)];
+    const threaded = (route.threaded ?? []).map(([a, b]) => [move(a), move(b)] as [number, number]);
     const fixed: boolean[] = [];
-    for (const [a, b] of route.threaded ?? []) for (let i = a; i < b; i++) fixed[i] = true;
+    for (const [a, b] of threaded) for (let i = a; i < b; i++) fixed[i] = true;
+    const sides = sidesAlong(new Line(dense.path), turns);
     // A threaded corner is on its lane already: not asked about (a NaN heading comes back null).
-    const headings = headingsOf(route.path).map((h, i) => (fixed[i] ? NaN : h));
-    const biases = computeBiases(route);
-    const snapped: (LonLat | null)[] = [];
-    for (let i = 0; i < route.path.length; i += SNAP_BATCH) {
-      const a = await fetch("/api/hdmap/snap", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          points: route.path.slice(i, i + SNAP_BATCH),
-          headings: headings.slice(i, i + SNAP_BATCH),
-          biases: biases.slice(i, i + SNAP_BATCH),
-        }),
-      });
-      if (!a.ok) return route;
-      snapped.push(...((await a.json()) as { at: (LonLat | null)[] }).at);
-    }
-    if (snapped.some(Boolean)) route.path = applySnap(route.path, snapped, fixed);
+    const headings = headingsOf(dense.path).map((h, i) => (fixed[i] ? NaN : h));
+    const snapped = await snap(dense.path, headings, sides.biases);
+    // Nothing to put the line on, or the route changed meanwhile: left as it is.
+    if (!snapped || !snapped.some(Boolean) || route.path.length !== n0) return route;
+    for (const seg of route.segments) { seg.from = move(seg.from); seg.to = move(seg.to); }
+    if (route.motorways) route.motorways = route.motorways.map(([a, b]) => [move(a), move(b)] as [number, number]);
+    if (route.threaded) route.threaded = threaded;
+    route.path = applySnap(dense.path, snapped, fixed, sides);
   } catch { /* the line as the provider drew it */ }
   return route;
 }

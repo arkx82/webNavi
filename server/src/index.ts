@@ -113,7 +113,11 @@ function buildSafety(): SafetyIndex {
   if (cameras) index.add(cameraRoads.apply(cameras.features));
   index.add(hdPoints.features);
   for (const k of sets.values()) index.add(cameraRoads.apply(hdPoints.without(k.features)));
-  return index.build();
+  index.build();
+  // One camera given as two rows (safety/dedupe.ts): where they gave two limits, the lower is kept — and said here.
+  const differ = index.merged.filter((m) => new Set(m.limits.filter((l) => l != null)).size > 1);
+  if (index.merged.length) app.log.info({ merged: index.merged.length, limitsDiffered: differ.map((m) => `${m.ids.join("+")} ${m.limits.join("/")}→${m.limit}`) }, "cameras given twice kept once");
+  return index;
 }
 // The HD points read when their files come or change (build.py writes them whole), the index rebuilt then.
 const refreshHdPoints = () => hdPoints.refresh().then((changed) => { if (changed) { safety = buildSafety(); app.log.info({ features: safety.features.length, hd: hdPoints.features.length }, "safety index rebuilt with hdmap points"); } })
@@ -609,6 +613,15 @@ app.get("/api/car-icon", async (_request, reply) => {
     if (existsSync(file)) return reply.type(type).header("Cache-Control", "no-cache").send(await readFile(file));
   }
   return reply.code(404).send({ error: "no picture" });
+});
+
+// The 3D car (안내 설정 → 자차 모양 → 3D): a model the owner downloaded, made small by tools/car-model/process.mjs, kept
+// in CONFIG_DIR beside the keys and never in the repository (its licence is the owner's to keep: BloxBloger's Model Y
+// on Sketchfab is CC BY-NC).
+app.get("/api/car-model", async (_request, reply) => {
+  const file = join(configDir, "car-model.glb");
+  if (!existsSync(file)) return reply.code(404).send({ error: "no model" });
+  return reply.type("model/gltf-binary").header("Cache-Control", "no-cache").send(await readFile(file));
 });
 
 // Every page asks Chrome to send its reports here (users.ts /api/report): a crash among them, with the page's own
