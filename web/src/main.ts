@@ -102,6 +102,8 @@ const SAME_ROAD_SHARE = 0.85;
 const ARRIVE_OFF_ROUTE_M = 250;
 const ARRIVE_NEAR_M = 200;
 
+/** The time left on the drive, as last shown: for the 지금 운행 중 word to /admin (sendPresence). */
+let presenceLeftS: number | null = null;
 /** The closest the map goes, by hand or following: the wheel and ± stop at the same place. */
 const ZOOM_MAX = 21;
 const map = openMap();
@@ -1584,6 +1586,7 @@ function laneLine(r: Route) {
   });
 }
 function startDrive(r: Route) {
+  setTimeout(() => sendPresence(), 1_000);
   const fresh = route == null;
   const elsewhere = !fresh && goal !== drivingTo;
   // A new route or a new place: the offer, and the way declined, are of the old one.
@@ -1681,6 +1684,7 @@ async function resumeDrive() {
 el("resume-cancel").addEventListener("click", () => { el("resume").hidden = true; endDrive(); });
 
 function endDrive() {
+  setTimeout(() => sendPresence(), 500);
   clearFaster();
   declinedS = null;
   if (sim?.running) stopSim();
@@ -1995,6 +1999,7 @@ function showThen(nextInM: number, then: Shown["thenGuide"]) {
 function showTurn(shown: Shown) {
   if (!route) return;
   if (shown.remainingM != null && shown.remainingS != null) {
+    presenceLeftS = shown.remainingS;
     put("eta-time", arrivalAt(shown.remainingS));
     put("eta-left", `${minutes(shown.remainingS)} · ${km(shown.remainingM)} · ${NAMES[route.provider]}`);
   }
@@ -3843,6 +3848,21 @@ function sendLog(beacon = false) {
 // Sent every half-minute by the memory line (above), right after it is written.
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") sendLog(true); });
 window.addEventListener("pagehide", () => sendLog(true));
+
+// ---- 지금 운행 중 (/admin, as Plex shows who is playing): a small word every 30 s, whatever 진단 기록 is set to —
+// the speed shown, whether a drive is being guided and how long is left, a pretend drive. Never where, nor to where.
+function sendPresence(gone = false) {
+  const kmh = Number(el("speed").textContent);
+  const guiding = !!(route && drivingTo && !arrived);
+  const body = JSON.stringify(gone ? { gone: true } : {
+    kmh: Number.isFinite(kmh) ? kmh : null, guiding, sim: !!sim?.running, leftS: guiding && presenceLeftS != null ? Math.round(presenceLeftS) : null,
+  });
+  if (gone) { navigator.sendBeacon?.("/api/me/presence", new Blob([body], { type: "application/json" })); return; }
+  void fetch("/api/me/presence", { method: "POST", headers: { "Content-Type": "application/json" }, body }).catch(() => {});
+}
+setInterval(() => sendPresence(), 30_000);
+setTimeout(() => sendPresence(), 5_000);
+window.addEventListener("pagehide", () => sendPresence(true));
 
 // Audio only starts after a tap, and the car's browser can put it back to sleep: every tap wakes it.
 document.addEventListener("pointerdown", () => void voice.unlock().then(() => { el("voice").textContent = voice.context.state; showAudioLocked(); }));

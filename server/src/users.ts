@@ -223,8 +223,22 @@ export function registerUsers(
     return { ok: true };
   });
 
-  // /admin: the users.
-  app.get("/admin/api/users", { preHandler: adminGuard }, async () => ({ users: db.users() }));
+  // 지금 운행 중: each account's car page says every 30 s how it is (main.ts sendPresence) — the speed shown, guided
+  // or not and the time left, a pretend drive; never where. Kept in memory: a restart forgets, the next word brings it.
+  const presence = new Map<number, Presence>();
+  app.post<{ Body: { kmh?: unknown; guiding?: unknown; sim?: unknown; leftS?: unknown; gone?: unknown } }>("/api/me/presence", async (request) => {
+    const b = request.body ?? {};
+    const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+    presence.set(request.user!.id, b.gone === true
+      ? { at: Date.now(), gone: true, kmh: null, guiding: false, sim: false, leftS: null }
+      : { at: Date.now(), gone: false, kmh: num(b.kmh), guiding: b.guiding === true, sim: b.sim === true, leftS: num(b.leftS) });
+    return { ok: true };
+  });
+
+  // /admin: the users, each with how its car page is now (presenceWord).
+  app.get("/admin/api/users", { preHandler: adminGuard }, async () => ({
+    users: db.users().map((u) => ({ ...u, now: presenceWord(presence.get(u.id), u.lastSeen) })),
+  }));
   app.post<{ Body: { name?: string; password?: string } }>("/admin/api/users", { preHandler: adminGuard }, async (request, reply) => {
     try {
       const user = db.addUser(request.body?.name ?? "", request.body?.password ?? "");
@@ -257,4 +271,25 @@ export function registerUsers(
     }
     return { users: db.users() };
   });
+}
+
+interface Presence { at: number; gone: boolean; kmh: number | null; guiding: boolean; sim: boolean; leftS: number | null }
+/** A car page not heard from in this long is taken as closed (it speaks every 30 s). */
+const PRESENCE_STALE_MS = 90_000;
+/** Moving at this or more is 운행 중; under it, guided, 정차 중 (a light, a jam). */
+const MOVING_KMH = 3;
+
+/** How an account's car page is now, in a few words, and whether it is out on the road: for /admin's 지금 운행 중. */
+export function presenceWord(p: Presence | undefined, lastSeen: number | null, now = Date.now()): { state: "driving" | "stopped" | "open" | "off"; text: string } {
+  const ago = (ms: number) => { const s = Math.round(ms / 1000); return s < 60 ? `${s}초 전` : s < 3600 ? `${Math.round(s / 60)}분 전` : s < 86_400 ? `${Math.round(s / 3600)}시간 전` : `${Math.round(s / 86_400)}일 전`; };
+  if (!p || p.gone || now - p.at > PRESENCE_STALE_MS) {
+    const last = Math.max(p?.at ?? 0, lastSeen ?? 0);
+    return { state: "off", text: last ? `꺼짐 · 마지막 접속 ${ago(now - last)}` : "접속한 적 없음" };
+  }
+  const kmh = p.kmh ?? 0;
+  const left = p.guiding && p.leftS != null ? ` · 도착까지 ${p.leftS < 3600 ? `${Math.max(1, Math.round(p.leftS / 60))}분` : `${Math.floor(p.leftS / 3600)}시간 ${Math.round((p.leftS % 3600) / 60)}분`}` : "";
+  const what = p.sim ? "모의 주행" : p.guiding ? "안내 중" : "";
+  if (kmh >= MOVING_KMH) return { state: "driving", text: [p.sim ? "모의 주행 중" : "운행 중", `${Math.round(kmh)} km/h`, !p.sim && p.guiding ? "안내 중" : ""].filter(Boolean).join(" · ") + left };
+  if (p.guiding || p.sim) return { state: "stopped", text: `정차 중 · ${what}${left}` };
+  return { state: "open", text: "화면 켜짐 · 정지" };
 }

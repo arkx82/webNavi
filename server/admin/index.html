@@ -34,6 +34,14 @@
   #status td { white-space: pre-line; }
   /* Every account's link, a line each: what a 관리자 sees of the others' (their buttons are their own). */
   .lines { margin-top: 14px; padding: 10px 12px; border-radius: 8px; background: #151518; font-size: 13px; color: var(--dim); white-space: pre-line; }
+  /* 지금 운행 중: a dot an account, as Plex shows who is playing. */
+  #now td:first-child { width: 30%; color: var(--ink); }
+  #now .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; background: #555; vertical-align: 1px; }
+  #now .driving .dot { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+  #now .stopped .dot { background: #ffb020; }
+  #now .open .dot { background: var(--accent); }
+  #now .driving td:last-child { color: var(--ok); }
+  #now .off td:last-child { color: var(--dim); }
   .lines b { display: block; color: var(--ink); font-weight: 500; margin-bottom: 2px; }
   .ok { color: var(--ok); } .bad { color: var(--bad); }
   [hidden] { display: none !important; }
@@ -65,6 +73,12 @@
   </section>
 
   <div id="panel" hidden>
+    <h2 class="admin-only" style="margin-top:0">지금 운행 중</h2>
+    <section class="admin-only">
+      <table id="now"></table>
+      <p class="hint" style="margin:8px 0 0">차 화면이 30초마다 알려 줍니다 — 속도, 안내 중인지와 도착까지 남은 시간만. 위치와 목적지는 보내지 않습니다.</p>
+    </section>
+    <h2 class="admin-only">설정</h2>
     <section>
       <p class="hint admin-only">키는 암호화되어 서버에만 저장되고, 여기서는 마지막 네 자만 보입니다. 비워 두면 그대로, 지우려면 <code>-</code> 하나만 넣으세요.</p>
       <form id="form" autocomplete="off">
@@ -216,6 +230,25 @@ const send = async (method, path, body) => {
 };
 const when = (ms) => (ms ? new Date(ms).toLocaleString("ko-KR", { dateStyle: "short", timeStyle: "short" }) : "—");
 
+/** 지금 운행 중: each account's car page now (users.ts presenceWord), driving first. */
+function showNow(users) {
+  const order = { driving: 0, stopped: 1, open: 2, off: 3 };
+  const rows = [...users].sort((a, b) => (order[a.now?.state] ?? 4) - (order[b.now?.state] ?? 4));
+  $("now").replaceChildren(...rows.map((u) => {
+    const tr = document.createElement("tr");
+    tr.className = u.now?.state || "off";
+    tr.innerHTML = `<td><span class="dot"></span><b></b></td><td></td>`;
+    tr.querySelector("b").textContent = u.name;
+    tr.cells[1].textContent = u.now?.text || "";
+    return tr;
+  }));
+}
+async function refreshNow() {
+  if (!me.admin || document.visibilityState !== "visible") return;
+  try { showNow((await send("GET", "/admin/api/users")).users); } catch { /* the next round */ }
+}
+setInterval(refreshNow, 15_000);
+
 function showUsers(users) {
   const t = $("users");
   t.replaceChildren();
@@ -314,7 +347,7 @@ function showStatus(status) {
 }
 async function load() {
   if (me.admin) {
-    send("GET", "/admin/api/users").then((r) => showUsers(r.users)).catch((e) => say("users-msg", e.message, "bad"));
+    send("GET", "/admin/api/users").then((r) => { showUsers(r.users); showNow(r.users); }).catch((e) => say("users-msg", e.message, "bad"));
     const r = await call("/admin/api/settings");
     showFields(r.fields);
     showStatus(r.status);

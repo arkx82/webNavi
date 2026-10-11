@@ -98,3 +98,17 @@ test("the browser's reports (a crash, with the page's context) go to the user's 
   assert.match(text, /브라우저 보고 crash \/\?x 4200ms 전 .*메모리 42\/113 MB/);
   assert.equal((await app.inject({ method: "POST", url: "/api/report", payload: body, headers: { "content-type": "application/reports+json" } })).statusCode, 401);
 });
+
+test("지금 운행 중: a car page's word in a few words — moving, standing while guided, open, or closed — and never where", async () => {
+  const { presenceWord } = await import("./users.js");
+  const now = 1_800_000_000_000;
+  const p = (o: object) => ({ at: now - 10_000, gone: false, kmh: null, guiding: false, sim: false, leftS: null, ...o });
+  assert.deepEqual(presenceWord(p({ kmh: 42, guiding: true, leftS: 1500 }), null, now), { state: "driving", text: "운행 중 · 42 km/h · 안내 중 · 도착까지 25분" });
+  assert.deepEqual(presenceWord(p({ kmh: 38 }), null, now), { state: "driving", text: "운행 중 · 38 km/h" });
+  assert.deepEqual(presenceWord(p({ kmh: 0, guiding: true, leftS: 4000 }), null, now), { state: "stopped", text: "정차 중 · 안내 중 · 도착까지 1시간 7분" });
+  assert.deepEqual(presenceWord(p({ kmh: 60, sim: true }), null, now), { state: "driving", text: "모의 주행 중 · 60 km/h" });
+  assert.deepEqual(presenceWord(p({ kmh: null }), null, now), { state: "open", text: "화면 켜짐 · 정지" });
+  assert.deepEqual(presenceWord(p({ at: now - 120_000, kmh: 50 }), null, now), { state: "off", text: "꺼짐 · 마지막 접속 2분 전" }, "not heard from in 90 s");
+  assert.deepEqual(presenceWord(p({ gone: true }), now - 3_600_000, now), { state: "off", text: "꺼짐 · 마지막 접속 10초 전" });
+  assert.deepEqual(presenceWord(undefined, null, now), { state: "off", text: "접속한 적 없음" });
+});
