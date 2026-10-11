@@ -137,7 +137,9 @@ export async function askJson<T>(url: string, init: RequestInit, provider: Provi
 /** A route asked with [request.avoid]: marked with what its provider could not keep off, so the page can tell or pass it over. */
 export async function routeAvoiding(p: RouteProvider, request: RouteRequest): Promise<Route> {
   const route = await p.route(request);
-  const ignored = (request.avoid ?? []).filter((a) => !p.avoids?.includes(a));
+  // What the provider cannot keep off at all, and what it said it could not this time (TMAP: both asked, one choice).
+  const ignored = (request.avoid ?? []).filter((a) => !p.avoids?.includes(a) || route.ignored?.includes(a));
   if (ignored.length) route.ignored = ignored;
+  else delete route.ignored;
   return route;
 }

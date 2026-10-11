@@ -35,7 +35,8 @@ export class Tmap implements RouteProvider {
 
   async route({ start, goal, heading, speedKmh, avoid = [] }: RouteRequest): Promise<Route> {
     // searchOption is one choice: 19 교통최적+어린이보호구역 회피, 1 교통최적+무료우선, 0 교통최적+추천. Both asked, the school
-    // zones take it and the tolls are asked by tollgateFareOption 8 (무료 우선) beside it.
+    // zones take it and the tolls are not kept off: tollgateFareOption 8 (무료 우선) beside 19 changed nothing (서울역 →
+    // 인천공항, 2026-10-11: 3,200원 either way, where 1 alone gave 1,900), so the route says so (Route.ignored).
     const school = avoid.includes("school"), toll = avoid.includes("toll");
     const answer = await askJson<{ features: TmapFeature[] }>(
       "https://apis.openapi.sk.com/tmap/routes?version=1",
@@ -46,13 +47,12 @@ export class Tmap implements RouteProvider {
           startX: start[0], startY: start[1], endX: goal[0], endY: goal[1],
           reqCoordType: "WGS84GEO", resCoordType: "WGS84GEO",
           searchOption: school ? "19" : toll ? "1" : "0", trafficInfo: "Y",
-          ...(toll ? { tollgateFareOption: "8" } : {}),
           ...(heading != null ? { angle: Math.round(heading), speed: Math.round(speedKmh ?? 0) } : {}),
         }),
       },
       this.name,
     );
-    const route: Route = { provider: this.name, distanceM: 0, durationS: 0, path: [], guides: [], segments: [] };
+    const route: Route = { provider: this.name, distanceM: 0, durationS: 0, path: [], guides: [], segments: [], ...(school && toll ? { ignored: ["toll" as const] } : {}) };
     for (const feature of answer.features) {
       const p = feature.properties;
       if (p.totalDistance != null) route.distanceM = p.totalDistance;

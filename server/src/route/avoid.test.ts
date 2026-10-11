@@ -29,19 +29,17 @@ const tmapAnswer = { features: [
 const kakaoAnswer = { routes: [{ result_code: 0, result_msg: "길찾기 성공", summary: { distance: 1000, duration: 120, fare: { toll: 1900 } }, sections: [] }] };
 const naverRoute = [{ summary: { distance: 1000, duration: 120000, tollFare: 0 }, path: [[127, 37.5], [127.1, 37.4]], guide: [], section: [] }];
 
-test("TMAP: 무료 우선 is searchOption 1; school zones 19, with tolls then asked by tollgateFareOption 8; the fare kept", async () => {
+test("TMAP: 무료 우선 is searchOption 1, school zones 19; both asked, the school zones are kept off and the tolls said not to be", async () => {
   const body = async (avoid: Avoid[]) => JSON.parse((await asked(() => new Tmap(() => "k"), tmapAnswer, avoid)).sent.body!);
   assert.equal((await body([])).searchOption, "0");
   assert.equal((await body(["toll"])).searchOption, "1");
-  assert.equal((await body(["toll"])).tollgateFareOption, "8");
   assert.equal((await body(["school"])).searchOption, "19");
-  assert.equal((await body(["school"])).tollgateFareOption, undefined);
-  const both = await body(["toll", "school"]);
-  assert.equal(both.searchOption, "19");
-  assert.equal(both.tollgateFareOption, "8");
-  const { route } = await asked(() => new Tmap(() => "k"), tmapAnswer, ["toll", "school"]) as { route: { tollWon?: number; ignored?: Avoid[] } };
-  assert.equal(route.tollWon, 0);
-  assert.equal(route.ignored, undefined);
+  assert.equal((await body(["toll", "school"])).searchOption, "19");
+  const one = await asked(() => new Tmap(() => "k"), tmapAnswer, ["toll"]) as { route: { tollWon?: number; ignored?: Avoid[] } };
+  assert.equal(one.route.tollWon, 0);
+  assert.equal(one.route.ignored, undefined);
+  const both = await asked(() => new Tmap(() => "k"), tmapAnswer, ["toll", "school"]) as { route: { ignored?: Avoid[] } };
+  assert.deepEqual(both.route.ignored, ["toll"]);
 });
 
 test("Kakao: avoid=toll|schoolzone, nothing asked nothing sent; the toll fare kept", async () => {
