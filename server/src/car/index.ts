@@ -316,15 +316,39 @@ export function registerCar(app: FastifyInstance, settings: Settings, db: Db, ac
 
   return {
     hub,
-    /** A word for /admin's 상태 table. */
+    /**
+     * /admin's 상태 row, a line an account: whose car it is (only that account's car page gets its samples — hub.carsFor),
+     * and what its stream is doing in words. An account linked with no car yet, and a Fleet car given to no one, too.
+     */
     status(): string {
       const list = cars();
-      if (!list.length) return Object.keys(tokens()).length || fleet.linked ? "연결됨 · 차 없음" : "연결 안 됨";
+      const linked = Object.keys(tokens()).map((k) => accountOf(k) ?? k);
+      if (!list.length && !linked.length && !fleet.linked) return "연결 안 됨";
       const streams = hub.status();
-      return `${source() === "fleet" ? "Fleet Telemetry" : "Owner 스트리밍"} · ` + list.map((c) => {
+      const lines = [source() === "fleet" ? "Fleet Telemetry" : "Owner 스트리밍"];
+      const named = new Set<string>();
+      for (const c of list) {
         const s = streams[c.vin];
-        return `${c.name}(${c.user || "계정 없음"}): ${s.state}${s.lastSampleAgoS != null ? ` (${s.lastSampleAgoS}초 전)` : ""}${s.lastError ? ` · ${s.lastError}` : ""}`;
-      }).join(", ");
+        const who = c.user || "(계정 없음 — 아무도 안 받음)";
+        if (c.user) named.add(c.user.toLowerCase());
+        lines.push(`${who} — ${c.name} …${c.vin.slice(-4)} · ${streamWord(s?.state ?? "stopped")}${s?.lastSampleAgoS != null ? ` · 마지막 ${s.lastSampleAgoS}초 전` : ""}${s?.lastError ? ` · ${s.lastError}` : ""}`);
+      }
+      if (source() === "owner") for (const u of linked) if (!named.has(u.toLowerCase())) lines.push(`${u} — Tesla 연결됨 · 차 없음 (차량 목록 다시 받기)`);
+      return lines.join("\n");
     },
   };
+}
+
+/** A stream's state in words, for /admin. */
+export function streamWord(state: string): string {
+  const words: Record<string, string> = {
+    stopped: "대기 (그 계정의 차 화면이 열려 있을 때만 받습니다)",
+    connecting: "연결 중",
+    streaming: "받는 중",
+    connected: "받는 중",
+    waiting: "차 응답 기다리는 중 (잠들었거나 깨는 중)",
+    error: "오류",
+    reset: "다시 연결 중",
+  };
+  return words[state] ?? state;
 }

@@ -30,6 +30,8 @@
   table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 14px; }
   td { padding: 6px 0; border-bottom: 1px solid #2a2a2e; vertical-align: top; }
   td:first-child { color: var(--dim); width: 40%; }
+  /* 차량: a line an account. */
+  #status td { white-space: pre-line; }
   .ok { color: var(--ok); } .bad { color: var(--bad); }
   [hidden] { display: none !important; }
   /* A 사용자 sees only what is theirs to set; the server refuses the rest anyway. */
@@ -194,7 +196,7 @@ const $ = (id) => document.getElementById(id);
 const call = async (path, body) => {
   const a = await fetch(path, {
     method: body === undefined ? "GET" : "POST",
-    headers: { "Content-Type": "application/json", "X-Requested-With": "nav-admin" },
+    headers: headersFor(body),
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const j = await a.json().catch(() => ({}));
@@ -202,8 +204,10 @@ const call = async (path, body) => {
   return j;
 };
 const say = (id, text, cls) => { const m = $(id); m.textContent = text; m.className = "msg " + (cls || ""); };
+// No Content-Type without a body: the server refuses an empty one called JSON (a user's 삭제 was a 400).
+const headersFor = (body) => (body === undefined ? { "X-Requested-With": "nav-admin" } : { "Content-Type": "application/json", "X-Requested-With": "nav-admin" });
 const send = async (method, path, body) => {
-  const a = await fetch(path, { method, headers: { "Content-Type": "application/json", "X-Requested-With": "nav-admin" }, body: body === undefined ? undefined : JSON.stringify(body) });
+  const a = await fetch(path, { method, headers: headersFor(body), body: body === undefined ? undefined : JSON.stringify(body) });
   const j = await a.json().catch(() => ({}));
   if (!a.ok) throw new Error(j.error || a.status);
   return j;
@@ -444,6 +448,11 @@ $("prerender").onclick = async () => {
 };
 
 // ---- 차량 (Tesla) ----
+/** The stream's state in words (car/index.ts streamWord). Only the account a car is given to gets its samples. */
+const STREAM_WORDS = {
+  stopped: "대기 — 그 계정의 차 화면이 열려 있을 때만 받습니다", connecting: "연결 중", streaming: "받는 중", connected: "받는 중",
+  waiting: "차 응답 기다리는 중 (잠들었거나 깨는 중)", error: "오류", reset: "다시 연결 중",
+};
 let carState = null;
 function showCar(st) {
   carState = st;
@@ -470,11 +479,12 @@ function showCar(st) {
     `Redis: ${f.redis ? "듣는 중" : (f.redisError ?? "대기")}`,
     `<a href="${f.publicKey}" target="_blank" style="color:var(--accent)">공개키</a>`,
   ].join(" · ");
-  const users = [["", "(계정 없음 — 아무도 안 받음)"], ...st.users.map((u) => [u, u])];
+  // Each car with the account it is given to: only that account's car page gets its speed and place.
+  const users = [["", "(계정 없음 — 아무도 안 받음)"], ...st.users.map((u) => [u, `${u} 만 받음`])];
   $("car-cars").innerHTML = st.cars.map((c) => {
     const s = st.streams[c.vin] || {};
     const opts = users.map(([v, t]) => `<option value="${v}"${(c.user || "") === v ? " selected" : ""}>${t}</option>`).join("");
-    return `<tr><td>${c.name}<br><span class="hint">…${c.vin.slice(-6)}</span></td><td><select data-vin="${c.vin}" style="min-height:36px;background:#111;color:var(--ink);border:1px solid #2c2c31;border-radius:6px">${opts}</select><br><span class="hint">${s.state || ""}${s.lastSampleAgoS != null ? ` · ${s.lastSampleAgoS}초 전` : ""}${s.lastError ? ` · ${s.lastError}` : ""}</span></td></tr>`;
+    return `<tr><td>${c.name}<br><span class="hint">…${c.vin.slice(-6)}</span></td><td><select data-vin="${c.vin}" style="min-height:36px;background:#111;color:var(--ink);border:1px solid #2c2c31;border-radius:6px">${opts}</select><br><span class="hint">${STREAM_WORDS[s.state] || s.state || ""}${s.lastSampleAgoS != null ? ` · 마지막 ${s.lastSampleAgoS}초 전` : ""}${s.lastError ? ` · ${s.lastError}` : ""}</span></td></tr>`;
   }).join("") || `<tr><td colspan="2" class="hint">연결된 차 없음</td></tr>`;
   for (const sel of $("car-cars").querySelectorAll("select[data-vin]")) {
     // By the owner login a car is the account's that linked it; by Fleet it is given here.
