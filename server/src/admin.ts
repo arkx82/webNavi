@@ -11,8 +11,9 @@ import { endSession, issueSession, sessionUser } from "./users.js";
  * or as "admin" with the page's own password (the built-in 관리자, set on the first visit while no account is 관리자;
  * a session cookie signed with the master key). Five wrong tries lock an address out for a minute.
  *
- * A 관리자 sees and changes everything. A 사용자 sees only what is theirs to set — their own Tesla and TIDAL links and
- * their password — and the server holds them to it: every call that names an account takes theirs (accountFor).
+ * A 관리자 sees and changes everything of the site's. A 사용자 sees only what is theirs to set — their own Tesla and
+ * TIDAL links and their password. The links are each account's own, a 관리자's too: anyone links and unlinks their own
+ * only (accountFor), and a 관리자 sees the others' as a line each, never a button.
  * The keys never come back out — the page is shown whether each is set and its last four characters.
  */
 const SESSION_DAYS = 30;
@@ -40,8 +41,8 @@ export interface AdminAccess {
   selfGuard: Guard;
   isAdmin(request: FastifyRequest): boolean;
   /**
-   * The account a call acts for: whichever a 관리자 names (checked by the caller against the accounts), a 사용자's
-   * own whatever they name or with none named — or null when a 사용자 names another, to be refused.
+   * The account a link call acts for: the one logged in, 관리자 or 사용자, with none named or itself named — or null when
+   * another is named, or for the built-in admin (no account of its own), to be refused.
    */
   accountFor(request: FastifyRequest, asked: unknown): string | null;
 }
@@ -179,9 +180,8 @@ export function registerAdmin(app: FastifyInstance, settings: Settings, checks: 
     isAdmin: (request) => who(request)?.admin ?? false,
     accountFor(request, asked) {
       const w = who(request);
-      if (!w) return null;
+      if (!w || w.builtin) return null;
       const name = typeof asked === "string" ? asked.trim() : "";
-      if (w.admin) return name;
       return !name || name.toLowerCase() === w.name.toLowerCase() ? w.name : null;
     },
   };

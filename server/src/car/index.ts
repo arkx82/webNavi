@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { AdminAccess } from "../admin.js";
+import { OWN_ONLY } from "../music.js";
 import type { Db } from "../db.js";
 import type { Settings } from "../settings.js";
 import { FleetApi, FleetFeed, telemetryCa } from "./fleet.js";
@@ -157,27 +158,28 @@ export function registerCar(app: FastifyInstance, settings: Settings, db: Db, ac
     return reply.code(422).send({ error: (e as Error).message });
   };
 
-  // A 사용자 sees their own link and cars only: none of the Fleet app, nor anyone else's.
+  // The links are each account's own: [me] and whether it is linked, for its buttons. A 사용자 sees their own cars and
+  // line only, none of the Fleet app; a 관리자 sees every account's line (statusLines) and the Fleet app, not their buttons.
   app.get("/admin/car/state", { preHandler: selfGuard }, async (request) => {
+    const me = access.accountFor(request, "");
+    const mine = { me, linked: me ? ownerFor(me).linked : false };
     if (!access.isAdmin(request)) {
-      const me = access.accountFor(request, "")!;
-      const mine = cars().filter((c) => c.user.toLowerCase() === me.toLowerCase());
+      const own = cars().filter((c) => me && c.user.toLowerCase() === me.toLowerCase());
       const streams = hub.status();
       return {
+        ...mine,
         source: source(),
-        owners: [{ name: me, role: "user", linked: ownerFor(me).linked }],
         fleet: null,
-        cars: mine,
-        users: [me],
-        streams: Object.fromEntries(mine.map((c) => [c.vin, streams[c.vin]])),
+        cars: own,
+        users: me ? [me] : [],
+        streams: Object.fromEntries(own.map((c) => [c.vin, streams[c.vin]])),
+        lines: me ? statusLines(me) : [],
       };
     }
-    return adminState(request);
+    return { ...mine, ...adminState(request), lines: statusLines() };
   });
   const adminState = (request: FastifyRequest) => ({
     source: source(),
-    owner: { linked: Object.keys(tokens()).length > 0 },
-    owners: db.users().map((u) => ({ name: u.name, role: u.role, linked: ownerFor(u.name).linked })),
     fleet: {
       configured: fleet.configured,
       linked: fleet.linked,
@@ -194,12 +196,13 @@ export function registerCar(app: FastifyInstance, settings: Settings, db: Db, ac
     streams: hub.status(),
   });
   /**
-   * The account an owner call is for: any a 관리자 names, a 사용자's own. A 사용자 cannot link while the site takes the
-   * cars by Fleet (the one app login, the cars given out by a 관리자): their own login would not be used.
+   * The account an owner call is for: the one logged in, 관리자 or 사용자 — a link is its account's own. A 사용자 cannot
+   * link while the site takes the cars by Fleet (the one app login, the cars given out by a 관리자): their own login
+   * would not be used.
    */
   const ownerTarget = (request: FastifyRequest, reply: FastifyReply, asked: unknown, what: string): string | null => {
     const named = access.accountFor(request, asked);
-    if (named === null) { void reply.code(403).send({ error: "자기 계정만 연결할 수 있습니다" }); return null; }
+    if (named === null) { void reply.code(403).send({ error: OWN_ONLY }); return null; }
     if (!access.isAdmin(request) && source() !== "owner") { void reply.code(409).send({ error: "관리자가 Fleet Telemetry 방식으로 연결해 두었습니다 — 차는 관리자가 계정에 붙여 줍니다" }); return null; }
     const user = accountOf(named);
     if (!user) { void reply.code(400).send({ error: `${what} 계정을 고르세요` }); return null; }
@@ -277,8 +280,9 @@ export function registerCar(app: FastifyInstance, settings: Settings, db: Db, ac
     return out;
   });
 
+  // By the owner login, an account's own cars, 관리자 or not; by Fleet, the app's list, a 관리자's to fetch.
   app.post<{ Body: { user?: string } }>("/admin/car/refresh", { preHandler: selfGuard }, async (request, reply) => {
-    if (!access.isAdmin(request)) {
+    if (!access.isAdmin(request) || source() === "owner") {
       const user = ownerTarget(request, reply, request.body?.user, "받을");
       if (!user) return reply;
       try {
@@ -303,7 +307,7 @@ export function registerCar(app: FastifyInstance, settings: Settings, db: Db, ac
       fleet.unlink();
     } else {
       const named = access.accountFor(request, request.body?.user);
-      if (named === null) return reply.code(403).send({ error: "자기 계정만 해제할 수 있습니다" });
+      if (named === null) return reply.code(403).send({ error: OWN_ONLY });
       const user = accountOf(named);
       if (!user) return reply.code(400).send({ error: "해제할 계정을 고르세요" });
       ownerFor(user).unlink();
@@ -314,27 +318,44 @@ export function registerCar(app: FastifyInstance, settings: Settings, db: Db, ac
     return { ok: true };
   });
 
+  /**
+   * A line an account (or [only] that one's): whose car it is (only that account's car page gets its samples —
+   * hub.carsFor), and what its stream is doing in words; an account not linked, or linked with no car yet, and a Fleet
+   * car given to no one, too.
+   */
+  function statusLines(only?: string): string[] {
+    const list = cars();
+    const streams = hub.status();
+    const lines: string[] = [];
+    const accounts = db.users().map((u) => u.name).filter((n) => !only || n.toLowerCase() === only.toLowerCase());
+    for (const name of accounts) {
+      const theirs = list.filter((c) => c.user.toLowerCase() === name.toLowerCase());
+      for (const c of theirs) {
+        const s = streams[c.vin];
+        lines.push(`${name} — ${c.name} …${c.vin.slice(-4)} · ${streamWord(s?.state ?? "stopped")}${s?.lastSampleAgoS != null ? ` · 마지막 ${s.lastSampleAgoS}초 전` : ""}${s?.lastError ? ` · ${s.lastError}` : ""}`);
+      }
+      if (!theirs.length) lines.push(source() === "owner" && ownerFor(name).linked ? `${name} — Tesla 연결됨 · 차 목록을 아직 안 받음 (그 계정에서 차량 목록 다시 받기)` : `${name} — 차 없음`);
+    }
+    if (!only) for (const c of list.filter((c) => !c.user)) lines.push(`(계정 없음) — ${c.name} …${c.vin.slice(-4)} · 아무도 안 받음`);
+    return lines;
+  }
+
   return {
     hub,
-    /**
-     * /admin's 상태 row, a line an account: whose car it is (only that account's car page gets its samples — hub.carsFor),
-     * and what its stream is doing in words. An account linked with no car yet, and a Fleet car given to no one, too.
-     */
+    /** /admin's 상태 row: how the cars are had, then a line an account (statusLines). */
     status(): string {
+      return [source() === "fleet" ? "Fleet Telemetry" : "Owner 스트리밍", ...statusLines()].join("\n");
+    },
+    /** Forgets an account's link and cars: the account is gone (users.ts 삭제), and a new one of its name starts with none. */
+    forget(name: string) {
+      const key = name.toLowerCase();
+      if (tokens()[key]) ownerFor(name).unlink();
       const list = cars();
-      const linked = Object.keys(tokens()).map((k) => accountOf(k) ?? k);
-      if (!list.length && !linked.length && !fleet.linked) return "연결 안 됨";
-      const streams = hub.status();
-      const lines = [source() === "fleet" ? "Fleet Telemetry" : "Owner 스트리밍"];
-      const named = new Set<string>();
-      for (const c of list) {
-        const s = streams[c.vin];
-        const who = c.user || "(계정 없음 — 아무도 안 받음)";
-        if (c.user) named.add(c.user.toLowerCase());
-        lines.push(`${who} — ${c.name} …${c.vin.slice(-4)} · ${streamWord(s?.state ?? "stopped")}${s?.lastSampleAgoS != null ? ` · 마지막 ${s.lastSampleAgoS}초 전` : ""}${s?.lastError ? ` · ${s.lastError}` : ""}`);
+      if (list.some((c) => c.user.toLowerCase() === key)) {
+        // By the owner login the car was the account's Tesla's, and goes; by Fleet it stays, given to no one.
+        settings.set({ teslaCars: JSON.stringify(source() === "fleet" ? list.map((c) => (c.user.toLowerCase() === key ? { ...c, user: "" } : c)) : list.filter((c) => c.user.toLowerCase() !== key)) });
+        hub.reset();
       }
-      if (source() === "owner") for (const u of linked) if (!named.has(u.toLowerCase())) lines.push(`${u} — Tesla 연결됨 · 차 없음 (차량 목록 다시 받기)`);
-      return lines.join("\n");
     },
   };
 }

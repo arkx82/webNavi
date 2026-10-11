@@ -73,6 +73,8 @@ export function registerUsers(
   adminGuard: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>, workDir: string,
   /** Anyone logged in to /admin, for what an account changes of its own. */
   selfGuard: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown> = adminGuard,
+  /** An account deleted: its Tesla and TIDAL links go with it (car/, music.ts forget). */
+  onRemoved: (name: string) => void = () => {},
 ) {
   // Wrong logins by address and by account: a forged address does not free the account (guard.ts).
   const lockout = new Lockout(LOCK_AFTER, LOCK_MS);
@@ -247,7 +249,12 @@ export function registerUsers(
     return { users: db.users() };
   });
   app.delete<{ Params: { id: string } }>("/admin/api/users/:id", { preHandler: adminGuard }, async (request) => {
+    const gone = db.users().find((u) => u.id === Number(request.params.id));
     db.removeUser(Number(request.params.id));
+    if (gone) {
+      try { onRemoved(gone.name); } catch (e) { request.log.warn({ err: (e as Error).message, user: gone.name }, "links of a removed user"); }
+      request.log.info({ user: gone.name }, "user removed");
+    }
     return { users: db.users() };
   });
 }

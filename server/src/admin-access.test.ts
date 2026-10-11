@@ -23,8 +23,8 @@ async function site() {
   writeFileSync(page, "<!doctype html>");
   const app = Fastify();
   const admin = registerAdmin(app, settings, { test: async () => ({}), prerender: async () => ({ made: 0, had: 0 }), status: () => ({}) }, page, db);
-  registerMusic(app, settings, db, admin);
-  registerUsers(app, db, settings, admin.adminGuard, dir, admin.selfGuard);
+  const music = registerMusic(app, settings, db, admin);
+  registerUsers(app, db, settings, admin.adminGuard, dir, admin.selfGuard, (name) => music.forget(name));
   await app.ready();
   /** The cookies an /admin login gives, as a header to send back. */
   const login = async (name: string, password: string) => {
@@ -32,7 +32,7 @@ async function site() {
     const set = r.headers["set-cookie"];
     return { status: r.statusCode, cookie: (Array.isArray(set) ? set : set ? [set] : []).map((c) => String(c).split(";")[0]).join("; ") };
   };
-  const call = (cookie: string, method: "GET" | "POST", url: string, payload?: object) =>
+  const call = (cookie: string, method: "GET" | "POST" | "DELETE", url: string, payload?: object) =>
     app.inject({ method, url, payload, headers: { cookie, "x-requested-with": "nav-admin" } });
   return { app, login, call };
 }
@@ -79,14 +79,23 @@ test("a 사용자 on /admin sets only what is theirs: their TIDAL, their passwor
   assert.equal((await login("test", "newpass1")).status, 200);
 });
 
-test("a 관리자 still acts for any account", async () => {
+test("a 관리자 sees every account's link as a line, and changes their own only; a deleted account's link goes with it", async () => {
   const { login, call } = await site();
   const june = await login("june", "secret1");
-  assert.deepEqual((await call(june.cookie, "GET", "/admin/music/state")).json().tidal.map((o: { name: string }) => o.name).sort(), ["june", "test"]);
   // A line an account, as the page shows it.
-  const lines = (await call(june.cookie, "GET", "/admin/music/state")).json().tidal.map((o: { line: string }) => o.line);
-  assert.deepEqual(lines, ["june — TIDAL 연결됨 (KR) · 서버 시작 뒤 아직 안 씀", "test — TIDAL 연결됨 (KR) · 서버 시작 뒤 아직 안 씀"]);
-  assert.equal((await call(june.cookie, "POST", "/admin/music/tidal/disconnect", { user: "test" })).statusCode, 200);
-  assert.equal((await call(june.cookie, "GET", "/admin/music/state")).json().tidal[1].line, "test — 연결 안 됨 (차 화면에 음악 버튼 없음)");
-  assert.equal((await call(june.cookie, "GET", "/admin/api/users")).statusCode, 200);
+  const lines = async () => (await call(june.cookie, "GET", "/admin/music/state")).json().tidal.map((o: { line: string }) => o.line);
+  assert.deepEqual(await lines(), ["june — TIDAL 연결됨 (KR) · 서버 시작 뒤 아직 안 씀", "test — TIDAL 연결됨 (KR) · 서버 시작 뒤 아직 안 씀"]);
+  assert.equal((await call(june.cookie, "POST", "/admin/music/tidal/disconnect", { user: "test" })).statusCode, 403, "another's is theirs");
+  assert.equal((await call(june.cookie, "POST", "/admin/music/tidal/check", { user: "test", deviceCode: "x" })).statusCode, 403);
+  assert.equal((await lines())[1], "test — TIDAL 연결됨 (KR) · 서버 시작 뒤 아직 안 씀");
+  // The built-in admin has no account: no link of its own to change.
+  const builtin = await login("admin", "page-password");
+  assert.equal((await call(builtin.cookie, "POST", "/admin/music/tidal/disconnect", {})).statusCode, 403);
+  // An account deleted: its TIDAL goes; a new one of the name starts with none.
+  const users = (await call(june.cookie, "GET", "/admin/api/users")).json().users as { id: number; name: string }[];
+  const test = users.find((u) => u.name === "test")!;
+  assert.equal((await call(june.cookie, "DELETE", `/admin/api/users/${test.id}`)).statusCode, 200);
+  assert.deepEqual(await lines(), ["june — TIDAL 연결됨 (KR) · 서버 시작 뒤 아직 안 씀"]);
+  assert.equal((await call(june.cookie, "POST", "/admin/api/users", { name: "test", password: "secret3" })).statusCode, 200);
+  assert.equal((await lines())[1], "test — 연결 안 됨 (차 화면에 음악 버튼 없음)");
 });

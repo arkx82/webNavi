@@ -29,13 +29,16 @@ type Token = { token: string; expiresIn: number; userId: string; countryCode: st
  * lists, likes and streams, and one with none linked has no music button. The one login of before, the whole
  * site's, goes to the account the Tesla was linked to (june), else the first 관리자.
  */
+/** A link is its account's own: a 관리자 does not link or unlink another's, and the built-in admin has none. */
+export const OWN_ONLY = "자기 계정의 연결만 바꿀 수 있습니다 (아이디로 로그인해야 합니다)";
+
 export function registerMusic(
   app: FastifyInstance,
   settings: Settings,
   db: Db,
   access: Pick<AdminAccess, "selfGuard" | "isAdmin" | "accountFor">,
 ) {
-  // Each account links its own TIDAL on /admin; a 관리자 may link or unlink any (accountFor).
+  // Each account links and unlinks its own TIDAL on /admin, a 관리자 too (accountFor); a 관리자 sees the others' lines.
   const selfOnly = access.selfGuard;
   const keyOf = (name: string) => name.trim().toLowerCase();
   const links = (): Record<string, TidalLink> => {
@@ -182,7 +185,7 @@ export function registerMusic(
     { preHandler: selfOnly },
     async (req, reply) => {
       const named = access.accountFor(req, req.body?.user);
-      if (named === null) return reply.code(403).send({ status: "error", error: "자기 계정만 연결할 수 있습니다" });
+      if (named === null) return reply.code(403).send({ status: "error", error: OWN_ONLY });
       const user = accountOf(named);
       if (!user) return reply.code(400).send({ status: "error", error: "연결할 계정을 고르세요" });
       const deviceCode = typeof req.body?.deviceCode === "string" ? req.body.deviceCode : undefined;
@@ -238,7 +241,7 @@ export function registerMusic(
   /** Disconnect the account named. */
   app.post<{ Body: { user?: string } }>("/admin/music/tidal/disconnect", { preHandler: selfOnly }, async (req, reply) => {
     const named = access.accountFor(req, req.body?.user);
-    if (named === null) return reply.code(403).send({ error: "자기 계정만 해제할 수 있습니다" });
+    if (named === null) return reply.code(403).send({ error: OWN_ONLY });
     const user = accountOf(named);
     if (!user) return reply.code(400).send({ error: "해제할 계정을 고르세요" });
     setLink(user, null);
@@ -257,6 +260,8 @@ export function registerMusic(
       error: fail?.message ?? null,
     };
   };
+  /** Forgets an account's link: the account is gone (users.ts 삭제), and a new one of its name starts with none. */
+  const forget = (name: string) => { if (linkOf(name)) setLink(name, null); usedAt.delete(keyOf(name)); failed.delete(keyOf(name)); };
   const ago = (s: number) => (s < 60 ? `${s}초 전` : s < 3600 ? `${Math.round(s / 60)}분 전` : s < 86_400 ? `${Math.round(s / 3600)}시간 전` : `${Math.round(s / 86_400)}일 전`);
   /** A line an account, as the 상태 table and the 음악 계정 section show it. */
   const lineOf = (a: ReturnType<typeof accountState>) =>
@@ -466,6 +471,7 @@ export function registerMusic(
   }));
 
   return {
+    forget,
     /** /admin's 상태 row: a line an account. */
     status(): string {
       const lines = db.users().map((u) => lineOf(accountState(u.name, u.role)));

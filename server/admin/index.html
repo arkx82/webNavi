@@ -32,6 +32,9 @@
   td:first-child { color: var(--dim); width: 40%; }
   /* 차량: a line an account. */
   #status td { white-space: pre-line; }
+  /* Every account's link, a line each: what a 관리자 sees of the others' (their buttons are their own). */
+  .lines { margin-top: 14px; padding: 10px 12px; border-radius: 8px; background: #151518; font-size: 13px; color: var(--dim); white-space: pre-line; }
+  .lines b { display: block; color: var(--ink); font-weight: 500; margin-bottom: 2px; }
   .ok { color: var(--ok); } .bad { color: var(--bad); }
   [hidden] { display: none !important; }
   /* A 사용자 sees only what is theirs to set; the server refuses the rest anyway. */
@@ -89,21 +92,19 @@
         <p class="hint admin-only">검증된 기기용(스마트 TV/스트리머) Client ID가 기본 내장되어 있어 <b>전곡(HiFi) 무제한 재생</b>이 가능합니다. 별도 설정 없이 바로 <b>[TIDAL 연결]</b> 버튼을 누르시면 화면에 5자리 인증 코드가 표시됩니다. 스마트폰이나 PC로 <code>link.tidal.com</code>에 접속하여 코드를 입력하면 즉시 연결됩니다. (필요 시 다른 기기 키로 변경도 가능합니다)</p>
         <label class="admin-only"><b>TIDAL</b> Client ID (선택 — 비워 두면 기본 내장 키 사용) <span class="hint" data-hint="tidalClientId"></span><input name="tidalClientId" /></label>
         <label class="admin-only"><b>TIDAL</b> Client Secret (선택 — 비워 두면 기본 내장 키 사용) <span class="hint" data-hint="tidalClientSecret"></span><input name="tidalClientSecret" /></label>
-        <p class="hint">TIDAL 계정은 <b>이 사이트의 계정마다</b> 따로 연결합니다. 연결한 계정만 차 화면에 음악 버튼이 나오고, 그 계정의 재생목록·좋아요만 봅니다.</p>
-        <p class="hint user-only"><b>TIDAL 연결</b>을 누르면 5자리 코드가 나옵니다. 폰이나 PC에서 <code>link.tidal.com</code> 에 들어가 그 코드를 넣으면 연결됩니다.</p>
-        <label class="admin-only">연결할 계정 <select id="tidal-user" style="min-height:36px;background:#111;color:var(--ink);border:1px solid #2c2c31;border-radius:6px"></select></label>
-        <p class="hint admin-only" id="tidal-owners" style="white-space:pre-line"></p>
+        <p class="hint">TIDAL 계정은 <b>이 사이트의 계정마다</b> 따로 연결합니다. 연결한 계정만 차 화면에 음악 버튼이 나오고, 그 계정의 재생목록·좋아요만 봅니다. 연결과 해제는 <b>로그인한 내 계정</b>에만 됩니다 — 관리자도 다른 계정의 연결은 바꾸지 못합니다.</p>
+        <p class="hint"><b>TIDAL 연결</b>을 누르면 5자리 코드가 나옵니다. 폰이나 PC에서 <code>link.tidal.com</code> 에 들어가 그 코드를 넣으면 연결됩니다.</p>
         <div class="row">
           <button type="button" class="primary" id="btn-tidal-connect">TIDAL 연결 (link.tidal.com)</button>
           <button type="button" id="btn-tidal-disconnect">해제</button>
           <span class="hint" id="state-tidal"></span>
         </div>
-        <p class="hint user-only" id="tidal-mine"></p>
         <div id="tidal-box" style="margin-top: 14px; padding: 14px; background: #1f1f23; border: 1px solid var(--accent); border-radius: 8px;" hidden>
           <div style="font-weight: 500; margin-bottom: 6px;">스마트폰 또는 브라우저에서 아래 링크를 열어 코드를 승인하세요:</div>
           <div style="font-size: 16px; margin: 8px 0;"><a id="tidal-link" href="#" target="_blank" style="color: var(--accent); text-decoration: underline;">link.tidal.com</a></div>
           <div style="font-size: 14px; color: var(--dim);">인증 코드: <b id="tidal-code" style="font-size: 20px; color: var(--ink); letter-spacing: 2px;"></b> <span id="tidal-timer" style="margin-left: 8px;">(승인 대기 중…)</span></div>
         </div>
+        <div class="lines" id="tidal-lines"></div>
         <h2 id="car">차량 (Tesla) — 터널 보정</h2>
         <p class="hint">GPS가 끊기는 터널에서 차가 직접 알려 주는 속도·주행거리로 위치를 잇습니다. 차 화면이 열려 있을 때만 받습니다.</p>
         <div class="row admin-only">
@@ -112,9 +113,7 @@
         </div>
         <div id="car-owner">
           <p class="hint">PC의 크롬·엣지에서: ① <b>F12</b>로 개발자 도구를 열고 <b>Console</b> 탭을 띄워 둔 채 <b>Tesla 로그인 열기</b> → 새 탭에서도 F12 → Console. ② 로그인을 마치면 화면은 그대로지만 Console에 <code>Failed to launch 'tesla://auth/callback?code=…'</code> 가 뜹니다. ③ 그 줄을 통째로 복사해 아래에 붙여 넣고 완료. (Tesla Auth 앱 0.13 이상에서 받은 refresh token을 붙여 넣어도 됩니다.)</p>
-          <p class="hint">Tesla 계정은 <b>이 사이트의 계정마다</b> 따로 연결합니다. 연결한 계정만 그 차의 속도·위치를 받고, 다른 계정은 받지 않습니다.</p>
-          <label class="admin-only">연결할 계정 <select id="car-owner-user" style="min-height:36px;background:#111;color:var(--ink);border:1px solid #2c2c31;border-radius:6px"></select></label>
-          <p class="hint admin-only" id="car-owners"></p>
+          <p class="hint">Tesla 계정은 <b>이 사이트의 계정마다</b> 따로 연결합니다. 연결한 계정만 그 차의 속도·위치를 받고, 다른 계정은 받지 않습니다. 연결과 해제는 <b>로그인한 내 계정</b>에만 됩니다.</p>
           <div class="row">
             <button type="button" id="car-owner-begin">Tesla 로그인 열기</button>
             <span class="hint" id="car-owner-state"></span>
@@ -141,9 +140,11 @@
           </div>
           <p class="hint" id="car-fleet-state"></p>
         </div>
-        <table id="car-cars"></table>
+        <!-- By Fleet, each car given to an account here (a 관리자's); by the owner login, a car is its account's own. -->
+        <table id="car-cars" class="admin-only"></table>
         <div class="row"><button type="button" id="car-refresh">차량 목록 다시 받기</button></div>
         <div class="msg" id="car-msg"></div>
+        <div class="lines" id="car-lines"></div>
         <pre class="hint" id="car-detail" style="white-space:pre-wrap;word-break:break-all" hidden></pre>
         <div class="admin-only">
         <h2>이 페이지</h2>
@@ -327,23 +328,23 @@ async function load() {
   }
 }
 
-// ---- TIDAL, an account at a time ----
-let tidalOwners = [];
-function showTidal(owners) {
-  tidalOwners = owners;
-  const pick = $("tidal-user");
-  const was = pick.value;
-  pick.innerHTML = owners.map((o) => `<option value="${o.name}">${o.name}${o.role === "admin" ? " (관리자)" : ""}${o.connected ? " — 연결됨" : ""}</option>`).join("");
-  if (was && owners.some((o) => o.name === was)) pick.value = was;
-  const mine = owners.find((o) => o.name === pick.value);
-  $("state-tidal").textContent = mine?.connected ? `${mine.name}: 연결됨` : `${pick.value || "계정"}: 미연결`;
-  $("state-tidal").className = "hint" + (mine?.connected ? " saved" : "");
-  // A line an account (music.ts lineOf): linked, its country, when its player last used it, a refresh that failed.
-  $("tidal-owners").textContent = owners.map((o) => o.line).join("\n");
-  // A 사용자 sees their own line under the buttons.
-  $("tidal-mine").textContent = !me.admin && mine ? mine.line : "";
+// ---- TIDAL: the buttons for the account logged in; every account's line below for a 관리자, a 사용자's own ----
+/** The built-in admin (the page's password) has no account: nothing of its own to link. */
+function ownButtons(ids, stateId) {
+  for (const id of ids) $(id).disabled = !me.who || me.builtin;
+  if (me.builtin) { $(stateId).textContent = "아이디로 로그인해야 연결할 수 있습니다"; $(stateId).className = "hint"; return false; }
+  return true;
 }
-$("tidal-user").onchange = () => showTidal(tidalOwners);
+function showTidal(owners) {
+  const mine = owners.find((o) => o.name === me.who);
+  if (ownButtons(["btn-tidal-connect", "btn-tidal-disconnect"], "state-tidal")) {
+    $("state-tidal").textContent = mine?.connected ? `${me.who}: 연결됨` : `${me.who}: 미연결`;
+    $("state-tidal").className = "hint" + (mine?.connected ? " saved" : "");
+  }
+  // A line an account (music.ts lineOf): linked, its country, when its player last used it, a refresh that failed.
+  $("tidal-lines").innerHTML = `<b>${me.admin ? "계정별 TIDAL" : "내 TIDAL"}</b>`;
+  $("tidal-lines").append(owners.map((o) => o.line).join("\n") || "계정 없음");
+}
 
 let tidalPollTimer = null;
 const btnTidal = $("btn-tidal-connect");
@@ -351,8 +352,7 @@ if (btnTidal) {
   btnTidal.onclick = async () => {
     if (tidalPollTimer) clearInterval(tidalPollTimer);
     // The account is fixed at the start: a change of the list while the code waits does not move the link elsewhere.
-    const user = $("tidal-user").value;
-    if (!user) return say("msg", "연결할 계정을 고르세요", "bad");
+    const user = me.who;
     say("msg", `${user}: TIDAL 기기 인증 요청 중…`);
     try {
       const res = await call("/admin/music/tidal/device", {});
@@ -401,8 +401,8 @@ if (btnTidal) {
 }
 
 $("btn-tidal-disconnect").onclick = async () => {
-  const user = $("tidal-user").value;
-  if (!user || !window.confirm(`${user} 계정의 TIDAL 연결을 해제할까요?`)) return;
+  const user = me.who;
+  if (!window.confirm(`${user} 계정의 TIDAL 연결을 해제할까요?`)) return;
   if (tidalPollTimer) clearInterval(tidalPollTimer);
   $("tidal-box").hidden = true;
   try {
@@ -463,15 +463,15 @@ function showCar(st) {
   $("car-owner").hidden = st.source !== "owner";
   $("car-fleet").hidden = st.source !== "fleet";
   $("car-fleet-user").hidden = st.source !== "fleet";
-  const pick = $("car-owner-user");
-  const was = pick.value;
-  pick.innerHTML = st.owners.map((o) => `<option value="${o.name}">${o.name}${o.role === "admin" ? " (관리자)" : ""}${o.linked ? " — 연결됨" : ""}</option>`).join("");
-  if (was && st.owners.some((o) => o.name === was)) pick.value = was;
-  const mine = st.owners.find((o) => o.name === pick.value);
-  $("car-owner-state").textContent = mine?.linked ? `${mine.name}: 연결됨` : `${pick.value || "계정"}: 미연결`;
-  $("car-owner-state").className = "hint" + (mine?.linked ? " saved" : "");
-  const linked = st.owners.filter((o) => o.linked).map((o) => o.name);
-  $("car-owners").textContent = linked.length ? `Tesla 연결된 계정: ${linked.join(", ")}` : "Tesla 연결된 계정 없음";
+  // The buttons are the account's logged in (st.me); every account's line below (car/index.ts statusLines).
+  if (ownButtons(["car-owner-begin", "car-owner-finish", "car-owner-unlink"], "car-owner-state")) {
+    $("car-owner-state").textContent = st.linked ? `${st.me}: 연결됨` : `${st.me}: 미연결`;
+    $("car-owner-state").className = "hint" + (st.linked ? " saved" : "");
+  }
+  $("car-lines").innerHTML = `<b>${me.admin ? "계정별 차량" : "내 차량"}</b>`;
+  $("car-lines").append((st.lines || []).join("\n") || "계정 없음");
+  // The table is for giving Fleet's cars out; by the owner login the lines say it all.
+  $("car-cars").hidden = st.source !== "fleet";
   // A 사용자 is told nothing of the Fleet app (st.fleet is null for them).
   const f = st.fleet;
   if (f) $("car-redirect").textContent = f.redirect;
@@ -511,22 +511,21 @@ for (const b of document.querySelectorAll("[data-car-source]")) {
   b.onclick = () => carCall("/admin/car/source", { source: b.dataset.carSource }, "방식을 바꿨습니다 — 차 목록을 다시 받으세요");
 }
 $("car-owner-begin").onclick = async () => {
-  try { const r = await call("/admin/car/owner/begin", { user: $("car-owner-user").value }); window.open(r.url, "_blank"); say("car-msg", "새 탭에서 로그인한 뒤, 끝 페이지의 주소를 붙여 넣으세요", "ok"); }
+  try { const r = await call("/admin/car/owner/begin", {}); window.open(r.url, "_blank"); say("car-msg", "새 탭에서 로그인한 뒤, 끝 페이지의 주소를 붙여 넣으세요", "ok"); }
   catch (e) { say("car-msg", e.message, "bad"); }
 };
 $("car-owner-finish").onclick = () => {
   const v = $("car-owner-paste").value.trim();
   if (!v) return say("car-msg", "주소나 토큰을 붙여 넣으세요", "bad");
   const isUrl = /code=/.test(v);
-  const user = $("car-owner-user").value;
+  const user = me.who;
   carCall(isUrl ? "/admin/car/owner/finish" : "/admin/car/owner/token", isUrl ? { url: v, user } : { token: v, user }, (r) => `${user}: 연결됨 — 차 ${r.cars.filter((c) => c.user === user).length}대`).then(() => { $("car-owner-paste").value = ""; });
 };
 $("car-owner-unlink").onclick = () => {
-  const user = $("car-owner-user").value;
+  const user = me.who;
   if (!window.confirm(`${user} 계정의 Tesla 연결을 해제할까요?`)) return;
   carCall("/admin/car/unlink", { which: "owner", user }, `${user}: Tesla 연결을 해제했습니다`);
 };
-$("car-owner-user").onchange = () => carState && showCar(carState);
 $("car-fleet-register").onclick = () => carCall("/admin/car/fleet/register", {}, "파트너 등록됨");
 $("car-fleet-begin").onclick = async () => {
   try { const r = await call("/admin/car/fleet/begin", {}); location.href = r.url; } catch (e) { say("car-msg", e.message, "bad"); }

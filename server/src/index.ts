@@ -594,7 +594,8 @@ const admin = registerAdmin(app, settings, {
   prerender: () => prerender(speaker),
 }, join(root, "admin", "index.html"), db);
 const music = registerMusic(app, settings, db, admin);
-registerUsers(app, db, settings, admin.adminGuard, workDir, admin.selfGuard);
+// A deleted account's Tesla and TIDAL links go with it (car is made just below; called only on a 삭제).
+registerUsers(app, db, settings, admin.adminGuard, workDir, admin.selfGuard, (name) => { music.forget(name); car.forget(name); });
 // The car's own speed for the tunnels (car/): Tesla linked on /admin, the samples to the car page.
 const car = registerCar(app, settings, db, admin, configDir, workDir);
 registerGuard(app);
