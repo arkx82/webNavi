@@ -52,8 +52,11 @@ LINK_OF = {"motorway": "motorway_link", "trunk": "trunk_link", "primary": "prima
 # What is prohibited, as OSRM's restriction kinds (for a via-node or via-way restriction the kind itself is
 # not used, only that it is a "no_"). 002 버스만회전: not for a car either.
 RESTRICTION = {"002": "no_left_turn", "003": "no_u_turn", "101": "no_left_turn", "102": "no_straight_on", "103": "no_right_turn"}
-# Vertices inside a link get ids above every MOCT node id (10 digits).
-VERTEX_BASE = 10 ** 11
+# Vertices inside a link get ids above every MOCT node id (10 digits, up to 4,180,315,800 in 2026-09) and below
+# 2^34: OSRM keeps OSM node ids in 34 bits, and ids from 10^11 came out of it cut (100004955827 as 14105609907) — the
+# live speeds for a link's inner segments (speeds.csv) never met the graph's, and its JSON's ten figures kept no
+# 11-digit id whole. From 9·10^9 they stay ten digits, under 2^34 (17,179,869,184), clear of MOCT's.
+VERTEX_BASE = 9 * 10 ** 9
 # A junction's inner links are a few tens of metres; a turn's via path is at most a ring's worth of them.
 INNER_M = 80
 INNER_HOPS = 4

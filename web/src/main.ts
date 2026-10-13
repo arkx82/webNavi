@@ -1568,6 +1568,7 @@ function relined(r: Route) {
     incidentsAt = null;
     aheadFor = null;
     void placeRestAreas(watch);
+    void placeLimits(watch, r);
   }
 }
 /** Routes whose line has been put onto the lanes (or asked to be): once each. */
@@ -1622,6 +1623,7 @@ function startDrive(r: Route) {
   prepareHighway(route);
   if (!fresh && !elsewhere) reanchorPopups();
   void placeRestAreas(watch);
+  void placeLimits(watch, route);
   arrived = false;
   showScreen("drive");
   setFollow(true);
@@ -2631,6 +2633,7 @@ function checkRoad(w: RouteWatch, r: Route, speedMps: number | null | undefined)
   }
   showSectionHud(tracker.frame());
   showLimit(w.limitAt(along), speedMps);
+  drawSign();
   showNextLight(w, along, speedMps);
   // The protected zones on the route, as bands on the road (those the driver keeps shown).
   zoneLayer.set([
@@ -2888,7 +2891,8 @@ function showLimit(held: ReturnType<RouteWatch["limitAt"]>, speedMps: number | n
   const speedOver = !!held && kmh != null && kmh > held.limit + guide.overspeedBy;
   const sectionOver = !!held && held.why === "section" && !!currentSectionInfo && currentSectionInfo.over;
   const over = speedOver || sectionOver;
-  document.querySelector(".big")!.classList.toggle("over", over);
+  cameraOver = over;
+  paintOver();
   document.body.classList.toggle("over-limit", over);
   if (!held) return;
   el("cam-limit").textContent = String(held.limit);
@@ -2900,6 +2904,86 @@ function showLimit(held: ReturnType<RouteWatch["limitAt"]>, speedMps: number | n
     voice.chime();
   }
 }
+
+/** Over the camera's (or the section's) limit, and over the road's sign: either turns the speed red. */
+let cameraOver = false;
+let signOver = false;
+function paintOver() {
+  document.querySelector(".big")!.classList.toggle("over", cameraOver || signOver);
+}
+
+// ---- the road's speed limit, as the sign by the road -------------------------
+// Wherever the car is: along the route the watch's (a 보호구역's, a 구간 단속's, the road's with the route's own speed
+// cameras over it: server/src/road/limits.ts, warnings.ts signLimitAt); off it, or with no route, the server's for
+// where the car is and the way it runs.
+
+async function placeLimits(w: RouteWatch, r: Route) {
+  try {
+    const got = await api.limits(r.path);
+    if (watch !== w) return;
+    w.setRoadLimits(got.runs);
+    log(`제한속도 ${got.runs.length}구간 · TMAP ${Math.round(got.tmapShare * 100)}%`);
+    drawSign();
+  } catch (e) {
+    log(`제한속도 못 받음 ${(e as Error).message}`);
+  }
+}
+
+const SOURCE_NAMES: Record<string, string> = { tmap: "TMAP", nodelink: "표준노드링크", camera: "단속 카메라", zone: "보호구역", section: "구간 단속" };
+let signShown: { kmh: number; src: string } | null = null;
+function showRoadSign(sign: { kmh: number; src: string } | null, speedMps: number | null | undefined) {
+  const box = el("road-sign");
+  box.hidden = !sign;
+  if (sign) {
+    el("road-sign-kmh").textContent = String(sign.kmh);
+    box.classList.toggle("wide", sign.kmh >= 100);
+    box.title = `제한속도 ${sign.kmh} km/h · ${SOURCE_NAMES[sign.src] ?? sign.src}`;
+  }
+  // Each change written down: a drive's log shows what the sign said where, and from what.
+  if (sign?.kmh !== signShown?.kmh || sign?.src !== signShown?.src) log(`제한속도 표시 ${sign ? `${sign.kmh} (${SOURCE_NAMES[sign.src] ?? sign.src})` : "없음"}`);
+  signShown = sign;
+  const kmh = speedMps == null ? null : speedMps * 3.6;
+  signOver = !!sign && kmh != null && kmh > sign.kmh + guide.overspeedBy;
+  document.body.classList.toggle("over-sign", signOver);
+  paintOver();
+}
+
+/** The server's answer for where the car is, off the route: what, for where, and when. */
+let hereLimit: { kmh: number | null; src: string | null; at: LonLat; t: number } | null = null;
+let hereAsking = false;
+/** Asked again once the car is this far on, or this long after (a standing car is asked once). */
+const HERE_MOVED_M = 40;
+const HERE_EVERY_MS = 10_000;
+function askHere(f: Shown) {
+  if (hereAsking || demo) return;
+  const moved = hereLimit ? metres(hereLimit.at[0], hereLimit.at[1], f.at[0], f.at[1]) : Infinity;
+  const due = !hereLimit || moved >= HERE_MOVED_M || (Date.now() - hereLimit.t >= HERE_EVERY_MS && f.speedMps > 1);
+  if (!due) return;
+  hereAsking = true;
+  const at: LonLat = [f.at[0], f.at[1]];
+  api.limitHere(at, f.speedMps > 1 ? f.bearing : null)
+    .then((a) => { hereLimit = { kmh: a.kmh, src: a.src, at, t: Date.now() }; drawSign(); })
+    .catch(() => undefined)
+    .finally(() => { hereAsking = false; });
+}
+
+function drawSign() {
+  // The demo's screen: a sign as the drive would have one.
+  if (demo) return showRoadSign({ kmh: 50, src: "tmap" }, tracker.frame()?.speedMps ?? null);
+  const f = tracker.frame();
+  if (!f) return showRoadSign(null, null);
+  const w = watch;
+  if (w && route && !f.offRoute && f.alongM != null && w.hasRoadLimits) {
+    const s = w.signLimitAt(f.alongM);
+    if (s) return showRoadSign({ kmh: s.kmh, src: s.src }, f.speedMps);
+  }
+  askHere(f);
+  // What the server said, while it is about here (not long ago, not far back).
+  const fresh = hereLimit && hereLimit.kmh != null && Date.now() - hereLimit.t < 30_000 && metres(hereLimit.at[0], hereLimit.at[1], f.at[0], f.at[1]) < 300;
+  showRoadSign(fresh ? { kmh: hereLimit!.kmh!, src: hereLimit!.src ?? "" } : null, f.speedMps);
+}
+// Between the road checks too, and with no route at all.
+setInterval(() => { if (!watch || !route || performance.now() - roadCheckedAt > 1500) drawSign(); }, 1000);
 
 // ---- a finger on the map ----------------------------------------------------
 // A tap on a shop's icon brings up that shop (and its neighbours) to drive

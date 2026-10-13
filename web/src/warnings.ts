@@ -176,6 +176,24 @@ const metresBetween = (a: LonLat, b: LonLat) => Math.hypot((b[0] - a[0]) * 111_3
 /** The limits a zone camera can give its zone. */
 const ZONE_LIMITS = new Set([20, 30, 40, 50, 60]);
 
+/** A stretch of the route at one limit, in metres along it. */
+interface RoadRun { fromM: number; toM: number; kmh: number; src: string }
+/** Where a speed camera's limit holds when the road's lists say otherwise: this far before it (its sign is before it)… */
+const CAMERA_BACK_M = 1000;
+/** …and this far on. */
+const CAMERA_ON_M = 300;
+/** [runs] with [fromM, toM] at [kmh], the runs it cuts kept either side. */
+function overlay(runs: RoadRun[], fromM: number, toM: number, kmh: number, src: string): RoadRun[] {
+  const out: RoadRun[] = [];
+  for (const r of runs) {
+    if (r.toM <= fromM || r.fromM >= toM) { out.push(r); continue; }
+    if (r.fromM < fromM) out.push({ ...r, toM: fromM });
+    if (r.toM > toM) out.push({ ...r, fromM: toM });
+  }
+  out.push({ fromM, toM, kmh, src });
+  return out.sort((a, b) => a.fromM - b.fromM);
+}
+
 export class RouteWatch {
   private line: Line;
   /** Every feature on the route, sorted by where it is along it. */
@@ -519,6 +537,69 @@ export class RouteWatch {
     // The route's own camera first; the other carriageway's (the zone the same both ways) where it has none.
     const cam = this.onRoute.find(of) ?? this.otherWay.find(of);
     return cam?.feature.limit ?? z.feature.limit;
+  }
+
+  /**
+   * The road's limits along this route (server/src/road/limits.ts), the server's path positions turned into metres
+   * along this watch's line.
+   */
+  setRoadLimits(runs: { from: number; to: number; kmh: number; src: string }[]) {
+    const along = this.line.along, last = along.length - 1;
+    const at = (x: number) => {
+      const i = Math.max(0, Math.min(last, Math.floor(x))), t = x - i;
+      return i < last ? along[i] + t * (along[i + 1] - along[i]) : along[last];
+    };
+    this.roadRuns = runs.map((r) => ({ fromM: at(r.from), toM: at(r.to), kmh: r.kmh, src: r.src })).filter((r) => r.toM > r.fromM);
+  }
+  private roadRuns: RoadRun[] = [];
+  get hasRoadLimits() {
+    return this.roadRuns.length > 0;
+  }
+
+  /**
+   * The limit where the car is, for the sign on the panel: a 보호구역's while in one (its own, its camera's), a 구간
+   * 단속's while in one, else the road's — with the route's own speed cameras put over the road's lists: a camera's
+   * limit is the one posted where it stands, and where TMAP or 표준노드링크 says otherwise round it, the camera is right
+   * (호국로's 80 where TMAP had 70, 2026-10-13).
+   */
+  signLimitAt(alongM: number): { kmh: number; why: "zone" | "section" | "road"; src: string } | null {
+    let zone: number | null = null;
+    for (let i = this.firstNear(alongM); i < this.onRoute.length; i++) {
+      const f = this.onRoute[i];
+      if (f.alongM > alongM) break;
+      if ((f.feature.kind === "school-zone" || f.feature.kind === "senior-zone") && f.endM >= alongM && this.zoneHere(f)) {
+        const limit = this.zoneLimit(f);
+        if (limit) zone = Math.min(zone ?? Infinity, limit);
+      }
+    }
+    if (zone != null) return { kmh: zone, why: "zone", src: "zone" };
+    const section = this.currentSection(alongM);
+    if (section) return { kmh: section.limit, why: "section", src: "section" };
+    const runs = this.roadRunsWithCameras();
+    let lo = 0, hi = runs.length - 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (runs[mid].toM < alongM) lo = mid + 1;
+      else if (runs[mid].fromM > alongM) hi = mid - 1;
+      else return { kmh: runs[mid].kmh, why: "road", src: runs[mid].src };
+    }
+    return null;
+  }
+  private camerasFor: { onRoute: Placed[]; runs: RoadRun[]; out: RoadRun[] } | null = null;
+  private roadRunsWithCameras(): RoadRun[] {
+    if (this.camerasFor?.onRoute === this.onRoute && this.camerasFor.runs === this.roadRuns) return this.camerasFor.out;
+    let out = this.roadRuns;
+    const silent = this.sectionPlan().silent;
+    for (const f of this.onRoute) {
+      const k = f.feature.kind, v = f.feature.limit;
+      // A speed camera's own limit; a 보호구역's camera speaks for its zone's hours only, and is the zone's (above).
+      if ((k !== "speed" && k !== "speed-signal") || !v || v < 20 || v > 120 || f.feature.zone || silent.has(f.feature.id)) continue;
+      const run = out.find((r) => r.fromM <= f.alongM && f.alongM <= r.toM);
+      if (!run || run.kmh === v) continue;
+      out = overlay(out, Math.max(run.fromM, f.alongM - CAMERA_BACK_M), Math.min(run.toM, f.alongM + CAMERA_ON_M), v, "camera");
+    }
+    this.camerasFor = { onRoute: this.onRoute, runs: this.roadRuns, out };
+    return out;
   }
 
   /** The 구간 단속 the car is currently inside, if any. */

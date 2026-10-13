@@ -538,3 +538,20 @@ test("no bump in an underpass: from the guide that enters it to the next guide, 
   beside.add([bumpOnLane("above", 500, 1.5, 0)]);
   assert.deepEqual(beside.ahead(0, 2000).map((a) => a.feature.id), ["above"]);
 });
+
+test("the sign: the road's limit along the route, a speed camera's own over it round the camera, a school zone's over all", () => {
+  const watch = new RouteWatch(route);
+  // The server's runs: path positions (vertex 10 is 500 m along, vertex 30 is 1500 m).
+  watch.setRoadLimits([{ from: 0, to: 10, kmh: 60, src: "tmap" }, { from: 10, to: 39, kmh: 50, src: "tmap" }]);
+  assert.deepEqual(watch.signLimitAt(200), { kmh: 60, why: "road", src: "tmap" });
+  assert.equal(watch.signLimitAt(800)?.kmh, 50);
+  // A speed camera at 1700 m saying 40 where the list has 50: 40 from 700 m before it to 300 m past, the 50 kept beyond.
+  watch.add([{ id: "cam40", kind: "speed", ...lonLat(offset(corner, 90, 700)), limit: 40 }]);
+  assert.deepEqual(watch.signLimitAt(1500), { kmh: 40, why: "road", src: "camera" });
+  assert.equal(watch.signLimitAt(600)?.kmh, 50, "more than 1 km before the camera is the list's again");
+  // A school zone's camera is the zone's, not the road's.
+  watch.add([{ id: "zone", kind: "school-zone", ...lonLat(offset(start, 0, 300)), limit: 30 }]);
+  assert.deepEqual(watch.signLimitAt(300), { kmh: 30, why: "zone", src: "zone" });
+  // Past the line's end: nothing.
+  assert.equal(watch.signLimitAt(5000), null);
+});

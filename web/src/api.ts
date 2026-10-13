@@ -15,6 +15,16 @@ async function get<T>(path: string, params: Record<string, string | undefined>):
 
 const pair = (p: LonLat) => `${p[0]},${p[1]}`;
 
+async function post<T>(path: string, body: unknown): Promise<T> {
+  const answer = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const got = await answer.json().catch(() => ({}));
+  if (!answer.ok) throw new Error((got as { error?: string }).error ?? `${answer.status}`);
+  return got as T;
+}
+
+/** A stretch of a route at one limit, as path positions (vertex index + fraction): server/src/road/limits.ts. */
+export interface LimitRun { from: number; to: number; kmh: number; src: "tmap" | "nodelink" }
+
 /** The car's way and speed, for a route asked on the move (main.ts sets it); none when standing. */
 export let heading: () => { deg: number; kmh: number } | null = () => null;
 export function setHeading(f: typeof heading) { heading = f; }
@@ -49,5 +59,10 @@ export const api = {
     get<Poi[]>("/api/nearby", { cat: category, at: pair(at), r: String(Math.round(radiusM)), fuel }),
   here: (at: LonLat, radiusM: number, withAddress: boolean) =>
     get<{ places: Poi[]; address: { name: string; address: string } | null }>("/api/here", { at: pair(at), r: String(radiusM), address: withAddress ? "1" : undefined }),
+  /** The route's speed limits all the way (TMAP's road matching, 표준노드링크 where it has none). */
+  limits: (path: LonLat[]) => post<{ runs: LimitRun[]; tmapShare: number }>("/api/road/limits", { path }),
+  /** The limit where a car off any route is, running [deg]. */
+  limitHere: (at: LonLat, deg: number | null) =>
+    get<{ kmh: number | null; src: "tmap" | "nodelink" | null }>("/api/road/limit", { at: pair(at), deg: deg == null ? undefined : String(Math.round(deg)) }),
   gasDetail: (uniId: string) => get<StationDetail>(`/api/nearby/gas/${encodeURIComponent(uniId)}`, {}),
 };

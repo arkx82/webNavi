@@ -33,8 +33,8 @@ interface OsrmAnswer {
   }[];
 }
 
-/** 표준노드링크 node ids are ten digits; a link's inner vertices are numbered above. */
-const MOCT_NODE_MAX = 1e10;
+/** 표준노드링크's node ids are below this; a link's inner vertices are numbered from it (tools/nodelink/build.py VERTEX_BASE). */
+const MOCT_NODE_MAX = 9e9;
 
 /**
  * The route's congestion from OSRM's per-segment annotation: where a

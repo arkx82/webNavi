@@ -40,6 +40,7 @@ import { registerShare } from "./share.js";
 import { registerCar } from "./car/index.js";
 import fastifyCompress from "@fastify/compress";
 import { Traffic } from "./road/traffic.js";
+import { SpeedLimits, type LonLat as LimitLonLat } from "./road/limits.js";
 import { HdPoints } from "./safety/hd-points.js";
 
 // Each address family tried for a second, not Node's 250 ms: this host has no IPv6 route out, so a far server (the public
@@ -293,6 +294,21 @@ app.get<{ Querystring: { at: string; r?: string } }>("/api/road/incidents", asyn
   } catch (refused) {
     return reply.code(502).send({ error: (refused as Error).message });
   }
+});
+
+// The road's speed limit all the way (road/limits.ts): the route's, for the sign on the car's panel, and where a car off any route is.
+const limits = new SpeedLimits(settings.reader("tmapAppKey"), () => env.KOREA_OSRM_URL, join(workDir, "nodelink", "links.db"), (m) => app.log.info(m));
+app.post<{ Body: { path?: unknown } }>("/api/road/limits", { bodyLimit: 4 * 1024 * 1024 }, async (request, reply) => {
+  const raw = request.body?.path;
+  const ok = (p: unknown): p is LimitLonLat => Array.isArray(p) && p.length === 2 && p.every((v) => typeof v === "number" && Number.isFinite(v));
+  if (!Array.isArray(raw) || raw.length < 2 || raw.length > 60_000 || !raw.every(ok)) return reply.code(400).send({ error: "path is [[lon,lat],…]" });
+  return limits.alongRoute(raw as LimitLonLat[]);
+});
+app.get<{ Querystring: { at?: string; deg?: string } }>("/api/road/limit", async (request, reply) => {
+  const at = lonLat(request.query.at ?? "");
+  if (!at) return reply.code(400).send({ error: "at is lon,lat" });
+  const deg = request.query.deg != null && request.query.deg !== "" && Number.isFinite(Number(request.query.deg)) ? Number(request.query.deg) : null;
+  return limits.here(request.user?.name ?? request.ip, at, deg);
 });
 
 // 노면색깔유도선 at a motorway junction: which colour of line leads to each branch.
@@ -557,6 +573,7 @@ const admin = registerAdmin(app, settings, {
     "음성 모델": speaker.ready ? (speaker.spent.current() ?? "무료 한도 모두 소진") + (speaker.spent.spentModels().length ? ` (소진: ${speaker.spent.spentModels().length}개)` : "") : false,
     "주유 가격": nearby.opinet.ready, 충전소: nearby.ev.ready ? true : nearby.kakao.ready ? "카카오 (빈 충전기 수 없음)" : false,
     시설물: safety.features.length,
+    제한속도: (() => { const l = limits.status(); return `TMAP 오늘 ${l.tmapCallsToday}/${l.budget}건 · 노드링크 ${l.nodelink ? "있음" : "없음"}${l.lastError ? ` · 마지막 오류 ${l.lastError}` : ""}`; })(),
     "단속 카메라": cameras ? `${cameras.features.length}대 (${new Date(cameras.at).toLocaleDateString("ko-KR")})` : camerasError ?? "아직 없음",
     ...Object.fromEntries(DATASETS.map((d) => {
       const k = sets.get(d.name);

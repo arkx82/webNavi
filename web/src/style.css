@@ -397,6 +397,14 @@ dl.lic dd { margin: 0; line-height: 1.45; font-variant-numeric: normal; }
 
 /* ---- 안내 설정 ---- */
 .top-right { display: flex; align-items: center; gap: 6px; }
+/* The speed-limit sign as it stands by the road: a white disc, a thick red ring, the figure in black. */
+.road-sign { width: 54px; height: 54px; border-radius: 50%; border: 6px solid #e5242b; background: #fff; color: #111; box-sizing: border-box;
+  display: flex; align-items: center; justify-content: center; flex: 0 0 auto; align-self: center; margin-right: 4px;
+  font-weight: 800; font-size: 22px; letter-spacing: -1px; font-variant-numeric: tabular-nums; box-shadow: 0 2px 8px rgba(0,0,0,.35); }
+.road-sign.wide { font-size: 18px; }
+/* Over it: the ring beats, as the speed beside it is red. */
+body.over-sign .road-sign { animation: sign-over 0.9s ease-in-out infinite alternate; }
+@keyframes sign-over { from { box-shadow: 0 0 0 0 rgba(229,36,43,.0); } to { box-shadow: 0 0 0 7px rgba(229,36,43,.55); } }
 .top-right button.icon { width: 40px; height: 40px; min-height: 40px; font-size: 18px; color: var(--dim); }
 #guide {
   position: absolute; top: 16px; right: 16px; bottom: 96px; width: 340px; z-index: 2; box-sizing: border-box;
@@ -763,6 +771,8 @@ body.layout-mini #hud { width: 260px; padding: 10px; gap: 6px; }
 body.layout-mini.hud-min #hud { width: auto; min-width: 0; }
 body.layout-mini .big { font-size: 40px; }
 body.layout-mini .big small { font-size: 14px; }
+body.layout-mini .road-sign { width: 44px; height: 44px; border-width: 5px; font-size: 18px; }
+body.layout-mini .road-sign.wide { font-size: 15px; }
 /* The car shows the time already; the next light and the turn after are left to the full layout. */
 body.layout-mini #clock, body.layout-mini #next-light, body.layout-mini #then { display: none !important; }
 body.layout-mini #turn { padding: 8px 10px; gap: 10px; border-radius: 12px; }
