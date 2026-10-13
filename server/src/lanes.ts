@@ -86,6 +86,8 @@ function along(path: LonLat[], m: number): LonLat {
 export const AFTER_POINTS = 40;
 
 interface Statements { byId: StatementSync; near: StatementSync; next: StatementSync }
+/** A lane found beside a route's vertex (LaneIndex.snap): where on it, how far off, and its link from [seg] on. */
+interface Found { at: LonLat; off: number; year: number; id: string | null; l: string | null; r: string | null; link: Link; seg: number }
 type End = Link & { path: LonLat[]; end: LonLat; before: number; side: number };
 /** How far past the stop line a corner is threaded, and how close to the route its links must keep. */
 const THREAD_M = 150;
@@ -134,6 +136,22 @@ const SNAP_M = 15;
 const SNAP_DEG = 25;
 const CARRIAGEWAY_M = 12;
 /**
+ * A lane the line is put on must be the route's road's: followed on (its links after it, the one nearest the route at
+ * each end) for FOLLOW_M — or, near a turn, to the end of the stretch held to the turn's side, up to FOLLOW_MAX_M —
+ * and back along its own link for FOLLOW_BACK_M, it may not leave the road: no further from the route than
+ * FOLLOW_LEAVE_M, and no more than FOLLOW_GROW_M further than it is here. An outermost lane is often another road's:
+ * a deceleration lane running 350 m beside the motorway before it leaves for another exit, a loop ramp that has just
+ * come alongside — taken for the turn's side, the line rode them and hooked back (북부간선도로 → 구리IC, 2026-10-13).
+ * Within the road the route's own line may cross several lanes (a provider's centre line heading for a fork on the
+ * far side): a lane a few metres further off later is still the road's, and the line keeps to it.
+ */
+const FOLLOW_M = 150;
+const FOLLOW_MAX_M = 700;
+const FOLLOW_BACK_M = 60;
+const FOLLOW_LEAVE_M = 20;
+const FOLLOW_GROW_M = 12;
+const FOLLOW_STEP_M = 20;
+/**
  * A lane's arrows: those painted in its last ARROW_BACK_M before the stop line (on the link before it too, where
  * that link leads only into this lane), within ARROW_OFF_M of its middle. The one nearest the stop line is the
  * lane's: one 64 m back is often from before a pocket opened (직진 there, 우회전 at the line).
@@ -151,15 +169,15 @@ const LANE_IN_M = 20;
 const NEAREST_OFF_M = 10;
 
 /** The nearest point of [line] to [p], how far it is, and the line's bearing there. */
-function nearestOn(p: LonLat, line: LonLat[]): { at: LonLat; off: number; bearing: number } | null {
-  let best: { at: LonLat; off: number; bearing: number } | null = null;
+function nearestOn(p: LonLat, line: LonLat[]): { at: LonLat; off: number; bearing: number; seg: number } | null {
+  let best: { at: LonLat; off: number; bearing: number; seg: number } | null = null;
   for (let i = 0; i + 1 < line.length; i++) {
     const [ax, ay] = toXY(line[i], p), [bx, by] = toXY(line[i + 1], p);
     const dx = bx - ax, dy = by - ay, len2 = dx * dx + dy * dy;
     const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, -(ax * dx + ay * dy) / len2));
     const off = Math.hypot(ax + t * dx, ay + t * dy);
     if (!best || off < best.off) {
-      best = { at: [line[i][0] + (line[i + 1][0] - line[i][0]) * t, line[i][1] + (line[i + 1][1] - line[i][1]) * t], off, bearing: bearingOf(line[i], line[i + 1]) };
+      best = { at: [line[i][0] + (line[i + 1][0] - line[i][0]) * t, line[i][1] + (line[i + 1][1] - line[i][1]) * t], off, bearing: bearingOf(line[i], line[i + 1]), seg: i };
     }
   }
   return best;
@@ -453,24 +471,42 @@ export class LaneIndex {
     // A link's line parsed once a call: neighbouring vertices see the same links, and the parse is most of the cost.
     const lines = new Map<number, LonLat[]>();
     const lineOf = (l: Link) => { let v = lines.get(l.rowid); if (!v) { v = JSON.parse(l.coords) as LonLat[]; lines.set(l.rowid, v); } return v; };
+    const alongOf: number[] = [0];
+    for (let i = 1; i < points.length; i++) alongOf.push(alongOf[i - 1] + dist(points[i - 1], points[i]));
     return points.map((p, i) => {
       const heading = headings[i];
       if (!Number.isFinite(heading)) return null;
       const d = SNAP_M / M, k = d / Math.cos((p[1] * Math.PI) / 180);
       const near = db.near.all(p[0] + k, p[0] - k, p[1] + d, p[1] - d) as unknown as Link[];
-      const found: { at: LonLat; off: number; year: number; id: string | null; l: string | null; r: string | null }[] = [];
+      const found: Found[] = [];
       for (const l of near) {
         const hit = nearestOn(p, lineOf(l));
         if (!hit || hit.off > SNAP_M || Math.abs(diff(heading, hit.bearing)) > SNAP_DEG) continue;
-        found.push({ at: hit.at, off: hit.off, year: surveyYear(l.id), id: l.id, l: l.l, r: l.r });
+        found.push({ at: hit.at, off: hit.off, year: surveyYear(l.id), id: l.id, l: l.l, r: l.r, link: l, seg: hit.seg });
       }
       if (found.length === 0) return null;
       // One survey where several overlap; then the carriageway the line is on: the nearest lane and the lanes beside it
       // by the map's own neighbours (l, r) — not every lane within a road's width. An exit ramp just parted from the
       // motorway is a road of its own: taken with the motorway's lanes 5–12 m off, the middle of them was a motorway
       // lane, and the line went back onto the motorway and turned off it again further on (동부간선 → 하계역, 2026-10-04).
-      const newest = Math.max(...found.map((f) => f.year));
-      const ours = found.filter((f) => f.year === newest);
+      // Only the lanes that are the route's (FOLLOW_M): not one about to leave it, nor one that has just come alongside.
+      // Before a survey is chosen: a loop ramp joining from a newer survey (2024's, the motorway beside it 2023's) was
+      // the only lane left by "the newest", and the line crossed onto it (구리IC, 2026-10-13). Near a turn a lane is
+      // followed to the end of the stretch held to the turn's side: it must reach the turn.
+      let route = found;
+      if (found.length > 1) {
+        const bias0 = biases?.[i] ?? 0;
+        let ahead = FOLLOW_M;
+        if (bias0 !== 0 && biases) {
+          let j = i;
+          while (j + 1 < points.length && Math.sign(biases[j + 1] ?? 0) === Math.sign(bias0) && alongOf[j + 1] - alongOf[i] <= FOLLOW_MAX_M) j++;
+          ahead = Math.min(FOLLOW_MAX_M, Math.max(FOLLOW_M, alongOf[j] - alongOf[i] + FOLLOW_STEP_M));
+        }
+        const theirs = found.filter((f) => !this.leaves(db, f, points, alongOf, i, ahead, lineOf));
+        if (theirs.length) route = theirs;
+      }
+      const newest = Math.max(...route.map((f) => f.year));
+      const ours = route.filter((f) => f.year === newest);
       const nearest = ours.reduce((a, b) => (b.off < a.off ? b : a));
       const byId = new Map(ours.filter((f) => f.id).map((f) => [f.id!, f]));
       let row = [nearest];
@@ -502,6 +538,57 @@ export class LaneIndex {
       const index = bias <= -0.34 ? 0 : bias >= 0.34 ? n - 1 : n === 2 ? 1 : Math.floor((n - 1) / 2);
       return withSide[index].at;
     });
+  }
+
+  /**
+   * Whether the lane [f] leaves the road of the route [points] (FOLLOW_LEAVE_M, FOLLOW_GROW_M) followed on for [aheadM]
+   * from point [i] (its own link, then at each end the link on that keeps nearest the route) or back along its own
+   * link for FOLLOW_BACK_M.
+   */
+  private leaves(db: Statements, f: Found, points: LonLat[], alongOf: number[], i: number, aheadM: number, lineOf: (l: Link) => LonLat[]): boolean {
+    const limit = Math.max(FOLLOW_LEAVE_M, f.off + FOLLOW_GROW_M);
+    // The route around here, as the lane is measured against it: to the first vertex at or past each end (a motorway's
+    // vertices can be hundreds of metres apart, and a window cut short of the next one left the lane nothing beside it).
+    let lo = i, hi = i;
+    while (lo > 0 && alongOf[i] - alongOf[lo] < FOLLOW_BACK_M + 30) lo--;
+    while (hi + 1 < points.length && alongOf[hi] - alongOf[i] < aheadM + 60) hi++;
+    if (hi === lo) return false;
+    const route = points.slice(lo, hi + 1);
+    const line = lineOf(f.link);
+    // On: the rest of its link, then the links after it.
+    const trail: LonLat[] = [f.at, ...line.slice(f.seg + 1)];
+    let walked = 0;
+    for (let k = 1; k < trail.length; k++) walked += dist(trail[k - 1], trail[k]);
+    let link: Link = f.link;
+    for (let guard = 0; walked < aheadM && guard < 30; guard++) {
+      const on = this.nextOf(db, link, lineOf(link));
+      if (!on.length) break;
+      // The way on nearest the route a little in.
+      let best: { l: Link; off: number } | null = null;
+      for (const n of on) {
+        const q = lineOf(n);
+        let len = 0;
+        for (let k = 1; k < q.length; k++) len += dist(q[k - 1], q[k]);
+        const off = offLine(along(q, Math.min(30, len)), route);
+        if (!best || off < best.off) best = { l: n, off };
+      }
+      const q = lineOf(best!.l);
+      for (let k = 1; k < q.length; k++) { trail.push(q[k]); walked += dist(q[k - 1], q[k]); }
+      link = best!.l;
+    }
+    // Only as far as the route goes (its end, or the end of the points asked): past it every lane is "off".
+    const routeAhead = alongOf[points.length - 1] - alongOf[i], routeBack = alongOf[i];
+    for (let s = FOLLOW_STEP_M; s <= Math.min(aheadM, walked, routeAhead); s += FOLLOW_STEP_M) {
+      if (offLine(along(trail, s), route) > limit) return true;
+    }
+    // Back: its own link before here (where it came from, as far as the link goes).
+    const back: LonLat[] = [f.at, ...line.slice(0, f.seg + 1).reverse()];
+    let backLen = 0;
+    for (let k = 1; k < back.length; k++) backLen += dist(back[k - 1], back[k]);
+    for (let s = FOLLOW_STEP_M; s <= Math.min(FOLLOW_BACK_M, backLen, routeBack); s += FOLLOW_STEP_M) {
+      if (offLine(along(back, s), route) > limit) return true;
+    }
+    return false;
   }
 
   lanes(at: LonLat, inDeg: number, after: LonLat[], way: Turn | "fork" | null = null): LaneInfo | null {

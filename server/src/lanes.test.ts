@@ -217,3 +217,27 @@ test("turning right, a slip lane is taken before the way through the junction, t
   const xy = (p: LonLat) => [(p[0] - O[0]) * M * Math.cos((O[1] * Math.PI) / 180), (p[1] - O[1]) * M];
   assert.ok(trail.some((p) => { const [x, y] = xy(p); return x > 8 && x < 20 && y > -25 && y < -12; }), "by the slip lane");
 });
+
+test("the line keeps to lanes of the route's road: not a deceleration lane beside it that leaves for another exit, nor a loop ramp just come alongside from a newer survey", async () => {
+  // A motorway north, three lanes (2023), from y = -800 to 400. On its right an exit lane runs beside it from -600 and
+  // leaves at -100 for another exit; further on a loop ramp (2024's survey) comes in from the east and runs beside it.
+  const main = (n: number, x: number, l: string | null, r: string | null) =>
+    link({ id: `A223M00000${n}`, lane: n, a: `M${n}a`, b: `M${n}b`, l, r }, [[x, -800], [x, -200], [x, 400]]);
+  const index = await indexOf([
+    main(1, -3.5, null, "A223M000002"),
+    main(2, 0, "A223M000001", "A223M000003"),
+    main(3, 3.5, "A223M000002", "A223E000001"),
+    link({ id: "A223E000001", lane: 4, a: "E0", b: "E1", l: "A223M000003", r: null }, [[7, -600], [7, -100], [30, -20], [80, 40]]),
+    link({ id: "A224L000001", lane: 1, a: "L0", b: "L1", l: null, r: null }, [[60, 100], [25, 150], [7, 180], [7, 400]]),
+  ]);
+  // The provider's line up the middle; a right turn ahead past the end (the line held to the right).
+  const ys: number[] = [];
+  for (let y = -700; y <= 380; y += 20) ys.push(y);
+  const got = index.snap(ys.map((y) => at(1, y)), ys.map(() => 0), ys.map(() => 1));
+  const xOf = (y: number) => { const p = got[ys.indexOf(y)]!; return Math.round(((p[0] - O[0]) * M * Math.cos((O[1] * Math.PI) / 180)) * 10) / 10; };
+  assert.equal(xOf(-400), 3.5, "beside the exit lane: the rightmost lane that goes on, not the one that leaves");
+  assert.equal(xOf(-140), 3.5);
+  assert.equal(xOf(200), 3.5, "beside the loop ramp: the motorway's lane, though the ramp is the newer survey");
+  // Near the end of the points asked every lane runs past it: still a lane, on the right.
+  assert.equal(xOf(380), 7, "the loop ramp, 200 m on, runs with the route: the rightmost");
+});
