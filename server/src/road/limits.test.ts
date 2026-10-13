@@ -118,3 +118,22 @@ test("off the route: TMAP's nearest road if it runs the car's way, remembered al
   await limits.here("june", [127.0015, 37.5], 90);
   assert.equal(n, before + 1);
 });
+
+test("a waypoint OSRM cannot place (a lane 표준노드링크 lacks) is left out, not the whole stretch", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "limits-"));
+  const db = new DatabaseSync(join(dir, "links.db"));
+  db.exec("CREATE TABLE links (id TEXT PRIMARY KEY, f TEXT, t TEXT, maxspd INTEGER, nodes TEXT); CREATE INDEX links_ft ON links (f, t)");
+  db.prepare("INSERT INTO links VALUES (?, ?, ?, ?, ?)").run("L", "1", "2", 70, "1,2");
+  db.close();
+  const asked: number[] = [];
+  const fetchJson: Fetch = async (url) => {
+    const n = url.split("/driving/")[1].split("?")[0].split(";").length;
+    asked.push(n);
+    if (n === 3) return { status: 400, json: async () => ({ code: "NoSegment", message: "Could not find a matching segment for coordinate 0" }) };
+    return { status: 200, json: async () => ({ code: "Ok", routes: [{ legs: [{ annotation: { nodes: [1, 2], distance: [500] } }] }] }) };
+  };
+  const limits = new SpeedLimits(() => undefined, () => "http://osrm", join(dir, "links.db"), undefined, fetchJson);
+  const a = await limits.alongRoute([[127.0, 37.5], [127.0113, 37.5]]);
+  assert.deepEqual(asked, [3, 2]);
+  assert.ok(a.runs.some((r) => r.kmh === 70 && r.src === "nodelink"));
+});

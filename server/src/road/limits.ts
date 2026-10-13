@@ -306,10 +306,18 @@ export class SpeedLimits {
     const nodes: string[] = [], edgeFrom: number[] = [], edgeTo: number[] = [];
     for (let s = 0; s < way.length - 1; s += 99) {
       const part = way.slice(s, s + 100);
-      const coords = part.map((w) => `${w.p[0].toFixed(6)},${w.p[1].toFixed(6)}`).join(";");
-      const bearings = part.map((w) => `${Math.round(w.deg)},45`).join(";");
-      const a = await this.fetchJson(`${base}/route/v1/driving/${coords}?overview=false&annotations=nodes,distance&continue_straight=true&bearings=${bearings}&radiuses=${part.map(() => "25").join(";")}`);
-      const j = (await a.json()) as { code?: string; routes?: { legs: { annotation: { nodes: number[]; distance: number[] } }[] }[] };
+      let j: { code?: string; message?: string; routes?: { legs: { annotation: { nodes: number[]; distance: number[] } }[] }[] } = {};
+      // A point on a lane 표준노드링크 does not have (the start in a side street) snaps nowhere and fails the lot: it is
+      // left out (OSRM names it) and the rest asked again.
+      for (let tries = 0; tries < 8 && part.length >= 2; tries++) {
+        const coords = part.map((w) => `${w.p[0].toFixed(6)},${w.p[1].toFixed(6)}`).join(";");
+        const bearings = part.map((w) => `${Math.round(w.deg)},45`).join(";");
+        const a = await this.fetchJson(`${base}/route/v1/driving/${coords}?overview=false&annotations=nodes,distance&continue_straight=true&bearings=${bearings}&radiuses=${part.map(() => "25").join(";")}`);
+        j = (await a.json()) as typeof j;
+        const bad = j.code === "NoSegment" ? Number(/coordinate (\d+)/.exec(j.message ?? "")?.[1]) : NaN;
+        if (!Number.isInteger(bad) || bad < 0 || bad >= part.length) break;
+        part.splice(bad, 1);
+      }
       if (j.code !== "Ok" || !j.routes?.length) continue;
       j.routes[0].legs.forEach((leg, li) => {
         const n = leg.annotation.nodes.map(String), d = leg.annotation.distance;
