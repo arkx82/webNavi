@@ -3,7 +3,7 @@ import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { ArrowIndex } from "./arrows.js";
-import { AFTER_POINTS, LaneIndex, lanesAlong, type Turn } from "./lanes.js";
+import { AFTER_POINTS, LaneIndex, SLIP_EXTRA_M, cornerGap, lanesAlong, turnsRight, type Turn } from "./lanes.js";
 import type { LonLat } from "./route/types.js";
 
 /**
@@ -110,15 +110,22 @@ export function registerHdmap(app: FastifyInstance, workDir: string) {
     if (!turns) return reply.code(400).send({ error: "turns" });
     if (!lanes.ready) return { trails: turns.map(() => null) };
     const ok = (p: unknown): p is LonLat => Array.isArray(p) && p.length === 2 && p.every(Number.isFinite);
-    // The lane ends at the stop line first; failing them, the lanes under the route before it (a slip lane, an outer lane).
-    const trails = turns.map((t) => {
+    // The lane ends at the stop line first, then the lanes under the route before it (a slip lane, an outer lane):
+    // both handed over, the page taking the first that fits its line — a stop-line trail it could not fit had left
+    // six right turns of the drives on the provider's cut while the slip lane's would have fitted (2026-10-13).
+    const answers = turns.map((t) => {
       if (!(ok(t.at) && Number.isFinite(t.in) && Array.isArray(t.after) && t.after.every(ok))) return null;
       const after = t.after.slice(0, AFTER_POINTS);
       const before = Array.isArray(t.before) && t.before.every(ok) ? t.before.slice(-AFTER_POINTS) : null;
-      return lanes.thread(t.at, t.in, after) ?? (before ? lanes.threadAlong(before, after) : null);
+      const stop = lanes.thread(t.at, t.in, after), slip = before ? lanes.threadAlong(before, after) : null;
+      // Turning right, the slip lane first where there is one: the stop line's way through the junction is not the car's.
+      if (stop && slip && turnsRight(t.in, t.at, after) && cornerGap(slip, t.at) >= cornerGap(stop, t.at) + SLIP_EXTRA_M) return { first: slip, then: stop };
+      return { first: stop ?? slip, then: stop ? slip : null };
     });
+    const trails = answers.map((a) => a?.first ?? null);
+    const alts = answers.map((a) => a?.then ?? null);
     request.log.debug({ asked: turns.length, threaded: trails.filter(Boolean).length }, "corners threaded");
-    return { trails };
+    return { trails, alts };
   });
   app.get<{ Querystring: { at: string; in: string; way?: string; after?: string } }>("/api/hdmap/lanes", async (request, reply) => {
     const at = request.query.at?.split(",").map(Number);

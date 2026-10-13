@@ -180,3 +180,40 @@ test("a 도류화 right turn: the slip lane leaves before the stop line, and is 
   assert.ok(trail!.some((p) => { const [x, y] = xy(p); return x > 60 && Math.abs(y + 9) < 1; }), "on the eastbound lane");
   assert.ok(!trail!.some((p) => xy(p)[1] > 5), "never north of the junction");
 });
+
+test("at a seam between two surveys the walk goes on: the 2023 road's lane ends 40 m short and the 2022 junction's slip lane starts a step on", async () => {
+  const index = await indexOf([
+    // 2023's survey: the outer lane north to y = -45, its end node named in nothing of 2022's.
+    link({ id: "A223B000001", lane: 1, a: "N0", b: "N1", l: null, r: null }, [[5.25, -120], [5.25, -45]]),
+    // 2022's: on from 1.5 m further, the slip lane and the eastbound road after it.
+    link({ id: "A222B000002", lane: 1, a: "M0", b: "M1", l: null, r: null }, [[5.4, -43.5], [5.25, -40]]),
+    link({ id: "A222B000003", lane: 1, a: "M1", b: "M2", l: null, r: null }, [[5.25, -40], [8, -25], [14, -14], [24, -9]]),
+    link({ id: "A222B000004", lane: 1, a: "M2", b: null, l: null, r: null }, [[24, -9], [80, -9], [200, -9]]),
+  ]);
+  const before: LonLat[] = [], after: LonLat[] = [];
+  for (let y = -80; y <= 0; y += 5) before.push(at(0, y));
+  for (let x = 0; x <= 150; x += 15) after.push(at(x, 0));
+  const trail = index.threadAlong(before, after);
+  assert.ok(trail, "found across the seam");
+  const xy = (p: LonLat) => [(p[0] - O[0]) * M * Math.cos((O[1] * Math.PI) / 180), (p[1] - O[1]) * M];
+  assert.ok(trail!.some((p) => { const [x, y] = xy(p); return x > 6 && x < 22 && y > -30 && y < -10; }), "through the slip");
+});
+
+test("turning right, a slip lane is taken before the way through the junction, though that keeps nearer the provider's line", async () => {
+  const index = await indexOf([
+    link({ id: "A219C000001", lane: 1, a: "S0", b: "S1", l: null, r: null }, [[5.25, -120], [5.25, -40]]),
+    // The slip lane, wide of the corner…
+    link({ id: "A219C000002", lane: 1, a: "S1", b: "S3", l: null, r: null }, [[5.25, -40], [8, -25], [14, -14], [24, -9]]),
+    // …and the outer lane on to the stop line and round the junction's corner, close by the provider's.
+    link({ id: "A219C000003", lane: 1, a: "S1", b: "S2", l: null, r: null }, [[5.25, -40], [5.25, -6]]),
+    link({ id: "A219C000004", lane: 1, a: "S2", b: "S3b", l: null, r: null }, [[5.25, -6], [6, -2], [9, -1], [24, -3]]),
+    link({ id: "A219C000005", lane: 1, a: "S3", b: null, l: null, r: null }, [[24, -9], [80, -6], [200, -6]]),
+    link({ id: "A219C000006", lane: 1, a: "S3b", b: null, l: null, r: null }, [[24, -3], [80, -6], [200, -6]]),
+  ]);
+  const before: LonLat[] = [], after: LonLat[] = [];
+  for (let y = -80; y <= 0; y += 5) before.push(at(0, y));
+  for (let x = 0; x <= 150; x += 15) after.push(at(x, 0));
+  const trail = index.threadAlong(before, after)!;
+  const xy = (p: LonLat) => [(p[0] - O[0]) * M * Math.cos((O[1] * Math.PI) / 180), (p[1] - O[1]) * M];
+  assert.ok(trail.some((p) => { const [x, y] = xy(p); return x > 8 && x < 20 && y > -25 && y < -12; }), "by the slip lane");
+});

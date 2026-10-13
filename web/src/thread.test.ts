@@ -100,9 +100,10 @@ test("the splice slopes onto the trail and off it, and a trail that rejoins aske
   const trail: LonLat[] = [at(0, 180), at(3, 190), at(8, 197), at(15, 200), at(25, 200), at(60, 200)];
   assert.ok(splice(r, trail));
   const m = (p: LonLat) => [Math.round((p[0] - 127.0276) * 111_320 * Math.cos((37.4979 * Math.PI) / 180)), Math.round((p[1] - 37.4979) * 111_320)];
-  // The joins 40 m before the trail and 40 m past where it rejoins, not a step across to it; the arc's range is kept.
-  assert.deepEqual(r.path.map(m), [[0, 0], [0, 100], [0, 140], [0, 180], [3, 190], [8, 197], [15, 200], [55, 200], [100, 200], [200, 200]]);
-  assert.deepEqual(r.threaded, [[3, 7]]);
+  // The joins 40 m before the trail and 40 m past its end (the trail followed while it keeps to the route), not a step
+  // across to it; the arc's range is kept.
+  assert.deepEqual(r.path.map(m), [[0, 0], [0, 100], [0, 140], [0, 180], [3, 190], [8, 197], [15, 200], [25, 200], [60, 200], [100, 200], [200, 200]]);
+  assert.deepEqual(r.threaded, [[3, 9]]);
   // Rejoining at a right angle: another lane's.
   const askew = corner();
   assert.ok(!splice(askew, [at(0, 180), at(10, 170), at(20, 170), at(20, 200)]));
@@ -242,4 +243,18 @@ test("out of a right turn the line is in the rightmost lane for a while, then mo
   const close = sidesAlong(line, [{ alongM: 100, bias: 1, reach: 340 }, { alongM: 170, bias: -1, reach: 340 }]);
   assert.equal(close.biases[11], 1, "10 m out: the exit lane");
   assert.equal(close.biases[12], -1, "20 m out: the next turn's, leaving 40 m to move and 20 to settle");
+});
+
+test("a slip lane's trail from 70 m before the junction is put in round the corner, not taken as rejoined on the way in", () => {
+  const r = corner();
+  // On the route north from y = 130, then off east through the slip lane, onto the road east 8 m south of the line.
+  const trail: LonLat[] = [];
+  for (let y = 130; y <= 165; y += 5) trail.push(at(0.5, y));
+  trail.push(at(3, 175), at(8, 184), at(15, 190), at(25, 193));
+  for (let x = 35; x <= 120; x += 10) trail.push(at(x, 196));
+  for (let x = 130; x <= 180; x += 10) trail.push(at(x, 199));
+  assert.ok(splice(r, trail, at(0, 200)));
+  // The line goes through the slip lane, far from the corner.
+  assert.ok(r.path.some((p) => Math.abs(p[0] - at(8, 184)[0]) < 1e-6 && Math.abs(p[1] - at(8, 184)[1]) < 1e-6), "through the slip");
+  assert.ok(!r.path.some((p) => Math.abs(p[0] - at(0, 200)[0]) < 1e-9 && Math.abs(p[1] - at(0, 200)[1]) < 1e-9), "the corner's vertex gone");
 });

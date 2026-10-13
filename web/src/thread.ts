@@ -23,6 +23,8 @@ const REJOIN_M = 4;
  */
 const REJOIN_FAR_M = 9;
 const REJOIN_PARALLEL_DEG = 15;
+/** A trail rejoins the route this far past the turn's guide at the least: before it, it is still on the way in. */
+const PAST_TURN_M = 5;
 /**
  * The joins are moved back and on along the route this many metres for
  * every metre the trail sits beside it (a slope of about 14°): a trail
@@ -66,7 +68,7 @@ export function turnsOf(route: Route, line = new Line(route.path)): { guide: num
  * put into [route] in place of the cut it replaces: from where the trail
  * starts on the route to where it rejoins it. Returns whether it fitted.
  */
-export function splice(route: Route, trail: LonLat[]): boolean {
+export function splice(route: Route, trail: LonLat[], at?: LonLat): boolean {
   trail = distinct(trail);
   // A lane's end surveyed a step beside the link it joins (a short first leg at an angle to the next): the trail starts past it.
   while (trail.length > 2 && metres(trail[0][0], trail[0][1], trail[1][0], trail[1][1]) < TRAIL_STEP_M
@@ -75,13 +77,18 @@ export function splice(route: Route, trail: LonLat[]): boolean {
   const line = new Line(route.path);
   const s = line.project(trail[0], 0, line.path.length);
   if (s.offM > START_OFF_M) return false;
-  // Where the trail meets the route again: the first trail point past 20 m that lies on it.
+  // Where the trail meets the route again: the first trail point past 20 m that lies on it, past the turn. A trail
+  // from the lanes 70 m before the junction (a slip lane's, lanes.threadAlong) runs on the route all the way in, and
+  // was taken as rejoined there: the approach was replaced, the slip lane let go, and the line still cut through the
+  // junction (경복아파트 사거리, 2026-10-13).
+  const corner = at ? line.project(at, 0, line.path.length).alongM : null;
+  const past = (p: { alongM: number }) => p.alongM > s.alongM + 10 && (corner == null || p.alongM >= corner + PAST_TURN_M);
   let k = -1, e = s, walked = 0;
   for (let i = 1; i < trail.length; i++) {
     walked += metres(trail[i - 1][0], trail[i - 1][1], trail[i][0], trail[i][1]);
     if (walked < 20) continue;
     const p = line.project(trail[i], s.segment, 60);
-    if (p.offM <= REJOIN_M && p.alongM > s.alongM + 10) { k = i; e = p; break; }
+    if (p.offM <= REJOIN_M && past(p)) { k = i; e = p; break; }
   }
   if (k < 0) {
     walked = 0;
@@ -90,10 +97,21 @@ export function splice(route: Route, trail: LonLat[]): boolean {
       if (walked < 30) continue;
       const p = line.project(trail[i], s.segment, 60);
       const deg = bearing(trail[i - 1][0], trail[i - 1][1], trail[i][0], trail[i][1]);
-      if (p.offM <= REJOIN_FAR_M && p.alongM > s.alongM + 10 && Math.abs(((p.bearing - deg + 540) % 360) - 180) <= REJOIN_PARALLEL_DEG) { k = i; e = p; break; }
+      if (p.offM <= REJOIN_FAR_M && past(p) && Math.abs(((p.bearing - deg + 540) % 360) - 180) <= REJOIN_PARALLEL_DEG) { k = i; e = p; break; }
     }
   }
   if (k < 0) return false;
+  // On along the trail while it keeps to the route: the lanes' line as far as it goes, and the straight step from it
+  // to the route as short as can be — from the first point back, it cut across a road still bending (중계역,
+  // 화양사거리, 2026-10-13).
+  // A lane beside the route's line (the inner lane round a loop ramp, 5 m in) is still the route's way.
+  while (k + 1 < trail.length) {
+    const p = line.project(trail[k + 1], e.segment, 60);
+    const deg = bearing(trail[k][0], trail[k][1], trail[k + 1][0], trail[k + 1][1]);
+    if (p.offM > REJOIN_FAR_M || p.alongM <= e.alongM || Math.abs(((p.bearing - deg + 540) % 360) - 180) > REJOIN_DEG) break;
+    k++;
+    e = p;
+  }
   // Rejoining at an angle, or after a long way round: another lane's trail, not this turn's.
   const outDeg = bearing(trail[k - 1][0], trail[k - 1][1], trail[k][0], trail[k][1]);
   if (Math.abs(((e.bearing - outDeg + 540) % 360) - 180) > REJOIN_DEG) return false;
@@ -566,9 +584,14 @@ export async function threadRoute(route: Route): Promise<Route> {
     if (turns.length === 0) { roundCorners(route); return route; }
     const a = await fetch("/api/hdmap/thread", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ turns: turns.map((t) => t.turn) }) });
     if (!a.ok) return route;
-    const { trails } = (await a.json()) as { trails: (LonLat[] | null)[] };
-    // Later corners first: a splice before them would move their indices, not their places, but the line is remade each time anyway.
-    for (const trail of trails) if (trail) splice(route, trail);
+    const { trails, alts } = (await a.json()) as { trails: (LonLat[] | null)[]; alts?: (LonLat[] | null)[] };
+    // Each corner's first trail that fits the line: the stop line's, else the one from the lanes before it.
+    trails.forEach((trail, i) => {
+      const at = turns[i]?.turn.at;
+      if (trail && splice(route, trail, at)) return;
+      const alt = alts?.[i];
+      if (alt) splice(route, alt, at);
+    });
   } catch { /* the corners as the provider drew them */ }
   // What the lanes did not thread, rounded.
   try { roundCorners(route); } catch { /* left as drawn */ }

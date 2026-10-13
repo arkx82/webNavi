@@ -100,10 +100,35 @@ const ALONG_MEAN_M = 10;
 const ALONG_MAX_M = 22;
 const ALONG_END_M = 14;
 const ALONG_STRAY_M = 25;
+/** Where the map ends after the turn, the trail must be this far past the guide (the turn done, on the street's way). */
+const ALONG_MAP_ENDS_M = 15;
+/**
+ * A right turn's slip lane (우회전 전용, 도류화) passes the corner wide, inside it: a way this much further from the
+ * route's corner than the nearest way is one. Where there is one it is the turn's — the provider's line through the
+ * middle of the junction, which the nearest way follows, is not where a car turning right goes.
+ */
+export const SLIP_EXTRA_M = 6;
+/** How near [trail] comes to [corner] (the route's turn point). */
+export function cornerGap(trail: LonLat[], corner: LonLat): number {
+  return Math.min(...resample(trail, 2).map((p) => dist(p, corner)));
+}
+/** Whether the way in [inDeg] and the way out (from [at] along [after]) make a right turn. */
+export function turnsRight(inDeg: number, at: LonLat, after: LonLat[]): boolean {
+  const out = along(after, 30);
+  const bend = diff(inDeg, bearingOf(at, out));
+  return bend > 30 && bend < 150;
+}
 /** Ways tried at most, a corner (a junction's lanes branch, and a slip lane's again). */
 const ALONG_TRIES = 400;
 /** A lane's end this close to the next link's start is the same point, surveyed twice. */
 const TRAIL_JOIN_M = 3;
+/**
+ * Where one survey's links meet another's (2023's road up to 2022's junction: 언주로 northbound into 경복아파트
+ * 사거리, 2026-10-13) no link's end node is the next one's start: a link that starts within this of the end, the same
+ * way on, takes its place — or the walk stopped 43 m short and the slip lane the route turned through was never found.
+ */
+const SEAM_M = 6;
+const SEAM_DEG = 30;
 /** A lane within this of a route vertex, running within SNAP_DEG of the route's way, is the road's; lanes within CARRIAGEWAY_M of the nearest are one carriageway. */
 const SNAP_M = 15;
 const SNAP_DEG = 25;
@@ -253,6 +278,32 @@ export class LaneIndex {
   }
 
   /**
+   * The links on from [link]: those its end node starts, or, at a seam between two surveys (none start there), those
+   * that start within SEAM_M of its end, running the same way.
+   */
+  private nextOf(db: Statements, link: { id: string | null; b: string | null; coords: string }, path?: LonLat[]): Link[] {
+    if (link.b) {
+      const on = db.next.all(link.b) as unknown as Link[];
+      if (on.length) return on;
+    }
+    const p = path ?? (JSON.parse(link.coords) as LonLat[]);
+    if (p.length < 2) return [];
+    const end = p[p.length - 1];
+    let i = p.length - 2;
+    while (i > 0 && dist(p[i], end) < 3) i--;
+    const way = bearingOf(p[i], end);
+    const d = SEAM_M / M, k = d / Math.cos((end[1] * Math.PI) / 180);
+    return (db.near.all(end[0] + k, end[0] - k, end[1] + d, end[1] - d) as unknown as Link[]).filter((l) => {
+      if (l.id === link.id) return false;
+      const q = JSON.parse(l.coords) as LonLat[];
+      if (q.length < 2 || dist(q[0], end) > SEAM_M) return false;
+      let j = 1;
+      while (j < q.length - 1 && dist(q[0], q[j]) < 3) j++;
+      return Math.abs(diff(way, bearingOf(q[0], q[j]))) <= SEAM_DEG;
+    });
+  }
+
+  /**
    * The lane links through the junction at [at] along the route's way: from
    * a lane's end at the stop line, the links on that keep nearest [after]
    * (the route's next 150 m), as one line — the corner as the road is
@@ -266,12 +317,12 @@ export class LaneIndex {
     const ends = this.endsNear(db, at, inDeg);
     let best: { trail: LonLat[]; off: number } | null = null;
     for (const seed of ends) {
-      for (const s of (seed.b ? (db.next.all(seed.b) as unknown as Link[]) : [])) {
+      for (const s of this.nextOf(db, seed, seed.path)) {
         // Through the junction and on, each hop the link that stays nearest the route.
         let trail = JSON.parse(s.coords) as LonLat[];
         let last: Link = s;
-        for (let hop = 0; hop < 6 && lengthOf(trail) < THREAD_M && last.b; hop++) {
-          const on = db.next.all(last.b) as unknown as Link[];
+        for (let hop = 0; hop < 6 && lengthOf(trail) < THREAD_M; hop++) {
+          const on = this.nextOf(db, last);
           if (on.length === 0) break;
           const pick = on.reduce((a, b) => (offLine(along(JSON.parse(a.coords) as LonLat[], 25), after) <= offLine(along(JSON.parse(b.coords) as LonLat[], 25), after) ? a : b));
           trail = trail.concat((JSON.parse(pick.coords) as LonLat[]).slice(1));
@@ -323,37 +374,48 @@ export class LaneIndex {
       seeds = found.filter((f) => surveyYear(f.link.id) === newest);
       break;
     }
-    let best: { trail: LonLat[]; off: number } | null = null;
+    const fits: { trail: LonLat[]; off: number }[] = [];
     let tried = 0;
     const inSpan = (p: LonLat) => alongOf(p) < refM - 10;
-    const judge = (whole: LonLat[]) => {
+    // [mapEnds]: the links stop there (the street turned into is not on 정밀도로지도: 녹천초교's, 월계역's): the turn
+    // itself is still the lanes', if it is done and the trail goes on the route's way.
+    const judge = (whole: LonLat[], mapEnds = false) => {
       const pts = resample(whole, ALONG_STEP_M);
       const cut = pts.findIndex((p) => alongOf(p) >= guideM + ALONG_PAST_M);
       const trail = cut > 1 ? pts.slice(0, cut + 1) : pts;
       const end = trail[trail.length - 1];
-      if (alongOf(end) < guideM + 50) return;
+      if (alongOf(end) < guideM + (mapEnds ? ALONG_MAP_ENDS_M : 50)) return;
       const offs = trail.map((p) => offLine(p, ref));
       const mean = offs.reduce((a, b) => a + b, 0) / offs.length;
       // Running the route's way at its end, never far from it, and on the whole beside it.
       const endWay = bearingOf(trail[Math.max(0, trail.length - 3)], end);
       const refWay = bearingOf(along(ref, Math.max(0, alongOf(end) - 5)), along(ref, Math.min(refM, alongOf(end) + 5)));
       if (Math.abs(diff(endWay, refWay)) > 20 || mean > ALONG_MEAN_M || Math.max(...offs) > ALONG_MAX_M || offs[offs.length - 1] > ALONG_END_M) return;
-      if (!best || mean < best.off) best = { trail, off: mean };
+      fits.push({ trail, off: mean });
     };
-    const walk = (trail: LonLat[], b: string | null, hops: number) => {
+    const walk = (trail: LonLat[], from: Link, hops: number) => {
       if (++tried > ALONG_TRIES) return;
-      if (!b || hops >= 9 || alongOf(trail[trail.length - 1]) >= guideM + ALONG_PAST_M - 10) { judge(trail); return; }
-      const on = db.next.all(b) as unknown as Link[];
-      if (on.length === 0) { judge(trail); return; }
+      if (hops >= 9 || alongOf(trail[trail.length - 1]) >= guideM + ALONG_PAST_M - 10) { judge(trail); return; }
+      const on = this.nextOf(db, from);
+      if (on.length === 0) { judge(trail, true); return; }
       for (const l of on) {
         const path = JSON.parse(l.coords) as LonLat[];
         // A way that strays from the route, within the stretch the route covers, is not the turn's.
         if (resample(path, 10).some((p) => inSpan(p) && offLine(p, ref) > ALONG_STRAY_M)) continue;
-        walk(trail.concat(path.slice(dist(trail[trail.length - 1], path[0]) < TRAIL_JOIN_M ? 1 : 0)), l.b, hops + 1);
+        walk(trail.concat(path.slice(dist(trail[trail.length - 1], path[0]) < TRAIL_JOIN_M ? 1 : 0)), l, hops + 1);
       }
     };
-    for (const s of seeds) walk([s.from, ...s.path.slice(s.i + 1)], s.link.b, 0);
-    return (best as { trail: LonLat[] } | null)?.trail ?? null;
+    for (const s of seeds) walk([s.from, ...s.path.slice(s.i + 1)], s.link, 0);
+    if (fits.length === 0) return null;
+    // The way nearest the route; turning right, a slip lane before it.
+    fits.sort((a, b) => a.off - b.off);
+    const corner = before[before.length - 1];
+    if (turnsRight(bearingOf(before[Math.max(0, before.length - 4)], corner), corner, after)) {
+      const near = cornerGap(fits[0].trail, corner);
+      const slip = fits.find((f) => cornerGap(f.trail, corner) >= near + SLIP_EXTRA_M);
+      if (slip) return slip.trail;
+    }
+    return fits[0].trail;
   }
 
   /**
@@ -575,7 +637,7 @@ export class LaneIndex {
     if (loopsRight(laneIn, trail)) return { trail: cutAtRight(laneIn, trail), stopped: true };
     let last: Link = s;
     for (let hop = 0; hop < 4 && lengthOf(trail) < 150; hop++) {
-      const on = last.b ? (db.next.all(last.b) as unknown as Link[]) : [];
+      const on = this.nextOf(db, last);
       if (on.length === 0) return { trail, stopped: true };
       const heading = bearingOf(trail[trail.length - 2], trail[trail.length - 1]);
       const pick = on.reduce((a, b) => (Math.abs(diff(heading, firstDeg(a))) <= Math.abs(diff(heading, firstDeg(b))) ? a : b));
