@@ -131,7 +131,7 @@ class Links {
   private db: DatabaseSync | null = null;
   private fromStmt: StatementSync | null = null;
   private endsStmt: StatementSync | null = null;
-  private inner: { first: Float64Array; last: Float64Array; kmh: Int16Array } | null = null;
+  private blocks: { first: Float64Array; last: Float64Array; kmh: Int16Array } | null = null;
   constructor(private file: string) {}
   private open(): boolean {
     if (this.db) return true;
@@ -145,26 +145,28 @@ class Links {
   from(node: string): { t: string; maxspd: number | null }[] {
     return this.open() ? (this.fromStmt!.all(node) as { t: string; maxspd: number | null }[]) : [];
   }
-  /** The limit of the link an OSRM edge [a, b] lies on. */
-  edge(a: number, b: number): number | null {
-    if (!this.open()) return null;
-    for (const n of [a, b]) {
-      if (n < INNER_ID) continue;
-      const inner = this.innerIndex();
-      let lo = 0, hi = inner.first.length - 1;
-      while (lo <= hi) {
-        const mid = (lo + hi) >> 1;
-        if (inner.first[mid] > n) hi = mid - 1;
-        else if (inner.last[mid] < n) lo = mid + 1;
-        else return inner.kmh[mid] || null;
-      }
+  /** The limit of the link an inner vertex [n] is on. */
+  inner(n: number): number | null {
+    if (!this.open() || n < INNER_ID) return null;
+    const inner = this.innerIndex();
+    let lo = 0, hi = inner.first.length - 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (inner.first[mid] > n) hi = mid - 1;
+      else if (inner.last[mid] < n) lo = mid + 1;
+      else return inner.kmh[mid] || null;
     }
-    const r = (this.endsStmt!.get(String(a), String(b)) ?? this.endsStmt!.get(String(b), String(a))) as { maxspd: number | null } | undefined;
+    return null;
+  }
+  /** The limit of the link from node [a] to node [b] (its two ends). */
+  ends(a: number, b: number): number | null {
+    if (!this.open()) return null;
+    const r = this.endsStmt!.get(String(a), String(b)) as { maxspd: number | null } | undefined;
     return r?.maxspd ?? null;
   }
   /** Built the first time a car off its route asks: a few seconds over the 1.5 million links. */
   private innerIndex() {
-    if (this.inner) return this.inner;
+    if (this.blocks) return this.blocks;
     const rows: [number, number, number][] = [];
     for (const r of this.db!.prepare("SELECT nodes, maxspd FROM links").iterate() as Iterable<{ nodes: string; maxspd: number | null }>) {
       const ids = r.nodes.split(",");
@@ -173,8 +175,8 @@ class Links {
       if (first >= INNER_ID) rows.push([Math.min(first, last), Math.max(first, last), r.maxspd ?? 0]);
     }
     rows.sort((x, y) => x[0] - y[0]);
-    this.inner = { first: Float64Array.from(rows, (r) => r[0]), last: Float64Array.from(rows, (r) => r[1]), kmh: Int16Array.from(rows, (r) => r[2]) };
-    return this.inner;
+    this.blocks = { first: Float64Array.from(rows, (r) => r[0]), last: Float64Array.from(rows, (r) => r[1]), kmh: Int16Array.from(rows, (r) => r[2]) };
+    return this.blocks;
   }
 }
 
@@ -357,7 +359,7 @@ export class SpeedLimits {
       const v = await this.nearTmap(p, deg).catch((e) => { this.lastError = `TMAP ${(e as Error).message}`; return null; });
       if (v != null) return { kmh: v, src: "tmap" };
     }
-    const v = await this.nearNodelink(p, deg).catch(() => null);
+    const v = await this.nearNodelink(p, deg).catch((e) => { this.lastError = `노드링크 ${(e as Error).message}`; return null; });
     return v != null ? { kmh: v, src: "nodelink" } : { kmh: null, src: null };
   }
 
@@ -388,15 +390,29 @@ export class SpeedLimits {
     return speed;
   }
 
+  /**
+   * 표준노드링크's limit under a moving car: OSRM a few tens of metres on, the car's way, and the first link its nodes
+   * name — an inner vertex by its link's block, else two ends in a row. (OSRM's nearest names one end as 0.)
+   */
   private async nearNodelink(p: LonLat, deg: number | null): Promise<number | null> {
     const base = this.osrmUrl();
-    if (!base || !this.links.ready) return null;
-    const a = await this.fetchJson(`${base}/nearest/v1/driving/${p[0].toFixed(6)},${p[1].toFixed(6)}?number=1${deg != null ? `&bearings=${Math.round(deg)},45` : ""}`);
-    const j = (await a.json()) as { code?: string; waypoints?: { nodes: number[]; distance: number }[] };
-    const w = j.waypoints?.[0];
-    if (j.code !== "Ok" || !w || w.distance > MATCH_OFF_M) return null;
-    const v = this.links.edge(w.nodes[0], w.nodes[1]);
-    return plausible(v) ? v : null;
+    if (!base || deg == null || !this.links.ready) return null;
+    const k = Math.cos(p[1] * RAD), ahead: LonLat = [p[0] + (Math.sin(deg * RAD) * 60) / (R * RAD * k), p[1] + (Math.cos(deg * RAD) * 60) / (R * RAD)];
+    const coords = `${p[0].toFixed(6)},${p[1].toFixed(6)};${ahead[0].toFixed(6)},${ahead[1].toFixed(6)}`;
+    const a = await this.fetchJson(`${base}/route/v1/driving/${coords}?overview=false&annotations=nodes&bearings=${Math.round(deg)},45;${Math.round(deg)},90&radiuses=25;60`);
+    const j = (await a.json()) as { code?: string; routes?: { legs: { annotation: { nodes: number[] } }[] }[]; waypoints?: { distance: number }[] };
+    const nodes = j.routes?.[0]?.legs[0]?.annotation.nodes;
+    if (j.code !== "Ok" || !nodes?.length || (j.waypoints?.[0]?.distance ?? Infinity) > MATCH_OFF_M) return null;
+    for (const n of nodes) {
+      if (n < INNER_ID) continue;
+      const v = this.links.inner(n);
+      return plausible(v) ? v : null;
+    }
+    for (let i = 0; i + 1 < nodes.length; i++) {
+      const v = this.links.ends(nodes[i], nodes[i + 1]);
+      if (v != null) return plausible(v) ? v : null;
+    }
+    return null;
   }
 }
 

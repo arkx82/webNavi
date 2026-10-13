@@ -2962,7 +2962,13 @@ function askHere(f: Shown) {
   hereAsking = true;
   const at: LonLat = [f.at[0], f.at[1]];
   api.limitHere(at, f.speedMps > 1 ? f.bearing : null)
-    .then((a) => { hereLimit = { kmh: a.kmh, src: a.src, at, t: Date.now() }; drawSign(); })
+    .then((a) => {
+      // Standing, the way is not known and the server may say nothing: what it said here before still holds.
+      const same = hereLimit && metres(hereLimit.at[0], hereLimit.at[1], at[0], at[1]) < HERE_MOVED_M;
+      if (a.kmh == null && same && hereLimit!.kmh != null) hereLimit = { ...hereLimit!, t: Date.now() };
+      else hereLimit = { kmh: a.kmh, src: a.src, at, t: Date.now() };
+      drawSign();
+    })
     .catch(() => undefined)
     .finally(() => { hereAsking = false; });
 }
@@ -2979,7 +2985,8 @@ function drawSign() {
   }
   askHere(f);
   // What the server said, while it is about here (not long ago, not far back).
-  const fresh = hereLimit && hereLimit.kmh != null && Date.now() - hereLimit.t < 30_000 && metres(hereLimit.at[0], hereLimit.at[1], f.at[0], f.at[1]) < 300;
+  const away = hereLimit ? metres(hereLimit.at[0], hereLimit.at[1], f.at[0], f.at[1]) : Infinity;
+  const fresh = hereLimit && hereLimit.kmh != null && (away < HERE_MOVED_M || (Date.now() - hereLimit.t < 30_000 && away < 300));
   showRoadSign(fresh ? { kmh: hereLimit!.kmh!, src: hereLimit!.src ?? "" } : null, f.speedMps);
 }
 // Between the road checks too, and with no route at all.

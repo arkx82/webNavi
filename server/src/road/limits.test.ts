@@ -67,14 +67,17 @@ test("표준노드링크 where TMAP has nothing: the route's nodes read as links
   put.run("L2", "2", "3", 60, "2,3");
   db.close();
   const fetchJson: Fetch = async (url) => {
-    if (url.includes("/route/v1/")) {
+    if (url.includes("/route/v1/") && !url.includes("radiuses=25;60")) {
       // Two legs: 1 → 9000000001 → 9000000002 → 2 | 2 → 3.
       return { status: 200, json: async () => ({ code: "Ok", routes: [{ legs: [
         { annotation: { nodes: [1, 9000000001, 9000000002, 2], distance: [100, 200, 200] } },
         { annotation: { nodes: [2, 3], distance: [500] } },
       ] }] }) };
     }
-    if (url.includes("/nearest/v1/")) return { status: 200, json: async () => ({ code: "Ok", waypoints: [{ nodes: [9000000001, 9000000002], distance: 3 }] }) };
+    if (url.includes("/route/v1/") && url.includes("radiuses=25;60")) {
+      // The car's few tens of metres on: from inside L1.
+      return { status: 200, json: async () => ({ code: "Ok", waypoints: [{ distance: 3 }, { distance: 10 }], routes: [{ legs: [{ annotation: { nodes: [9000000001, 9000000002] } }] }] }) };
+    }
     return { status: 404, json: async () => ({}) };
   };
   const limits = new SpeedLimits(() => undefined, () => "http://osrm", join(dir, "links.db"), undefined, fetchJson);
@@ -86,7 +89,8 @@ test("표준노드링크 where TMAP has nothing: the route's nodes read as links
   assert.equal(a.tmapShare, 0);
   assert.deepEqual(a.runs.map((r) => [r.kmh, r.src]), [[80, "nodelink"], [60, "nodelink"]]);
   // Off any route: the inner vertex's link.
-  assert.deepEqual(await limits.here("june", [127.001, 37.5], 90), { kmh: 80, src: "nodelink" });
+  const h = await limits.here("june", [127.001, 37.5], 90);
+  assert.deepEqual(h, { kmh: 80, src: "nodelink" }, JSON.stringify(limits.status()));
 });
 
 test("off the route: TMAP's nearest road if it runs the car's way, remembered along its length", async () => {
