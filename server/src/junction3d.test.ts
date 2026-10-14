@@ -50,3 +50,15 @@ test("the route lifted onto its lanes: under a bridge it stays on the road below
   const up = lift(ramp.map(([x, , z]) => [x + 0.5, 0, z] as P3), [road, ramp]).points;
   assert.ok(Math.abs(up[up.length - 1]![1] - 60) < 0.6, `up the ramp: ${up[up.length - 1]![1]}`);
 });
+
+test("a provider's line drawn on the road below, 6 m beside the ramp the route takes up: the route climbs the ramp, it does not leap at the top (수서 → 동부간선)", () => {
+  // Below: a road north at 37 m that bends away west after 280 m. The ramp: 6 m east of it, climbing from 37 m at y=0
+  // to 49 m at y=240, then on at 49 m to y=400; the line drawn by the provider moves onto it at 300 m.
+  const below: P3[] = Array.from({ length: 41 }, (_, i) => [i * 10 <= 280 ? 0 : -(i * 10 - 280), 37, -Math.min(i * 10, 280 + (i * 10 - 280) * 0.3)]);
+  const ramp: P3[] = Array.from({ length: 41 }, (_, i) => [6, Math.min(49, 37 + (i * 10 * 12) / 240), -i * 10]);
+  const line: P3[] = Array.from({ length: 81 }, (_, i) => [i * 5 < 300 ? 0.5 : 6, 0, -i * 5]);
+  const got = lift(line, [below, ramp]).points as P3[];
+  for (let i = 1; i < got.length; i++) assert.ok(Math.abs(got[i][1] - got[i - 1][1]) < 1.2, `a leap at ${i * 5} m: ${got[i - 1][1]} → ${got[i][1]}`);
+  assert.ok(Math.abs(got[40][1] - 47) < 1.5, `half way up the ramp at 200 m: ${got[40][1]}`);
+  assert.ok(Math.abs(got[30][0] - 6) < 0.5, "on the ramp, not on the road below");
+});

@@ -30,11 +30,15 @@ interface Row { id: number; kind: number; yr: number; t: string; k: string; xyz:
 const M = 111_320;
 /** Of two surveys of one road the older is let go where the newer lies within this of it, for most of its length. */
 const SAME_M = 1.5;
-/** A route point takes the height of a lane of its way within this. */
-const ROUTE_M = 4;
+/** A route point may lie on a lane of its way within this (a provider's line runs a lane or two beside the one driven). */
+const MATCH_M = 8;
 const ROUTE_DEG = 35;
-/** A metre of height from the point before weighs as this many metres off. */
-const CLIMB_WEIGHT = 2;
+/** A road climbs at most this many metres a metre (with a little slack for the survey); past it, a leap, all but barred. */
+const CLIMB_PER_M = 0.15;
+const STEEP_COST = 100;
+/** Moving sideways more than the step: a lane change, dear; and any change of lane a little. */
+const SIDE_COST = 2;
+const LANE_CHANGE_COST = 1.5;
 
 export class Junction3D {
   private db: DatabaseSync | null = null;
@@ -147,52 +151,82 @@ const headingOf = (a: P3, b: P3) => ((Math.atan2(b[0] - a[0], -(b[2] - a[2])) * 
 const turn = (a: number, b: number) => { const d = Math.abs(a - b) % 360; return d > 180 ? 360 - d : d; };
 
 /**
- * The route's points given heights: each the height of the lane under it running its way, of the lanes
- * stacked there (a road over a road) the one nearest the height before — a route goes up a ramp, it
- * does not jump from the road below to the bridge. Points with none take their neighbours' between.
+ * The route's points put on the lanes it drives, with their heights: of the lanes running its way under or beside
+ * each point, the sequence that stays nearest the provider's line while going as a road can — no more than a metre
+ * up or down in five, and from one lane to the next only as far as it went on (Viterbi, as a map-matcher does).
+ * Chosen point by point, the nearest lane won: the provider's line ran 6 m beside the ramp up to 동부간선 on the road
+ * below, and the route stayed down there and leapt 11 m at the top (수서, 2026-10-14). Points with no lane round them
+ * take their neighbours' heights; across such a gap anything may follow (a ramp the survey left out).
  */
 export function lift(route: P3[], links: P3[][]): { points: (P3 | null)[]; matched: number } {
   if (!route.length) return { points: [], matched: 0 };
-  const segs: { a: P3; b: P3; deg: number }[] = [];
-  for (const l of links) for (let i = 1; i < l.length; i++) segs.push({ a: l[i - 1], b: l[i], deg: headingOf(l[i - 1], l[i]) });
+  const segs: { a: P3; b: P3; deg: number; link: number }[] = [];
+  links.forEach((l, n) => { for (let i = 1; i < l.length; i++) segs.push({ a: l[i - 1], b: l[i], deg: headingOf(l[i - 1], l[i]), link: n }); });
   const grid = new Map<string, number[]>();
   const key = (x: number, z: number) => `${Math.floor(x / 20)}:${Math.floor(z / 20)}`;
   segs.forEach((s, n) => {
     const keys = new Set([key(s.a[0], s.a[2]), key(s.b[0], s.b[2]), key((s.a[0] + s.b[0]) / 2, (s.a[2] + s.b[2]) / 2)]);
     for (const k of keys) { const l = grid.get(k); if (l) l.push(n); else grid.set(k, [n]); }
   });
-  const out: (P3 | null)[] = [];
-  let before: number | null = null;
-  for (let i = 0; i < route.length; i++) {
-    const p = route[i];
+  // Each point's candidates: the nearest place on each lane of its way within MATCH_M.
+  type Cand = { p: P3; off: number; link: number };
+  const cands: Cand[][] = route.map((p, i) => {
     const way = headingOf(route[Math.max(0, i - 1)], route[Math.min(route.length - 1, i + 1)]);
     const gx = Math.floor(p[0] / 20), gz = Math.floor(p[2] / 20);
-    const heights: { h: number; off: number }[] = [];
+    const best = new Map<number, Cand>();
     for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) {
       for (const n of grid.get(`${gx + a}:${gz + b}`) ?? []) {
         const s = segs[n];
         if (turn(s.deg, way) > ROUTE_DEG) continue;
         const dx = s.b[0] - s.a[0], dz = s.b[2] - s.a[2], len = dx * dx + dz * dz;
         const t = len ? Math.max(0, Math.min(1, ((p[0] - s.a[0]) * dx + (p[2] - s.a[2]) * dz) / len)) : 0;
-        const off = Math.hypot(s.a[0] + t * dx - p[0], s.a[2] + t * dz - p[2]);
-        if (off <= ROUTE_M) heights.push({ h: s.a[1] + t * (s.b[1] - s.a[1]), off });
+        const q: P3 = [s.a[0] + t * dx, s.a[1] + t * (s.b[1] - s.a[1]), s.a[2] + t * dz];
+        const off = Math.hypot(q[0] - p[0], q[2] - p[2]);
+        if (off > MATCH_M) continue;
+        const had = best.get(s.link);
+        if (!had || off < had.off) best.set(s.link, { p: q, off, link: s.link });
       }
     }
-    if (!heights.length) { out.push(null); continue; }
-    // Nearest, and nearest the height before: a lane beside on the flat does not hold a route going up its ramp,
-    // and a deck 8 m over or under is never the one.
-    const cost = (c: { h: number; off: number }) => c.off + (before == null ? 0 : CLIMB_WEIGHT * Math.abs(c.h - before));
-    const pick = heights.reduce((x, y) => (cost(y) < cost(x) ? y : x));
-    before = pick.h;
-    out.push([p[0], round(pick.h), p[2]]);
+    return [...best.values()].sort((x, y) => x.off - y.off).slice(0, 8);
+  });
+  const chosen: (Cand | null)[] = route.map(() => null);
+  // Each run of points with candidates, solved whole.
+  for (let i = 0; i < route.length;) {
+    if (!cands[i].length) { i++; continue; }
+    let j = i;
+    while (j + 1 < route.length && cands[j + 1].length) j++;
+    const cost: number[][] = [cands[i].map((c) => c.off)];
+    const from: number[][] = [cands[i].map(() => -1)];
+    for (let k = i + 1; k <= j; k++) {
+      const step = Math.max(1, Math.hypot(route[k][0] - route[k - 1][0], route[k][2] - route[k - 1][2]));
+      const row: number[] = [], back: number[] = [];
+      for (const c of cands[k]) {
+        let bestCost = Infinity, bestFrom = 0;
+        cands[k - 1].forEach((pc, n) => {
+          const dh = Math.abs(c.p[1] - pc.p[1]);
+          const steep = Math.max(0, dh - CLIMB_PER_M * step);
+          const side = Math.max(0, Math.hypot(c.p[0] - pc.p[0], c.p[2] - pc.p[2]) - step - 0.5);
+          const v = cost[k - 1 - i][n] + steep * STEEP_COST + side * SIDE_COST + (c.link === pc.link ? 0 : LANE_CHANGE_COST);
+          if (v < bestCost) { bestCost = v; bestFrom = n; }
+        });
+        row.push(bestCost + c.off);
+        back.push(bestFrom);
+      }
+      cost.push(row);
+      from.push(back);
+    }
+    let n = cost[j - i].indexOf(Math.min(...cost[j - i]));
+    for (let k = j; k >= i; k--) { chosen[k] = cands[k][n]; n = from[k - i][n]; }
+    i = j + 1;
   }
+  const out: (P3 | null)[] = chosen.map((c) => (c ? [round(c.p[0]), round(c.p[1]), round(c.p[2])] : null));
   const matched = out.filter(Boolean).length;
-  // Gaps: the height between the nearest lifted either side.
+  // Gaps: the route's own place, at the height between the nearest lifted either side.
   for (let i = 0; i < out.length; i++) {
     if (out[i]) continue;
-    let a = i - 1; while (a >= 0 && !out[a]) a--;
-    let b = i + 1; while (b < out.length && !out[b]) b++;
-    const ha = a >= 0 ? out[a]![1] : null, hb = b < out.length ? out[b]![1] : null;
+    let a = i - 1; while (a >= 0 && !chosen[a]) a--;
+    let b = i + 1; while (b < out.length && !chosen[b]) b++;
+    const ha = a >= 0 ? chosen[a]!.p[1] : null, hb = b < out.length ? chosen[b]!.p[1] : null;
     if (ha == null && hb == null) continue;
     const h = ha == null ? hb! : hb == null ? ha : ha + ((i - a) / (b - a)) * (hb - ha);
     out[i] = [route[i][0], round(h), route[i][2]];
