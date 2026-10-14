@@ -261,7 +261,7 @@ let carPhoto = false;
 void fetch("/api/car-icon", { method: "HEAD" }).then((a) => { carPhoto = a.ok; if (carPhoto) applyGuide(); }).catch(() => {});
 /** Whether the server has the 3D model (CONFIG_DIR/car-model.glb): without it 3D is drawn as the Model Y L picture. */
 let carModel = false;
-void fetch("/api/car-model", { method: "HEAD" }).then((a) => { carModel = a.ok; if (carModel) applyGuide(); }).catch(() => {});
+void fetch("/api/car-model", { method: "HEAD" }).then((a) => { carModel = a.ok; if (carModel) { junctionView.modelUrl = "/api/car-model"; applyGuide(); } }).catch(() => {});
 
 // ---- the camera ------------------------------------------------------------
 // Three ways to look, as the car apps offer them: 3D (tilted, heading up,
@@ -3189,6 +3189,7 @@ function applyGuide() {
     if (goal && !el("s-preview").hidden && !el("go-row").hidden) void fetchOffers();
   }
   avoidSchoolWas = guide.avoidSchool;
+  junctionView.setPaint(guide.carPaint ?? PAINTS[0][0]);
   carLayer.set((guide.carIcon === "photo" && !carPhoto) || (guide.carIcon === "model3d" && !carModel) ? "tesla" : guide.carIcon ?? "tesla", guide.carPaint ?? PAINTS[0][0]);
   // 차량 데이터 turned off here: the stream let go and what it had forgotten (a stale "P" would hold the marker).
   if (!carDataOn()) { if (carLink.state !== "off") carLink.stop(); carLink.track.clear(); }

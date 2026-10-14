@@ -21,6 +21,8 @@ interface Scene {
 }
 type Three = typeof THREE_NS;
 
+/** The car model's length to the Model Y L's (car-model.ts LENGTH_STRETCH). */
+const MODEL_LENGTH_STRETCH = 4.976 / 4.78;
 /** The route asked round the junction: this far before it and after, a point every STEP_M. */
 const BEFORE_M = 450;
 const AFTER_M = 400;
@@ -44,7 +46,14 @@ export class JunctionView {
   private renderer: THREE_NS.WebGLRenderer | null = null;
   private world: THREE_NS.Scene | null = null;
   private camera: THREE_NS.PerspectiveCamera | null = null;
-  private car: THREE_NS.Mesh | null = null;
+  private car: THREE_NS.Object3D | null = null;
+  /** The 3D car (/api/car-model, the same Model Y the map draws), loaded once; null where there is none. */
+  private model: THREE_NS.Object3D | null = null;
+  private modelAsked = false;
+  private modelPaints: THREE_NS.MeshStandardMaterial[] = [];
+  private paint = "#4f5459";
+  /** Whether the server has the model (main.ts asks once); the plain box stands in where it has not. */
+  modelUrl: string | null = null;
   private loaded: Loaded | null = null;
   private asked = new Map<Guide, Promise<void>>();
   private closed = new WeakSet<Guide>();
@@ -112,6 +121,44 @@ export class JunctionView {
     return !this.box.hidden;
   }
 
+  /** The car's paint (안내 설정 → 차 색). */
+  setPaint(paint: string) {
+    this.paint = paint;
+    for (const m of this.modelPaints) m.color.set(paint);
+  }
+
+  /** The Model Y, once: the same file and the same Model Y L length the map's car is drawn at. */
+  private async loadModel(): Promise<void> {
+    if (this.modelAsked || !this.modelUrl || !this.three) return;
+    this.modelAsked = true;
+    try {
+      const [{ GLTFLoader }, { MeshoptDecoder }] = await Promise.all([
+        import("three/examples/jsm/loaders/GLTFLoader.js"),
+        import("three/examples/jsm/libs/meshopt_decoder.module.js"),
+      ]);
+      const loader = new GLTFLoader();
+      loader.setMeshoptDecoder(MeshoptDecoder);
+      const gltf = await loader.loadAsync(this.modelUrl);
+      gltf.scene.traverse((o) => {
+        const mesh = o as THREE_NS.Mesh;
+        if (!mesh.isMesh) return;
+        const m = mesh.material as THREE_NS.MeshStandardMaterial;
+        if (m.name === "paint") this.modelPaints.push(m);
+      });
+      gltf.scene.scale.set(1, 1, MODEL_LENGTH_STRETCH);
+      this.model = gltf.scene;
+      this.setPaint(this.paint);
+      // Into the scene drawn now, in the box's place.
+      if (this.world && this.car) {
+        this.world.remove(this.car);
+        this.car = this.model;
+        this.world.add(this.car);
+      }
+    } catch (e) {
+      this.log(`3D 분기점 자동차 모델 못 불러옴 · ${(e as Error).message}`);
+    }
+  }
+
   /** A new route: what was fetched for the old one goes. */
   reset() {
     this.hide();
@@ -166,8 +213,10 @@ export class JunctionView {
     this.look = this.look && k < 1 ? (this.look.map((v, i) => v + (q[i] - v) * k) as P3) : q;
     this.camera.position.set(...this.eye);
     this.camera.lookAt(...this.look);
-    this.car!.position.set(p[0], p[1] + 0.8, p[2]);
-    this.car!.rotation.y = Math.atan2(b[0] - a[0], b[2] - a[2]);
+    // The model's front is −Z (car-model.ts): turned so −Z runs the way the route goes; it stands on the road.
+    const isModel = this.car === this.model;
+    this.car!.position.set(p[0], p[1] + (isModel ? 0.05 : 0.8), p[2]);
+    this.car!.rotation.y = isModel ? Math.atan2(-(b[0] - a[0]), -(b[2] - a[2])) : Math.atan2(b[0] - a[0], b[2] - a[2]);
     this.renderer.render(this.world, this.camera);
   }
 
@@ -256,8 +305,10 @@ export class JunctionView {
     add(blue, new T.MeshBasicMaterial({ color: 0x3b82f6, side: T.DoubleSide }));
     add(band, new T.MeshBasicMaterial({ color: 0x2f7df6, transparent: true, opacity: 0.88, side: T.DoubleSide }));
     add(chevrons, new T.MeshBasicMaterial({ color: 0xffffff, side: T.DoubleSide }));
-    this.car = new T.Mesh(new T.BoxGeometry(1.9, 1.4, 4.6), new T.MeshLambertMaterial({ color: 0xffffff }));
+    // The Model Y where the server has it (the same as on the map), else a plain box until it comes.
+    this.car = this.model ?? new T.Mesh(new T.BoxGeometry(1.9, 1.4, 4.6), new T.MeshLambertMaterial({ color: 0xffffff }));
     world.add(this.car);
+    void this.loadModel();
     this.world = world;
     this.loaded = l;
     this.resize();
