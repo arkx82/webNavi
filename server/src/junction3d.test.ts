@@ -45,8 +45,8 @@ test("the route lifted onto its lanes: under a bridge it stays on the road below
   const road: P3[] = Array.from({ length: 41 }, (_, i) => [0, 50, 200 - i * 10]);
   const bridge: P3[] = Array.from({ length: 21 }, (_, i) => [-100 + i * 10, 62, 0]);
   const ramp: P3[] = Array.from({ length: 21 }, (_, i) => [3.5, 50 + i * 0.5, 200 - i * 10]);
-  const under = lift(road.map(([x, , z]) => [x, 0, z] as P3), [road, bridge, ramp]);
+  const under = lift(road.map(([x, , z]) => [x, 0, z] as P3), [road, bridge, ramp]).points;
   assert.ok(under.every((p) => p && Math.abs(p[1] - 50) < 0.6), "on the road below the whole way");
-  const up = lift(ramp.map(([x, , z]) => [x + 0.5, 0, z] as P3), [road, ramp]);
+  const up = lift(ramp.map(([x, , z]) => [x + 0.5, 0, z] as P3), [road, ramp]).points;
   assert.ok(Math.abs(up[up.length - 1]![1] - 60) < 0.6, `up the ramp: ${up[up.length - 1]![1]}`);
 });

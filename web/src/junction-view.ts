@@ -17,6 +17,7 @@ interface Scene {
   lines: { t: string; pts: P3[] }[];
   marks: { k: string; pts: P3[] }[];
   route: (P3 | null)[];
+  matched: number;
 }
 type Three = typeof THREE_NS;
 
@@ -30,6 +31,9 @@ const RADIUS_M = 380;
 const BACK_M = 45;
 const UP_M = 18;
 const AHEAD_M = 100;
+/** Shown only where this share of the route round the junction lies on its lanes, with this many lanes and lines. */
+const MATCHED_SHARE = 0.7;
+const MIN_LANES = 25;
 /** Frames a second at most (the car computer draws the map too). */
 const FPS = 30;
 
@@ -70,7 +74,13 @@ export class JunctionView {
         if (!a.ok) { this.failed.add(g); this.log(`3D 분기점 없음 · ${g.text} (${a.status})`); return; }
         const scene = (await a.json()) as Scene;
         const lifted = scene.route.filter((p): p is P3 => !!p);
-        if (lifted.length < scene.route.length * 0.6 || lifted.length < 20) { this.failed.add(g); this.log(`3D 분기점 경로 높이 모자람 · ${g.text}`); return; }
+        // Only where 정밀도로지도 has the junction: most of the route on its lanes, and lanes and lines enough round it
+        // (황산 지하차도's four lanes drew a blue band over grass, 2026-10-14).
+        if (scene.matched < scene.route.length * MATCHED_SHARE || scene.links.length < MIN_LANES || scene.lines.length < MIN_LANES || lifted.length < 20) {
+          this.failed.add(g);
+          this.log(`3D 분기점 정밀도로지도 모자람 · ${g.text} · 경로 ${scene.matched}/${scene.route.length} · 차로 ${scene.links.length} · 차선 ${scene.lines.length}`);
+          return;
+        }
         this.three ??= await import("three");
         this.build({ guide: g, scene, startAlong, route: scene.route.map((p, i) => p ?? lifted[Math.min(i, lifted.length - 1)]) });
         this.log(`3D 분기점 준비 · ${g.text} · 차로 ${scene.links.length} · 차선 ${scene.lines.length}`);

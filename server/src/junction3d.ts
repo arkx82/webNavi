@@ -21,6 +21,8 @@ export interface JunctionScene {
   marks: { k: string; pts: P3[] }[];
   /** The route's points, lifted: null where no lane of its way is under it. */
   route: (P3 | null)[];
+  /** How many of the route's points had a lane of its way under them (the rest took their neighbours' heights). */
+  matched: number;
 }
 
 interface Row { id: number; kind: number; yr: number; t: string; k: string; xyz: string }
@@ -70,7 +72,7 @@ export class Junction3D {
     // A link's points can lie a kilometre apart on a straight: filled in, so its part inside the square is kept.
     for (const f of feats) if (f.kind !== 2) f.pts = fill(f.pts, 10);
     const kept = dropOlder(feats);
-    const out: JunctionScene = { centre, links: [], lines: [], marks: [], route: [] };
+    const out: JunctionScene = { centre, links: [], lines: [], marks: [], route: [], matched: 0 };
     for (const f of kept) {
       if (f.kind === 2) {
         if (f.pts.some(within)) out.marks.push({ k: f.k, pts: f.pts });
@@ -82,7 +84,9 @@ export class Junction3D {
         else out.lines.push({ t: f.t, pts: run });
       }
     }
-    out.route = lift(route.map((p) => local([p[0], p[1], 0])), out.links);
+    const lifted = lift(route.map((p) => local([p[0], p[1], 0])), out.links);
+    out.route = lifted.points;
+    out.matched = lifted.matched;
     return out;
   }
 }
@@ -147,8 +151,8 @@ const turn = (a: number, b: number) => { const d = Math.abs(a - b) % 360; return
  * stacked there (a road over a road) the one nearest the height before — a route goes up a ramp, it
  * does not jump from the road below to the bridge. Points with none take their neighbours' between.
  */
-export function lift(route: P3[], links: P3[][]): (P3 | null)[] {
-  if (!route.length) return [];
+export function lift(route: P3[], links: P3[][]): { points: (P3 | null)[]; matched: number } {
+  if (!route.length) return { points: [], matched: 0 };
   const segs: { a: P3; b: P3; deg: number }[] = [];
   for (const l of links) for (let i = 1; i < l.length; i++) segs.push({ a: l[i - 1], b: l[i], deg: headingOf(l[i - 1], l[i]) });
   const grid = new Map<string, number[]>();
@@ -182,6 +186,7 @@ export function lift(route: P3[], links: P3[][]): (P3 | null)[] {
     before = pick.h;
     out.push([p[0], round(pick.h), p[2]]);
   }
+  const matched = out.filter(Boolean).length;
   // Gaps: the height between the nearest lifted either side.
   for (let i = 0; i < out.length; i++) {
     if (out[i]) continue;
@@ -192,5 +197,5 @@ export function lift(route: P3[], links: P3[][]): (P3 | null)[] {
     const h = ha == null ? hb! : hb == null ? ha : ha + ((i - a) / (b - a)) * (hb - ha);
     out[i] = [route[i][0], round(h), route[i][2]];
   }
-  return out;
+  return { points: out, matched };
 }
