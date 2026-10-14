@@ -45,12 +45,22 @@ const REUSE_M = 12;
 const REUSE_DEG = 30;
 /** Off a route, TMAP's nearest road is asked at most this often a car; between, what it said or 표준노드링크. */
 const HERE_EVERY_MS = 10_000;
+/** What TMAP last said holds while the car goes on its way: this long, this far, this little turned. */
+const HOLD_MS = 30_000;
+const HOLD_M = 500;
+const HOLD_DEG = 30;
 /** OSRM's waypoints on the route, this many samples apart (500 m), each snapped the route's way. */
 const WAYPOINT_EVERY = 5;
 /** 표준노드링크's ids for a link's inner vertices begin here (tools/nodelink/build.py VERTEX_BASE). */
 const INNER_ID = 9_000_000_000;
 /** Limits that are limits: a 0 or a 5 is a blank. */
-const plausible = (v: unknown): v is number => typeof v === "number" && v >= 10 && v <= 130;
+/**
+ * Limits that are a road's posted limit: under 20 is a junction's inner link or a lane into a car park (TMAP gave a
+ * 100 m link 10 between two of 50 on 무안's 국도, 2026-10-14), and a 0 or a 5 a blank.
+ */
+const plausible = (v: unknown): v is number => typeof v === "number" && v >= 20 && v <= 130;
+/** A run shorter than this with the same limit either side is a junction's link, not a change of limit: it takes theirs. */
+export const BLIP_M = 150;
 
 const R = 6_371_008.8;
 const RAD = Math.PI / 180;
@@ -191,6 +201,8 @@ export class SpeedLimits {
   private calls = { day: "", n: 0 };
   private lastError: string | null = null;
   private hereAskedAt = new Map<string, number>();
+  /** The last TMAP limit each car off its route was given, where and which way. */
+  private lastTold = new Map<string, { kmh: number; p: LonLat; deg: number; t: number }>();
   private sweptAt = 0;
 
   constructor(
@@ -269,7 +281,7 @@ export class SpeedLimits {
       else runs.push({ from, to, kmh: v, src: src[i]! });
     }
     const tmapShare = samples.length ? src.filter((s) => s === "tmap").length / samples.length : 0;
-    return { runs, tmapShare };
+    return { runs: smooth(runs, samples), tmapShare };
   }
 
   /** TMAP's limit for each point, matched on its road; null where it put the point on another. */
@@ -354,18 +366,27 @@ export class SpeedLimits {
     return out;
   }
 
-  /** The limit where a car is that has no route (or has left it): TMAP's remembered answer, TMAP's nearest road, or 표준노드링크's. */
+  /**
+   * The limit where a car is that has no route (or has left it): TMAP's remembered answer, TMAP's nearest road, the
+   * last TMAP said to this car while it goes on the same way, or 표준노드링크's. That last: between two of TMAP's answers
+   * 표준노드링크's came in, and where the two differ the sign went 60, 70, 60, 70 (무안, 2026-10-14).
+   */
   async here(who: string, p: LonLat, deg: number | null): Promise<{ kmh: number | null; src: LimitSource | null }> {
     this.sweep();
+    const told = (kmh: number) => { if (deg != null) this.lastTold.set(who, { kmh, p, deg, t: this.now() }); return { kmh, src: "tmap" as const }; };
     if (deg != null) {
       const v = this.remembered.near(p, deg);
-      if (v != null) return { kmh: v, src: "tmap" };
+      if (v != null) return told(v);
     }
     const last = this.hereAskedAt.get(who) ?? 0;
     if (deg != null && this.canAskTmap() && this.now() - last >= HERE_EVERY_MS) {
       this.hereAskedAt.set(who, this.now());
       const v = await this.nearTmap(p, deg).catch((e) => { this.lastError = `TMAP ${(e as Error).message}`; return null; });
-      if (v != null) return { kmh: v, src: "tmap" };
+      if (v != null) return told(v);
+    }
+    const before = this.lastTold.get(who);
+    if (before && deg != null && this.now() - before.t <= HOLD_MS && metres(before.p, p) <= HOLD_M && turn(before.deg, deg) <= HOLD_DEG) {
+      return { kmh: before.kmh, src: "tmap" };
     }
     const v = await this.nearNodelink(p, deg).catch((e) => { this.lastError = `노드링크 ${(e as Error).message}`; return null; });
     return v != null ? { kmh: v, src: "nodelink" } : { kmh: null, src: null };
@@ -437,4 +458,34 @@ function toSegment(p: LonLat, a: LonLat, b: LonLat): number {
   const dx = bx - ax, dy = by - ay, len = dx * dx + dy * dy;
   const t = len ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / len)) : 0;
   return Math.hypot(ax + t * dx, ay + t * dy) * RAD * R;
+}
+
+/** [runs] with each blip (shorter than BLIP_M, the same limit before and after it) given its neighbours' limit, and joined. */
+export function smooth(runs: LimitRun[], samples: Sample[]): LimitRun[] {
+  if (runs.length < 2) return runs;
+  // A path position's metres, from the samples (each carries both).
+  const metresAt = (x: number) => {
+    let i = 0;
+    while (i + 1 < samples.length && samples[i + 1].at <= x) i++;
+    const a = samples[i], b = samples[Math.min(i + 1, samples.length - 1)];
+    return b.at > a.at ? a.m + ((x - a.at) / (b.at - a.at)) * (b.m - a.m) : a.m;
+  };
+  const out = runs.map((r) => ({ ...r }));
+  for (let i = 1; i + 1 < out.length; i++) {
+    const before = out[i - 1], r = out[i], after = out[i + 1];
+    const touching = Math.abs(before.to - r.from) < 1e-9 && Math.abs(r.to - after.from) < 1e-9;
+    if (touching && before.kmh === after.kmh && r.kmh !== before.kmh && metresAt(r.to) - metresAt(r.from) < BLIP_M) {
+      r.kmh = before.kmh;
+      r.src = before.src;
+    }
+  }
+  // Joined where the limit is the same: touching, or across a short gap (a point dropped as no limit, or matched elsewhere).
+  const joined: LimitRun[] = [];
+  for (const r of out) {
+    const last = joined[joined.length - 1];
+    const gap = last ? metresAt(r.from) - metresAt(last.to) : Infinity;
+    if (last && last.kmh === r.kmh && (Math.abs(last.to - r.from) < 1e-9 || gap < BLIP_M)) last.to = r.to;
+    else joined.push(r);
+  }
+  return joined;
 }

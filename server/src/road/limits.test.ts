@@ -44,7 +44,8 @@ test("a point TMAP put on another road is not taken, and with no 노드링크 th
   const t = tmapAnswering(() => 50, (i) => (i === 5 ? 0.001 : 0)); // ~110 m off
   const limits = new SpeedLimits(() => "key", () => undefined, "/nowhere/links.db", undefined, t.fetchJson);
   const a = await limits.alongRoute(PATH);
-  assert.equal(a.runs.length, 2, "split round the point matched elsewhere");
+  // The one point dropped leaves a 100 m gap between two 50s: bridged, not a stretch without a sign.
+  assert.equal(a.runs.length, 1, "joined across the point matched elsewhere");
   assert.ok(a.tmapShare < 1);
 });
 
@@ -136,4 +137,38 @@ test("a waypoint OSRM cannot place (a lane 표준노드링크 lacks) is left out
   const a = await limits.alongRoute([[127.0, 37.5], [127.0113, 37.5]]);
   assert.deepEqual(asked, [3, 2]);
   assert.ok(a.runs.some((r) => r.kmh === 70 && r.src === "nodelink"));
+});
+
+test("a junction's short link (TMAP's 10 between two 50s) is not a change of limit: the run before and after goes through", async () => {
+  const t = tmapAnswering((_p, i) => (i === 5 ? 10 : i === 8 ? 60 : 50));
+  const limits = new SpeedLimits(() => "key", () => undefined, "/nowhere/links.db", undefined, t.fetchJson);
+  const a = await limits.alongRoute(PATH);
+  assert.deepEqual(a.runs.map((r) => r.kmh), [50]);
+  assert.equal(a.runs[0].from, 0);
+  assert.ok(Math.abs(a.runs[0].to - 1) < 1e-9);
+});
+
+test("off the route, what TMAP last said holds while the car goes on its way; turned onto another road, 표준노드링크's", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "limits-"));
+  const db = new DatabaseSync(join(dir, "links.db"));
+  db.exec("CREATE TABLE links (id TEXT PRIMARY KEY, f TEXT, t TEXT, maxspd INTEGER, nodes TEXT); CREATE INDEX links_ft ON links (f, t)");
+  db.prepare("INSERT INTO links VALUES (?, ?, ?, ?, ?)").run("L", "1", "2", 70, "1,9000000001,2");
+  db.close();
+  const fetchJson: Fetch = async (url) => {
+    if (url.includes("nearToRoad")) {
+      const road = [[127.0, 37.5], [127.0005, 37.5]];
+      return { status: 200, json: async () => ({ resultData: { header: { speed: 60 }, linkPoints: road.map(([x, y]) => ({ location: { longitude: x, latitude: y } })) } }) };
+    }
+    if (url.includes("/route/v1/")) return { status: 200, json: async () => ({ code: "Ok", waypoints: [{ distance: 2 }, { distance: 5 }], routes: [{ legs: [{ annotation: { nodes: [9000000001, 2] } }] }] }) };
+    return { status: 404, json: async () => ({}) };
+  };
+  let now = 1_800_000_000_000;
+  const limits = new SpeedLimits(() => "key", () => "http://osrm", join(dir, "links.db"), undefined, fetchJson, () => now);
+  assert.deepEqual(await limits.here("car", [127.0002, 37.5], 90), { kmh: 60, src: "tmap" });
+  // 3 s on, past TMAP's short link (not remembered there), TMAP not asked again yet: still 60, not 표준노드링크's 70.
+  now += 3_000;
+  assert.deepEqual(await limits.here("car", [127.0012, 37.5], 92), { kmh: 60, src: "tmap" });
+  // Turned north onto another road: 표준노드링크's.
+  now += 3_000;
+  assert.deepEqual(await limits.here("car", [127.0014, 37.5003], 0), { kmh: 70, src: "nodelink" });
 });
