@@ -31,7 +31,8 @@ import { autoZoom } from "./autozoom";
 import { EVENTS, facilityOf, straightMatters, turnRungs, turnSay } from "./speech";
 import { repaint, sharedShare } from "./traffic";
 import { junctionKind, junctionOf, laneHint, motorwayAt, motorwaySides, namedTurnPhrase } from "./highway";
-import { CLOSEUP_CAR_AT, CLOSEUP_PITCH, CloseupHold, zoomToSee, type Closeup } from "./closeup";
+import { CLOSEUP_CAR_AT, CLOSEUP_PITCH, CloseupHold, closeupFrom, isTricky, zoomToSee, type Closeup } from "./closeup";
+import { JunctionView as Junction3dView } from "./junction-view";
 import { RerouteBackoff } from "./reroute-backoff";
 import { Stillness } from "./still";
 import { THEN_M, TURN_NEAR_M, fasterPhrase, thenPhrase, turnPhrase, warningPhrase, type Turn } from "../../server/src/phrases";
@@ -631,6 +632,7 @@ function frame() {
       turnInM = route ? shown.nextGuide?.inM : undefined;
       closeup = closeupFor(shown);
       showCloseup(closeup);
+      showJunction3d(shown);
       // 카메라 프레임 30: the map moved every other frame — a car computer that cannot keep 60 draws an even 30 more
       // smoothly than an uneven 40 — the car itself still drawn every frame.
       const now = performance.now();
@@ -749,6 +751,29 @@ function centreFor(at: LonLat, to: { x: number; y: number }, camera: { bearing: 
 /** The middle of the map's free part — right of the trip panel, left of whatever holds the right side — lowered by [carLow]. */
 /** How far below the lane card at the top of the map the car is kept. */
 const CAR_BELOW_CARD_PX = 90;
+
+/**
+ * 3D 분기점 (junction-view.ts): the junction ahead fetched 400 m before it is shown, shown while it is the one close
+ * up (the same tricky junctions and distances as 분기점 확대), kept a little past it.
+ */
+const junctionView = new Junction3dView(el("jv"), el<HTMLCanvasElement>("jv-canvas"), log);
+const JV_AHEAD_M = 400;
+function showJunction3d(shown: Shown) {
+  if (!guide.junction3d || !health?.hdmap3d || !route || !routeLine) { junctionView.frame(null, false, () => null, "", ""); return; }
+  const next = shown.nextGuide;
+  if (next && shown.alongM != null) {
+    const motorway = onMotorway.get(next.guide) ?? false;
+    const m = maneuverFor(next.guide);
+    if (next.inM < closeupFrom(motorway) + JV_AHEAD_M && isTricky(next.guide, m, motorway)) junctionView.prefetch(next.guide, shown.alongM + next.inM, routeLine);
+  }
+  const c = closeup;
+  const g = c?.guide ?? null;
+  const m = g ? maneuverFor(g) : null;
+  const side = m ? branchOf(m) : null;
+  const toward = g ? (g.text.match(/'([^']+)'\s*방면/)?.[1] ?? junctionOf(g)?.toward ?? g.text.match(/([^\s,]+(?:,\s*[^\s,]+)*)\s*방면/)?.[1] ?? "") : "";
+  const sign = toward ? `${side === "right" ? "↗" : side === "left" ? "↖" : "↑"} ${toward.replace(/,\s*/g, " · ")}` : "";
+  junctionView.frame(g, !!c, () => tracker.frame()?.alongM ?? null, sign, c ? km(Math.max(0, Math.round(c.inM / 10) * 10)) : "");
+}
 
 /** The junction shown close up now, or null: closeup.ts holds it a little past the junction, and a new route resets it (prepareHighway). */
 let closeup: Closeup | null = null;
@@ -1713,6 +1738,7 @@ function endDrive() {
   sectionTracker.reset();
   showSectionHud(null);
   closeupHold.reset();
+  junctionView.reset();
   closeup = null;
   backoff.reset();
   el("turn-icon").replaceChildren();
@@ -2418,6 +2444,7 @@ function prepareHighway(r: Route) {
   laneStopsAt = null;
   // The junction held close up was measured along the old line; on this one its metres would read as kilometres.
   closeupHold.reset();
+  junctionView.reset();
   closeup = null;
   onMotorway = new Map(r.guides.map((g) => [g, motorwayAt(r, line.project(g.at, 0, r.path.length).segment)]));
   junctionElsewhere = new WeakMap();

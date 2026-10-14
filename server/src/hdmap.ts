@@ -1,3 +1,4 @@
+import { Junction3D } from "./junction3d.js";
 import type { FastifyInstance } from "fastify";
 import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -75,6 +76,8 @@ export class HdTiles {
 
 /** The lane index, once registered: what else on the server asks of the lanes (safety/roads.ts). */
 export let hdLanes: LaneIndex | null = null;
+/** The 3D lanes (j3d.db), for the health check. */
+export let hdJunctions: Junction3D | null = null;
 
 export function registerHdmap(app: FastifyInstance, workDir: string) {
   const tiles = new HdTiles(join(workDir, "hdmap", "hdmap.mbtiles"));
@@ -90,6 +93,21 @@ export function registerHdmap(app: FastifyInstance, workDir: string) {
   };
   refresh();
   setInterval(refresh, 3_600_000).unref();
+  // A junction in three dimensions (junction3d.ts, j3d.db from tools/hdmap/build3d.py): the lanes, lines and markings
+  // round at=[lon,lat] within r metres, and the route given as lon,lat pairs lifted onto its lanes.
+  const j3d = new Junction3D(join(workDir, "hdmap", "j3d.db"));
+  hdJunctions = j3d;
+  app.post<{ Body: { at?: unknown; r?: unknown; route?: unknown } }>("/api/hdmap/junction", async (request, reply) => {
+    const ok = (p: unknown): p is LonLat => Array.isArray(p) && p.length === 2 && p.every((v) => typeof v === "number" && Number.isFinite(v));
+    const at = request.body?.at;
+    if (!ok(at)) return reply.code(400).send({ error: "at is [lon,lat]" });
+    const r = Math.max(100, Math.min(500, Number(request.body?.r) || 380));
+    const route = Array.isArray(request.body?.route) ? request.body.route.filter(ok).slice(0, 400) : [];
+    if (!j3d.ready) return reply.code(503).send({ error: "no 3D lanes on this server (tools/hdmap/build3d.py)" });
+    const scene = j3d.scene(at, r, route);
+    if (!scene || scene.links.length === 0) return reply.code(404).send({ error: "no lanes here" });
+    return scene;
+  });
   // The lanes at the junction ahead: at=lon,lat of the guide, in=heading into it, way=the provider's turn,
   // after=the route's next 150 m or so as lon,lat;lon,lat…
   // The travel-direction lanes at each vertex of a route (lanes.snap): the line is drawn on the car's side of the road.

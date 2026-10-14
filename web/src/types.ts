@@ -59,6 +59,8 @@ export interface Health {
   road?: { incidents: boolean; restAreas: boolean; alerts: boolean };
   /** 정밀도로지도 tiles built on the server. */
   hdmap?: boolean;
+  /** The 3D lanes (j3d.db) for the junction view. */
+  hdmap3d?: boolean;
 }
 
 // ---- nearby: mirrors server/src/nearby/types.ts ----

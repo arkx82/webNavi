@@ -35,7 +35,7 @@ import { registerMusic } from "./music.js";
 import { Db } from "./db.js";
 import { registerUsers } from "./users.js";
 import { RefusedUrl, fetchPublic, isApiPath, registerGuard } from "./guard.js";
-import { hdLanes, registerHdmap } from "./hdmap.js";
+import { hdJunctions, hdLanes, registerHdmap } from "./hdmap.js";
 import { registerShare } from "./share.js";
 import { registerCar } from "./car/index.js";
 import fastifyCompress from "@fastify/compress";
@@ -183,6 +183,7 @@ app.get("/api/health", async () => ({
   map: { tmap: providers.tmap.ready, naver: !!settings.get("naverClientId") },
   road: { incidents: incidents.ready, restAreas: restAreas.ready, alerts: alerts.ready, traffic: traffic.ready },
   hdmap: hdTiles.ready,
+  hdmap3d: hdJunctions?.ready ?? false,
 }));
 
 /**
