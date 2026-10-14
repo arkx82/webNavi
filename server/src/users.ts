@@ -28,7 +28,13 @@ const LOCK_MS = 60_000;
 const GUIDE_DEFAULTS = "guideDefaults";
 /** An account's 안내 설정 as the site's defaults: not the device's own (차량 데이터), nor the account's bookkeeping. */
 export function guideDefaultsOf(guide: Record<string, unknown>): Record<string, unknown> {
-  const { carData: _car, own: _own, rev: _rev, from: _from, ...rest } = guide;
+  const { carData: _car, own: _own, rev, from: _from, ...rest } = guide;
+  // As the account's own page reads them (web/src/guide-settings.ts migrate): a copy saved before a revision is
+  // changed the same way here, or an account starting from it would get what its owner no longer sees.
+  const r = typeof rev === "number" ? rev : 1;
+  if (rest.fasterRoute === "auto") rest.fasterRoute = "ask";
+  if (r < 3 && rest.curves === "show") rest.curves = "off";
+  if (r < 4 && rest.carIcon === "tesla") rest.carIcon = "model3d";
   return rest;
 }
 

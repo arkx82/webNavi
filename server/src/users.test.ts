@@ -118,7 +118,7 @@ test("the site's 안내 설정 defaults: an account's own made the defaults (not
   const db = new Db(dir);
   const june = db.addUser("june", "secret1");
   db.addUser("friend", "secret1");
-  db.setData(june.id, "guide", { volume: 1.6, cameraFromM: 1000, carData: "force", own: ["volume"], rev: 4 });
+  db.setData(june.id, "guide", { volume: 1.6, cameraFromM: 1000, carData: "force", own: ["volume"], rev: 2, curves: "show", fasterRoute: "auto" });
   const app = Fastify();
   registerUsers(app, db, new Settings(dir, {}), async () => {}, dir);
   await app.ready();
@@ -130,6 +130,7 @@ test("the site's 안내 설정 defaults: an account's own made the defaults (not
   const r = await login(app, "friend", "secret1");
   const cookie = String(r.headers["set-cookie"]).split(";")[0];
   const data = (await app.inject({ method: "GET", url: "/api/me/data", headers: { cookie } })).json();
-  assert.deepEqual(data.guideDefaults.value, { volume: 1.6, cameraFromM: 1000, from: "june" });
+  // Read as june's page reads a copy saved at revision 2: 급커브 off, 더 빠른 길 asked.
+  assert.deepEqual(data.guideDefaults.value, { volume: 1.6, cameraFromM: 1000, curves: "off", fasterRoute: "ask", from: "june" });
   assert.equal((await app.inject({ method: "GET", url: "/admin/api/guide-defaults" })).json().from, "june");
 });
