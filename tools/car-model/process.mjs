@@ -6,13 +6,14 @@
 //
 // Re-based on the raw mesh's own axes (this one, BloxBloger's 2026 Model Y Performance from Sketchfab, has x along the
 // car with its front at −x, y across, z up, under a node that turns it): up +Y, front −Z, the footprint's middle on the
-// ground at the origin. Simplified with meshoptimizer to [ratio] of its triangles (346k → 34k), the paint's material
+// ground at the origin. Simplified with meshoptimizer to [ratio] of its triangles (346k → 50k) but for the body and
+// the small parts that show, the paint's material
 // renamed "paint" for the page to colour, clearcoat/transmission and the rim's texture dropped, meshopt-compressed
 // (11.5 MB → 0.3 MB). Another model may have other axes and another paint material: check them first (the headlights'
 // end is the front).
 import { NodeIO } from "@gltf-transform/core";
 import { ALL_EXTENSIONS, EXTMeshoptCompression, KHRMaterialsClearcoat, KHRMaterialsTransmission } from "@gltf-transform/extensions";
-import { dedup, prune, weld, simplify, flatten, join, quantize, reorder } from "@gltf-transform/functions";
+import { dedup, prune, weld, simplifyPrimitive, flatten, join, quantize, reorder } from "@gltf-transform/functions";
 import { MeshoptSimplifier, MeshoptEncoder } from "meshoptimizer";
 const [inFile, outFile, targetArg, paintArg] = process.argv.slice(2);
 const paintName = paintArg ?? "Material_2125780493";
@@ -56,7 +57,15 @@ await doc.transform(flatten(), dedup(), join(), weld({ tolerance: 0.0005 }));
 const target = Number(targetArg ?? 0.08);
 const tris = () => root.listMeshes().flatMap((m) => m.listPrimitives()).reduce((s, p) => s + (p.getIndices()?.getCount() ?? 0) / 3, 0);
 console.log("triangles before", tris());
-await doc.transform(simplify({ simplifier: MeshoptSimplifier, ratio: target, error: 0.0015, lockBorder: false }));
+// The body is kept whole: its panels are few large triangles already (8k of the 346k), and taken to the target they
+// came out dented down the doors and rear quarters, plain to see in the 3D 분기점 panel. So are the small parts that
+// show (glass, lights, mirrors, badges). The many triangles go where no one looks: the tyres alone are 125k.
+const KEEP_UNDER = 3000;
+for (const p of root.listMeshes().flatMap((m) => m.listPrimitives())) {
+  const n = (p.getIndices()?.getCount() ?? 0) / 3;
+  if (p.getMaterial()?.getName() === "paint" || n < KEEP_UNDER) continue;
+  simplifyPrimitive(p, { simplifier: MeshoptSimplifier, ratio: target, error: 0.0015, lockBorder: false });
+}
 console.log("triangles after", tris());
 await doc.transform(prune(), reorder({ encoder: MeshoptEncoder }), quantize());
 doc.createExtension(EXTMeshoptCompression).setRequired(true).setEncoderOptions({ method: EXTMeshoptCompression.EncoderMethod.QUANTIZE });
