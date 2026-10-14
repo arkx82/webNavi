@@ -30,12 +30,14 @@ const STEP_M = 5;
 /** The square of lanes asked about the junction. */
 const RADIUS_M = 380;
 /** The camera: behind the car, above it, looking on. */
-const BACK_M = 45;
-const UP_M = 18;
-const AHEAD_M = 100;
+const BACK_M = 30;
+const UP_M = 12;
+const AHEAD_M = 90;
 /** Shown only where this share of the route round the junction lies on its lanes, with this many lanes and lines. */
 const MATCHED_SHARE = 0.7;
 const MIN_LANES = 25;
+/** The camera's catching up: its time constant, seconds. */
+const EASE_S = 0.1;
 /** Frames a second at most (the car computer draws the map too). */
 const FPS = 30;
 
@@ -62,6 +64,7 @@ export class JunctionView {
   private lastDraw = 0;
   private along: () => number | null = () => null;
   private eye: P3 | null = null;
+  private easedAt = 0;
   private look: P3 | null = null;
 
   constructor(private box: HTMLElement, private canvas: HTMLCanvasElement, private log: (m: string) => void) {
@@ -207,8 +210,13 @@ export class JunctionView {
     const p = this.at(s), a = this.at(s - 2), b = this.at(s + 2), q = this.at(s + AHEAD_M);
     const dir = Math.atan2(q[0] - p[0], q[2] - p[2]);
     const eye: P3 = [p[0] - Math.sin(dir) * BACK_M, p[1] + UP_M, p[2] - Math.cos(dir) * BACK_M];
-    // Eased, so a jump of the car's place (a fix after a gap) is not a jump of the picture.
-    const k = this.eye ? 0.25 : 1;
+    // Eased over about a tenth of a second whatever the frame rate, so a jump of the car's place (a fix after a gap)
+    // is not a jump of the picture; by the frame it was a share a frame, and a browser drawing four a second left the
+    // camera 30 m further back than meant at motorway speed.
+    const now = performance.now();
+    const dt = this.easedAt ? Math.min(1, (now - this.easedAt) / 1000) : 1;
+    this.easedAt = now;
+    const k = this.eye ? 1 - Math.exp(-dt / EASE_S) : 1;
     this.eye = this.eye ? (this.eye.map((v, i) => v + (eye[i] - v) * k) as P3) : eye;
     this.look = this.look && k < 1 ? (this.look.map((v, i) => v + (q[i] - v) * k) as P3) : q;
     this.camera.position.set(...this.eye);
