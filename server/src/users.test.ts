@@ -112,3 +112,24 @@ test("지금 운행 중: a car page's word in a few words — moving, standing w
   assert.deepEqual(presenceWord(p({ gone: true }), now - 3_600_000, now), { state: "off", text: "꺼짐 · 마지막 접속 10초 전" });
   assert.deepEqual(presenceWord(undefined, null, now), { state: "off", text: "접속한 적 없음" });
 });
+
+test("the site's 안내 설정 defaults: an account's own made the defaults (not its device's 차량 데이터), and every account's data carries them", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "webnavi-gd-"));
+  const db = new Db(dir);
+  const june = db.addUser("june", "secret1");
+  db.addUser("friend", "secret1");
+  db.setData(june.id, "guide", { volume: 1.6, cameraFromM: 1000, carData: "force", own: ["volume"], rev: 4 });
+  const app = Fastify();
+  registerUsers(app, db, new Settings(dir, {}), async () => {}, dir);
+  await app.ready();
+  assert.equal((await app.inject({ method: "POST", url: "/admin/api/guide-defaults", payload: { user: "nobody" } })).statusCode, 400);
+  assert.equal((await app.inject({ method: "POST", url: "/admin/api/guide-defaults", payload: { user: "friend" } })).statusCode, 400, "friend has none saved");
+  const set = await app.inject({ method: "POST", url: "/admin/api/guide-defaults", payload: { user: "June" } });
+  assert.equal(set.statusCode, 200);
+  assert.equal(set.json().from, "june");
+  const r = await login(app, "friend", "secret1");
+  const cookie = String(r.headers["set-cookie"]).split(";")[0];
+  const data = (await app.inject({ method: "GET", url: "/api/me/data", headers: { cookie } })).json();
+  assert.deepEqual(data.guideDefaults.value, { volume: 1.6, cameraFromM: 1000, from: "june" });
+  assert.equal((await app.inject({ method: "GET", url: "/admin/api/guide-defaults" })).json().from, "june");
+});

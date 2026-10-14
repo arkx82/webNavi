@@ -72,6 +72,12 @@ export class Db {
         sent INTEGER NOT NULL,
         dismissed INTEGER NOT NULL DEFAULT 0
       );
+      -- What the site keeps for every account: the 안내 설정 an account starts from (guideDefaults).
+      CREATE TABLE IF NOT EXISTS site (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated INTEGER NOT NULL
+      );
       PRAGMA foreign_keys = ON;
     `);
     // A file from before the column: given it.
@@ -167,6 +173,19 @@ export class Db {
       try { out[r.key] = { value: JSON.parse(r.value), updated: r.updated }; } catch { /* a bad row is skipped */ }
     }
     return out;
+  }
+
+  /** A value the whole site shares, or undefined. */
+  site(key: string): { value: unknown; updated: number } | undefined {
+    const r = this.db.prepare("SELECT value, updated FROM site WHERE key = ?").get(key) as { value: string; updated: number } | undefined;
+    if (!r) return undefined;
+    try { return { value: JSON.parse(r.value), updated: r.updated }; } catch { return undefined; }
+  }
+
+  setSite(key: string, value: unknown): number {
+    const updated = Date.now();
+    this.db.prepare("INSERT INTO site (key, value, updated) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated = excluded.updated").run(key, JSON.stringify(value), updated);
+    return updated;
   }
 
   setData(userId: number, key: UserKey, value: unknown): number {

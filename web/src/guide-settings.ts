@@ -2,6 +2,7 @@ import { DOWN, PLAY, UP } from "./icons";
 import type { Kind } from "./warnings";
 import { PAINTS, type CarIcon } from "./car-icon";
 import { push } from "./userdata";
+import { MAX_VOLUME } from "./voice";
 
 /**
  * What the voice says, and from how far: the 안내 설정 sheet. Kept in the
@@ -61,6 +62,11 @@ export interface GuideSettings {
   carData: "auto" | "force" | "off";
   /** The settings' revision, for one-time changes of a default already saved (migrate). */
   rev?: number;
+  /**
+   * The settings this account set itself; the rest are the site's defaults (/admin → 안내 설정 기본값), and follow
+   * them when they change.
+   */
+  own?: (keyof GuideSettings)[];
   /** 안내 중 음악 줄이기: faded down and up round the voice, dropped at once, or left alone (voice.ts). */
   ducking: "soft" | "quick" | "off";
   /** 화면 크기: the panels, cards and buttons scaled (the map itself is not) — a screen's CSS pixel is bigger on some than others. */
@@ -129,11 +135,34 @@ function carChoice(): GuideSettings["carData"] {
   }
 }
 
+/** The site's defaults (server: /api/me/data's guideDefaults), kept by userdata.ts at each login. */
+export const SITE_KEY = "nav-guide-defaults";
+/** Not the site's to say: this device's own, and the bookkeeping. */
+const NOT_SITE = new Set(["carData", "own", "rev", "from"]);
+
+/**
+ * Which of [stored] the account set itself: those it names, or — saved before that was kept — those that differ
+ * from the built-in defaults (what was never touched was saved at the default).
+ */
+export function ownKeys(stored: Partial<GuideSettings>): (keyof GuideSettings)[] {
+  if (Array.isArray(stored.own)) return stored.own.filter((k) => k in DEFAULTS);
+  return (Object.keys(stored) as (keyof GuideSettings)[]).filter((k) => k in DEFAULTS && !NOT_SITE.has(k) && JSON.stringify(stored[k]) !== JSON.stringify(DEFAULTS[k]));
+}
+
+/** The settings in force: the built-in defaults, the site's over them, and what the account set itself over all. */
+export function settingsOf(stored: Partial<GuideSettings>, site: Record<string, unknown>, carData: GuideSettings["carData"]): GuideSettings {
+  const own = ownKeys(stored);
+  const fromSite = Object.fromEntries(Object.entries(site).filter(([k]) => k in DEFAULTS && !NOT_SITE.has(k)));
+  const mine = Object.fromEntries(own.map((k) => [k, stored[k]]).filter(([, v]) => v !== undefined));
+  // An account that never saved starts at the current revision: the old one-time changes are not for the site's values.
+  const rev = Object.keys(stored).length === 0 ? DEFAULTS.rev : (stored.rev ?? 1);
+  return migrate({ ...DEFAULTS, ...fromSite, ...mine, own, rev, carData } as GuideSettings);
+}
+
 export function loadGuide(): GuideSettings {
+  const parse = (k: string) => { try { return JSON.parse(localStorage.getItem(k) ?? "{}") as Record<string, unknown>; } catch { return {}; } };
   try {
-    const stored = JSON.parse(localStorage.getItem(KEY) ?? "{}") as Partial<GuideSettings>;
-    // The saved revision, not the default's: spread over DEFAULTS, a copy saved before rev was kept read as current.
-    return migrate({ ...DEFAULTS, ...stored, rev: stored.rev ?? 1, carData: carChoice() });
+    return settingsOf(parse(KEY) as Partial<GuideSettings>, parse(SITE_KEY), carChoice());
   } catch {
     return { ...DEFAULTS, carData: carChoice() };
   }
@@ -165,6 +194,13 @@ export function migrate(s: GuideSettings): GuideSettings {
     s.rev = 4;
   }
   return s;
+}
+
+/** [keys] set by the account itself from now on: the site's defaults no longer speak for them. */
+export function mark(s: GuideSettings, keys: (keyof GuideSettings)[]) {
+  const own = new Set(s.own ?? []);
+  for (const k of keys) if (!NOT_SITE.has(k)) own.add(k);
+  s.own = [...own];
 }
 
 export function saveGuide(s: GuideSettings) {
@@ -327,6 +363,7 @@ export function drawGuide(box: HTMLElement, s: GuideSettings, changed: (s: Guide
   const redraw = () => drawGuide(box, s, changed, loadVoices, picked, listen);
   const set = (patch: Partial<GuideSettings>) => {
     Object.assign(s, patch);
+    mark(s, Object.keys(patch) as (keyof GuideSettings)[]);
     saveGuide(s);
     changed(s);
     redraw();
@@ -421,11 +458,21 @@ function drawRows(box: HTMLElement, rows: Row[], s: GuideSettings, set: (patch: 
       const input = document.createElement("input");
       input.type = "range";
       input.min = "0.2";
-      input.max = "1";
+      input.max = String(MAX_VOLUME);
       input.step = "0.1";
       input.value = String(s.volume);
       // Live while sliding; the sheet is not redrawn under the finger.
-      input.addEventListener("input", () => { s.volume = Number(input.value); saveGuide(s); changed(s); });
+      const pct = document.createElement("span");
+      pct.className = "gs-pct";
+      pct.textContent = `${Math.round(s.volume * 100)}%`;
+      input.addEventListener("input", () => {
+        s.volume = Number(input.value);
+        pct.textContent = `${Math.round(s.volume * 100)}%`;
+        mark(s, ["volume"]);
+        saveGuide(s);
+        changed(s);
+      });
+      line.append(pct);
       line.classList.add("wide");
       line.append(input);
     }

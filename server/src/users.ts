@@ -24,6 +24,14 @@ const LOCK_MS = 60_000;
  * (the token, the audio, the TIDAL proxy) are same-origin and carry the
  * session cookie, so they are gated like everything else.
  */
+/** The site's key for the 안내 설정 defaults. */
+const GUIDE_DEFAULTS = "guideDefaults";
+/** An account's 안내 설정 as the site's defaults: not the device's own (차량 데이터), nor the account's bookkeeping. */
+export function guideDefaultsOf(guide: Record<string, unknown>): Record<string, unknown> {
+  const { carData: _car, own: _own, rev: _rev, from: _from, ...rest } = guide;
+  return rest;
+}
+
 const OPEN = new Set(["/api/login", "/api/logout", "/api/me", "/api/music/state"]);
 /** Loaded by <script> tags before any login: an empty script rather than a refusal. */
 const SCRIPTS = new Set(["/api/map/tmap.js", "/api/map/naver.js"]);
@@ -131,7 +139,11 @@ export function registerUsers(
   });
 
   // What the user keeps, all at once (the page loads it before it starts) and one key at a time.
-  app.get("/api/me/data", async (request) => db.data(request.user!.id));
+  // With the site's 안내 설정 defaults beside them: what an account has not set itself comes from those.
+  app.get("/api/me/data", async (request) => {
+    const defaults = db.site(GUIDE_DEFAULTS);
+    return { ...db.data(request.user!.id), ...(defaults ? { guideDefaults: defaults } : {}) };
+  });
   app.put<{ Params: { key: string }; Body: { value?: unknown } }>("/api/me/data/:key", async (request, reply) => {
     const key = request.params.key as UserKey;
     if (!USER_KEYS.includes(key)) return reply.code(400).send({ error: `key is one of ${USER_KEYS.join(",")}` });
@@ -256,6 +268,22 @@ export function registerUsers(
       return reply.code(400).send({ error: (e as Error).message });
     }
   });
+  // The 안내 설정 every account starts from: an account's own, as it has them now (what each account sets itself stays its own).
+  app.get("/admin/api/guide-defaults", { preHandler: adminGuard }, async () => {
+    const d = db.site(GUIDE_DEFAULTS);
+    return d ? { from: (d.value as { from?: string }).from ?? null, updated: d.updated } : { from: null, updated: null };
+  });
+  app.post<{ Body: { user?: string } }>("/admin/api/guide-defaults", { preHandler: adminGuard }, async (request, reply) => {
+    const name = String(request.body?.user ?? "").trim().toLowerCase();
+    const user = db.users().find((u) => u.name.toLowerCase() === name);
+    if (!user) return reply.code(400).send({ error: "계정을 고르세요" });
+    const guide = db.data(user.id).guide?.value;
+    if (!guide || typeof guide !== "object") return reply.code(400).send({ error: `${user.name} 계정에 저장된 안내 설정이 없습니다` });
+    const settings = guideDefaultsOf(guide as Record<string, unknown>);
+    const updated = db.setSite(GUIDE_DEFAULTS, { ...settings, from: user.name });
+    return { from: user.name, updated, keys: Object.keys(settings).length };
+  });
+
   app.post<{ Params: { id: string }; Body: { role?: string } }>("/admin/api/users/:id/role", { preHandler: adminGuard }, async (request, reply) => {
     const role = request.body?.role;
     if (role !== "admin" && role !== "user") return reply.code(400).send({ error: "role: admin 또는 user" });

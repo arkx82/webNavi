@@ -200,6 +200,13 @@
         <button type="button" id="add-user">추가</button>
       </div>
       <div class="msg" id="users-msg"></div>
+      <h3 style="margin-top:18px">안내 설정 기본값</h3>
+      <p class="hint">모든 계정이 쓰는 안내 설정(음량, 목소리, 경고, 화면 등)의 기본값입니다. 각 계정이 차 화면의 안내 설정에서 직접 바꾼 항목은 그 계정 것으로 계속 쓰고, 바꾸지 않은 항목은 이 기본값을 따릅니다. (차량 데이터 켜기/끄기는 기기마다 따로입니다.)</p>
+      <div class="row">
+        <label>이 계정의 지금 설정을 기본값으로 <select id="gd-user" style="min-height:36px;background:#111;color:var(--ink);border:1px solid #2c2c31;border-radius:6px"></select></label>
+        <button type="button" id="gd-set">기본값으로 정하기</button>
+        <span class="hint" id="gd-state"></span>
+      </div>
     </section>
 
     <h2 class="admin-only">상태</h2>
@@ -249,7 +256,26 @@ async function refreshNow() {
 }
 setInterval(refreshNow, 15_000);
 
+async function showGuideDefaults(users) {
+  const pick = $("gd-user"), was = pick.value;
+  pick.innerHTML = users.map((u) => `<option value="${u.name}">${u.name}</option>`).join("");
+  if (was && users.some((u) => u.name === was)) pick.value = was;
+  try {
+    const d = await call("/admin/api/guide-defaults");
+    $("gd-state").textContent = d.from ? `지금 기본값: ${d.from} 계정의 설정 (${new Date(d.updated).toLocaleString("ko-KR")})` : "지금 기본값: 앱에 들어 있는 기본값";
+    if (!was && d.from && users.some((u) => u.name === d.from)) pick.value = d.from;
+  } catch (e) { $("gd-state").textContent = e.message; }
+}
+$("gd-set").onclick = async () => {
+  const user = $("gd-user").value;
+  if (!user || !window.confirm(`${user} 계정의 지금 안내 설정을 모든 계정의 기본값으로 할까요? 각 계정이 직접 바꾼 항목은 그대로 둡니다.`)) return;
+  try { const r = await call("/admin/api/guide-defaults", { user }); say("users-msg", `${r.from} 계정의 안내 설정 ${r.keys}개 항목을 기본값으로 정했습니다 (각 차 화면은 다음에 열 때 적용)`, "ok"); showGuideDefaults(lastUsers); }
+  catch (e) { say("users-msg", e.message, "bad"); }
+};
+let lastUsers = [];
 function showUsers(users) {
+  lastUsers = users;
+  void showGuideDefaults(users);
   const t = $("users");
   t.replaceChildren();
   if (!users.length) { t.innerHTML = `<tr><td class="hint">아직 없습니다 — 아래에서 추가하세요</td></tr>`; return; }

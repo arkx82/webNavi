@@ -74,7 +74,16 @@ export class Voice {
     this.music = this.context.createGain();
     this.speech = this.context.createGain();
     this.music.connect(this.context.destination);
-    this.speech.connect(this.context.destination);
+    // A limiter after the voice's knob: turned up past 1 (안내 음량 to 200 %), its loudest syllables are held under
+    // full scale instead of clipping.
+    const limiter = this.context.createDynamicsCompressor();
+    limiter.threshold.value = -3;
+    limiter.knee.value = 3;
+    limiter.ratio.value = 20;
+    limiter.attack.value = 0.002;
+    limiter.release.value = 0.12;
+    this.speech.connect(limiter);
+    limiter.connect(this.context.destination);
   }
 
   /**
@@ -290,9 +299,9 @@ export class Voice {
     void this.next();
   }
 
-  /** 0..1 for the voice (and the chime); the music keeps its own level. */
+  /** The voice's level (and the chime's), up to MAX_VOLUME; the music keeps its own. */
   setVolume(level: number) {
-    this.speech.gain.setTargetAtTime(Math.max(0, Math.min(1, level)), this.context.currentTime, 0.05);
+    this.speech.gain.setTargetAtTime(Math.max(0, Math.min(MAX_VOLUME, level)), this.context.currentTime, 0.05);
   }
 
   /**
@@ -332,12 +341,37 @@ export class Voice {
 }
 
 /** [buffer] with LEAD_S of silence before, TAIL_S after, and its last FADE_S faded out (a cut-off syllable does not click). */
+/** 안내 음량 goes this far up (200 %): some found the voice too quiet over the road (2026-10-14). */
+export const MAX_VOLUME = 2;
+/**
+ * Each sentence brought to one loudness: the service renders them anywhere from -17 to -26 dBFS (measured over the
+ * server's 3,225 on 2026-10-14), so one sentence was half as loud as the next. Raised (or lowered) to this RMS over
+ * its voiced part, never past PEAK.
+ */
+const TARGET_RMS = 0.14; // about -17 dBFS
+const PEAK = 0.9;
+/** The gain that brings [data] to TARGET_RMS without its peak going over PEAK (and never more than 4×). */
+export function levelGain(data: Float32Array): number {
+  let peak = 0, sum = 0, n = 0;
+  for (let i = 0; i < data.length; i++) {
+    const v = Math.abs(data[i]);
+    if (v > peak) peak = v;
+    // The voiced part: the silence round the words would make every sentence read quieter than it is.
+    if (v > 0.01) { sum += v * v; n++; }
+  }
+  if (peak === 0 || n === 0) return 1;
+  const rms = Math.sqrt(sum / n);
+  return Math.min(4, TARGET_RMS / rms, PEAK / peak);
+}
+
 function padded(context: BaseAudioContext, buffer: AudioBuffer): AudioBuffer {
   const rate = buffer.sampleRate;
+  const gain = levelGain(buffer.getChannelData(0));
   const lead = Math.round(LEAD_S * rate), tail = Math.round(TAIL_S * rate), fade = Math.min(buffer.length, Math.round(FADE_S * rate));
   const out = context.createBuffer(buffer.numberOfChannels, buffer.length + lead + tail, rate);
   for (let c = 0; c < buffer.numberOfChannels; c++) {
     const data = buffer.getChannelData(c).slice();
+    if (gain !== 1) for (let i = 0; i < data.length; i++) data[i] *= gain;
     for (let i = 0; i < fade; i++) data[data.length - 1 - i] *= i / fade;
     out.copyToChannel(data, c, lead);
   }

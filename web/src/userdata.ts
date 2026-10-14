@@ -73,7 +73,9 @@ export async function pull(user: Me) {
   write(WHO, String(user.id));
   const a = await fetch("/api/me/data");
   if (!a.ok) return;
-  const kept = (await a.json()) as Partial<Record<UserKey, { value: unknown }>>;
+  const kept = (await a.json()) as Partial<Record<UserKey, { value: unknown }>> & { guideDefaults?: { value: unknown } };
+  // The site's 안내 설정 defaults, for what this account has not set itself (guide-settings.ts).
+  write("nav-guide-defaults", kept.guideDefaults ? JSON.stringify(kept.guideDefaults.value) : null);
   for (const key of Object.keys(STORAGE) as UserKey[]) {
     const server = kept[key], mine = local(key);
     const choice = key === "drive" ? pickDrive(server ? server.value : undefined, mine, mayUpload) : merge({ server: !!server, local: mine !== undefined, dirty: read(dirtyKey(key)) != null, mayUpload });

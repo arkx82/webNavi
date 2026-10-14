@@ -2912,6 +2912,46 @@ function paintOver() {
   document.querySelector(".big")!.classList.toggle("over", cameraOver || signOver);
 }
 
+// ---- 전체화면 ---------------------------------------------------------------
+// The address bar out of the way: the Fullscreen API, where the browser lets a page use it. Whether the car's does
+// (and whether only parked) could not be learned from here: each try, and how it went, is written to the 진단 log.
+{
+  type Doc = Document & { webkitFullscreenElement?: Element | null; webkitExitFullscreen?: () => Promise<void> | void };
+  type El = HTMLElement & { webkitRequestFullscreen?: (o?: FullscreenOptions) => Promise<void> | void };
+  const doc = document as Doc, root = document.documentElement as El;
+  const can = !!(root.requestFullscreen || root.webkitRequestFullscreen) && (document.fullscreenEnabled ?? true);
+  const btn = el("full-screen");
+  btn.hidden = !can;
+  const isFull = () => !!(document.fullscreenElement || doc.webkitFullscreenElement);
+  const draw = () => {
+    const on = isFull();
+    btn.classList.toggle("on", on);
+    btn.title = on ? "전체화면 끄기" : "전체화면";
+    el("full-label").textContent = on ? "원래대로" : "전체";
+    el("full-ic").innerHTML = on
+      ? `<path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/>`
+      : `<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>`;
+  };
+  btn.addEventListener("click", async () => {
+    try {
+      if (isFull()) await (document.exitFullscreen ? document.exitFullscreen() : doc.webkitExitFullscreen?.());
+      else await (root.requestFullscreen ? root.requestFullscreen({ navigationUI: "hide" }) : root.webkitRequestFullscreen?.());
+    } catch (e) {
+      log(`전체화면 안 됨: ${(e as Error).message}`);
+      el("full-label").textContent = "안 됨";
+      setTimeout(draw, 2500);
+    }
+  });
+  for (const ev of ["fullscreenchange", "webkitfullscreenchange"]) document.addEventListener(ev, () => {
+    draw();
+    log(`전체화면 ${isFull() ? "켬" : "끔"} · 화면 ${innerWidth}×${innerHeight}`);
+    // The map fills what the page now has.
+    setTimeout(() => window.dispatchEvent(new Event("resize")), 200);
+  });
+  document.addEventListener("fullscreenerror", () => log("전체화면 오류 (브라우저가 거부)"));
+  draw();
+}
+
 // ---- the road's speed limit, as the sign by the road -------------------------
 // Wherever the car is: along the route the watch's (a 보호구역's, a 구간 단속's, the road's with the route's own speed
 // cameras over it: server/src/road/limits.ts, warnings.ts signLimitAt); off it, or with no route, the server's for
