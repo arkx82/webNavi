@@ -2303,17 +2303,19 @@ function sameJunctionElsewhere(g: Guide): Guide | null {
 // ---- 노면색깔유도선: the pink or green line to follow at a motorway junction (color-guides.ts) ----
 
 /** The junction's lines, asked once a guide; null where the list has none. */
-const linesAsked = new Map<Guide, { left?: GuideColour; right?: GuideColour } | null>();
+const linesAsked = new Map<Guide, { left?: GuideColour; right?: GuideColour; inferred?: boolean } | null>();
 /** Which branch a manoeuvre takes; null for one that is not a fork. */
 function branchOf(m: Maneuver): "left" | "right" | null {
   if (m === "slight-left" || m === "ramp-left" || m === "left" || m === "sharp-left" || m === "loop-left") return "left";
   if (m === "slight-right" || m === "ramp-right" || m === "right" || m === "sharp-right" || m === "loop-right") return "right";
   return null;
 }
+/** Seoul, roughly: where 서울시's list of painted lines (server seoul-lines.ts) is asked by place, a junction named or not. */
+const inSeoul = (p: LonLat) => p[0] > 126.76 && p[0] < 127.19 && p[1] > 37.42 && p[1] < 37.71;
 function linesFor(g: Guide, m: Maneuver): LaneCard["lines"] {
   const go = branchOf(m);
   const name = junctionOf(g)?.name;
-  if (!go || !name || !guide.colorLines || !route || !routeLine) return null;
+  if (!go || !guide.colorLines || !route || !routeLine || (!name && !inSeoul(g.at))) return null;
   if (!linesAsked.has(g)) {
     linesAsked.set(g, null);
     const line = routeLine;
@@ -2322,15 +2324,21 @@ function linesFor(g: Guide, m: Maneuver): LaneCard["lines"] {
     // The motorways named in this guide and the one before ("영동 고속도로를 따라"): the list's rows for that line.
     const n = route.guides.indexOf(g);
     const roads = [route.guides[n - 1]?.text, g.text].flatMap((t) => [...(t ?? "").matchAll(/([가-힣0-9]+)\s*(?:고속도로|고속국도|도시고속도로)/g)].map((x) => x[1]));
-    const q = new URLSearchParams({ name, at: `${g.at[0]},${g.at[1]}`, in: String(Math.round(bearing(before[0], before[1], p.at[0], p.at[1]))), roads: [...new Set(roads)].join(",") });
-    void fetch(`/api/road/color-guide?${q}`).then((a) => (a.ok ? a.json() : null)).then((c: { left?: GuideColour; right?: GuideColour } | null) => {
+    // The route round the turn (120 m in, 60 m on), for a painted line on it (서울시's, by place).
+    const around = Array.from({ length: 19 }, (_, k) => line.place(Math.max(0, p.alongM - 120 + k * 10)).at);
+    const q = new URLSearchParams({ at: `${g.at[0]},${g.at[1]}`, in: String(Math.round(bearing(before[0], before[1], p.at[0], p.at[1]))), go, path: around.map((a) => `${a[0].toFixed(6)},${a[1].toFixed(6)}`).join(";") });
+    if (name) { q.set("name", name); q.set("roads", [...new Set(roads)].join(",")); }
+    const label = name ?? g.text;
+    void fetch(`/api/road/color-guide?${q}`).then((a) => (a.ok ? a.json() : null)).then((c: { left?: GuideColour; right?: GuideColour; inferred?: boolean } | null) => {
       const found = c && (c.left || c.right) ? c : null;
       linesAsked.set(g, found);
-      log(found ? `유도선 ${name}: 왼쪽 ${found.left ?? "-"} · 오른쪽 ${found.right ?? "-"}` : `유도선 없음 · ${name}`);
+      log(found ? `유도선 ${label}${found.inferred ? " (서울시 · 색은 매뉴얼로)" : ""}: 왼쪽 ${found.left ?? "-"} · 오른쪽 ${found.right ?? "-"}` : `유도선 없음 · ${label}`);
     }).catch(() => {});
   }
-  const c = linesAsked.get(g);
+  const c = linesAsked.get(g) as ({ left?: GuideColour; right?: GuideColour; inferred?: boolean } | null | undefined);
   if (!c) return null;
+  // 서울시's: the line on the route's way, already the branch taken.
+  if (c.inferred) return c[go] ? { [go]: c[go], go } : null;
   // One line alone is the exit's: it leads off the motorway, whichever side the list wrote it on.
   if (!(c.left && c.right)) {
     const exit = /출구|진출|나들목|IC/.test(g.text) && !/JC|분기/.test(g.text);

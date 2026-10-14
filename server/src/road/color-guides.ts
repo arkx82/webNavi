@@ -11,7 +11,8 @@ import type { LonLat } from "../route/types.js";
  * the town the direction heads for, so a junction is found by the name in
  * the route's guide and its direction by where that town lies.
  */
-export type GuideColour = "pink" | "green" | "blue" | "orange";
+/** "line": a line is painted (서울시's list says where) but not which colour — said without one. */
+export type GuideColour = "pink" | "green" | "blue" | "orange" | "line";
 export interface ColourGuide {
   /** The line to each branch; one alone is the exit's. */
   left?: GuideColour;
@@ -50,7 +51,19 @@ export function routeCore(route: string): string {
   return route.replace(/\s+/g, "").replace(/(고속도로|고속국도|선)$/, "");
 }
 
-interface Row { route: string; facility: string; towards: string; left?: GuideColour; right?: GuideColour; kind: string }
+interface Row { route: string; facility: string; towards: string; left?: GuideColour; right?: GuideColour; kind: string; key: string }
+
+/**
+ * A row's facility with its kind: the 2025 list writes "강일" and "구리" and puts 나들목 or 분기점 in 비고, where the
+ * route's guide says "강일IC" — matched as written, a quarter of the list's junctions were never found (강일IC and
+ * 구리IC on 2026-10-13's drive said "유도선 없음").
+ */
+export function facilityKey(facility: string, note: string): string {
+  const named = junctionKey(facility);
+  if (!named.endsWith("|")) return named;
+  const kind = /분기점/.test(note) ? "JC" : /나들목|국도접속부/.test(note) ? "IC" : "";
+  return kind ? `${named}${kind}` : named;
+}
 
 export function parseGuides(text: string): Row[] {
   const rows = parse(text, { columns: true, skip_empty_lines: true, relax_column_count: true, bom: true }) as Record<string, string>[];
@@ -62,6 +75,7 @@ export function parseGuides(text: string): Row[] {
       left: colourOf(r["좌"]),
       right: colourOf(r["우"]),
       kind: `${r["분기형태"] ?? ""} ${r["비고"] ?? ""}`,
+      key: facilityKey((r["시설물 명칭"] ?? "").trim(), r["비고"] ?? ""),
     }))
     // Toll plazas are left out: what their colours mean (하이패스 or not) the list does not say.
     .filter((r) => r.facility && (r.left || r.right) && !/영업소/.test(r.kind));
@@ -108,7 +122,7 @@ export class ColourGuides {
   async at(name: string, at: LonLat, inDeg: number, roads: string[] = []): Promise<ColourGuide | null> {
     const key = junctionKey(name);
     if (key.length < 3) return null;
-    let rows = this.rows.filter((r) => junctionKey(r.facility) === key);
+    let rows = this.rows.filter((r) => r.key === key);
     if (rows.length === 0) return null;
     // The motorway the route is on (its guides say "영동 고속도로를 따라"): that line's rows, where it has some.
     const hints = roads.map(routeCore).filter((h) => h.length >= 2);

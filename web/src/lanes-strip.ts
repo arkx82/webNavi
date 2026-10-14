@@ -154,9 +154,10 @@ export function junctionSvg(j: Junction, lines?: LaneCard["lines"]): string {
   return `<svg viewBox="0 0 160 110" width="176" height="121" overflow="visible" aria-hidden="true">${body}</svg>`;
 }
 
-export type GuideColour = "pink" | "green" | "blue" | "orange";
-const HEX: Record<GuideColour, string> = { pink: "#ff5fa2", green: "#22c55e", blue: "#3b82f6", orange: "#ff9f1c" };
-export const COLOUR_WORDS: Record<GuideColour, string> = { pink: "분홍색", green: "녹색", blue: "파란색", orange: "주황색" };
+/** "line": a line painted (서울시 says where) whose colour is not known — shown light, said without a colour. */
+export type GuideColour = "pink" | "green" | "blue" | "orange" | "line";
+const HEX: Record<GuideColour, string> = { pink: "#ff5fa2", green: "#22c55e", blue: "#3b82f6", orange: "#ff9f1c", line: "#cbd5e1" };
+export const COLOUR_WORDS: Record<GuideColour, string> = { pink: "분홍색", green: "녹색", blue: "파란색", orange: "주황색", line: "노면" };
 
 /**
  * The fork as a picture: the road coming up from the foot, parting in two,

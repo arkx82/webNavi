@@ -239,6 +239,7 @@ export const GUIDE_LINES = {
   green: "녹색 유도선을 따라가세요",
   blue: "파란색 유도선을 따라가세요",
   orange: "주황색 유도선을 따라가세요",
+  line: "노면 유도선을 따라가세요",
 } as const;
 
 /** Before a motorway exit or branch: which side to be on, a kilometre out (not lane data: the side of the turn). */

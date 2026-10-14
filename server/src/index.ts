@@ -41,6 +41,7 @@ import { registerCar } from "./car/index.js";
 import fastifyCompress from "@fastify/compress";
 import { Traffic } from "./road/traffic.js";
 import { SpeedLimits, type LonLat as LimitLonLat } from "./road/limits.js";
+import { SeoulLines } from "./road/seoul-lines.js";
 import { HdPoints } from "./safety/hd-points.js";
 
 // Each address family tried for a second, not Node's 250 ms: this host has no IPv6 route out, so a far server (the public
@@ -316,12 +317,26 @@ const colourGuides = new ColourGuides(configDir, (town) => (search.ready ? searc
 const refreshGuides = () => void colourGuides.refresh().catch((e) => app.log.warn({ err: (e as Error).message }, "color guides"));
 refreshGuides();
 setInterval(refreshGuides, 86_400_000);
-app.get<{ Querystring: { name?: string; at?: string; in?: string; roads?: string } }>("/api/road/color-guide", async (request, reply) => {
+// 서울시's points where lines are painted on its own roads (seoul-lines.ts): the city expressways, the big junctions.
+const seoulLines = new SeoulLines(configDir);
+const refreshSeoulLines = () => void seoulLines.refresh().catch((e) => app.log.warn({ err: (e as Error).message }, "seoul colour lines"));
+refreshSeoulLines();
+setInterval(refreshSeoulLines, 86_400_000);
+app.get<{ Querystring: { name?: string; at?: string; in?: string; roads?: string; go?: string; path?: string } }>("/api/road/color-guide", async (request, reply) => {
   const at = lonLat(request.query.at);
   const inDeg = Number(request.query.in);
-  if (!request.query.name || !at || !Number.isFinite(inDeg)) return reply.code(400).send({ error: "name, at, in" });
-  const roads = (request.query.roads ?? "").split(",").map((r) => r.trim()).filter(Boolean).slice(0, 4);
-  return (await colourGuides.at(request.query.name, at, inDeg, roads)) ?? {};
+  if (!at || !Number.isFinite(inDeg)) return reply.code(400).send({ error: "at, in" });
+  // 한국도로공사's list by the junction's name first.
+  if (request.query.name) {
+    const roads = (request.query.roads ?? "").split(",").map((r) => r.trim()).filter(Boolean).slice(0, 4);
+    const found = await colourGuides.at(request.query.name, at, inDeg, roads);
+    if (found) return found;
+  }
+  // Else a line 서울시 says is painted on the route round the turn, its colour the manual's (said as inferred).
+  const go = request.query.go === "left" || request.query.go === "right" ? request.query.go : null;
+  const path = (request.query.path ?? "").split(";").map((t) => lonLat(t)).filter((p): p is LonLat => !!p).slice(0, 60);
+  const colour = go && path.length >= 2 ? seoulLines.lineFor(at, path, go) : null;
+  return colour ? { [go!]: colour, inferred: true, source: "서울시" } : {};
 });
 
 // Every motorway rest area with its prices now; two hundred, so all at once.
@@ -574,6 +589,7 @@ const admin = registerAdmin(app, settings, {
     "주유 가격": nearby.opinet.ready, 충전소: nearby.ev.ready ? true : nearby.kakao.ready ? "카카오 (빈 충전기 수 없음)" : false,
     시설물: safety.features.length,
     제한속도: (() => { const l = limits.status(); return `TMAP 오늘 ${l.tmapCallsToday}/${l.budget}건 · 노드링크 ${l.nodelink ? "있음" : "없음"}${l.lastError ? ` · 마지막 오류 ${l.lastError}` : ""}`; })(),
+    "색깔 유도선": `${colourGuides.ready ? "도로공사 있음" : "도로공사 없음"} · 서울시 ${seoulLines.count}곳`,
     "단속 카메라": cameras ? `${cameras.features.length}대 (${new Date(cameras.at).toLocaleDateString("ko-KR")})` : camerasError ?? "아직 없음",
     ...Object.fromEntries(DATASETS.map((d) => {
       const k = sets.get(d.name);

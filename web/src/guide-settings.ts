@@ -278,7 +278,7 @@ const GROUPS: Group[] = [
     { key: "junctionNames", label: "IC · JC 이름", kind: "toggle", sub: "고속도로에서 \"1킬로미터 앞 신갈JC에서 원주 방면\" (이름마다 처음 한 번 음성 합성)" },
     { key: "laneHints", label: "차로 미리 이동", kind: "toggle", sub: "고속도로 출구 · 분기 1km 앞, 나갈 쪽 차로로 (차로 정보가 아닌 방향 기준)" },
     { key: "laneGuide", label: "차로 안내", kind: "toggle", sub: "회전 800m 앞(고속도로 2km)부터 지날 때까지, 그리고 직진 중 앞 차로가 좌·우회전 전용이 되는 곳에서 탈 차로를 아래쪽에 (정밀도로지도가 있는 곳)" },
-    { key: "colorLines", label: "색깔 유도선", kind: "toggle", sub: "고속도로 분기점 · 나들목에서 \"분홍색 유도선을 따라가세요\" 와 갈림길 그림 (한국도로공사)" },
+    { key: "colorLines", label: "색깔 유도선", kind: "toggle", sub: "고속도로 분기점 · 나들목(한국도로공사)과 서울시 도로(서울시 위치 자료, 색은 매뉴얼 기준: 오른쪽 분홍 · 두 갈래 왼쪽 녹색)에서 \"분홍색 유도선을 따라가세요\"" },
     { key: "merges", label: "합류 구간", kind: "toggle", sub: "고속도로 입구 · 분기 뒤 램프에서" },
     { key: "closeups", label: "분기점 확대", kind: "toggle", sub: "IC · JC · 출구 500m 앞(시내 250m)에서 지도가 기울어 분기점까지 보이게" },
     { key: "avoidSchool", label: "어린이 보호구역 회피", kind: "toggle", sub: "경로를 찾을 때마다 티맵·카카오는 어린이 보호구역을 피해 갑니다. 네이버·자체 경로는 피하지 못해 경로 카드에 '보호구역 포함'으로 표시되고, 더 빠른 길로 권하지 않습니다" },
