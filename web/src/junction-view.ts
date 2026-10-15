@@ -41,8 +41,21 @@ const MIN_LANES = 25;
 const EASE_S = 0.1;
 /** Frames a second at most (the car computer draws the map too). */
 const FPS = 30;
+/**
+ * 그림 (still): the junction drawn once, as a picture, from this far before it and this high, looking at the road
+ * this far past it — both branches in view, the route's lane blue, no car. The live view (따라가기) drew the panel
+ * thirty times a second beside the map for twenty seconds and more, and the car computer stuttered (2026-10-15).
+ */
+const STILL_BACK_M = 120;
+const STILL_UP_M = 38;
+const STILL_LOOK_PAST_M = 50;
+/** The picture goes once the junction is this far behind: past it, it shows a road no longer the car's. */
+const STILL_PAST_M = 15;
 
-interface Loaded { guide: Guide; scene: Scene; startAlong: number; route: P3[] }
+interface Loaded { guide: Guide; scene: Scene; startAlong: number; route: P3[]; /** The junction's place along [route], metres. */ guideS: number }
+
+/** 3D 분기점's way of showing: a still picture of the junction, or the camera following the car through it. */
+export type JunctionMode = "still" | "live";
 
 export class JunctionView {
   private three: Three | null = null;
@@ -66,7 +79,13 @@ export class JunctionView {
   private failed = new WeakSet<Guide>();
   private raf = 0;
   private lastDraw = 0;
-  private along: () => number | null = () => null;
+  /** How far the junction is ahead of the car, read each frame (negative past it). */
+  private inM: () => number | null = () => null;
+  /** Still picture or following (안내 설정 → 3D 분기점 보기). */
+  mode: JunctionMode = "still";
+  private drawnStill = false;
+  /** The junctions shown, so the map does not close in on them after the picture goes (main.ts). */
+  private shownFor = new WeakSet<Guide>();
   private eye: P3 | null = null;
   private easedAt = 0;
   private look: P3 | null = null;
@@ -107,7 +126,7 @@ export class JunctionView {
         // second at a big junction, 400 m before it.
         const [arrays, three] = await Promise.all([this.shape(scene, route3), this.three ?? import("three")]);
         this.three = three;
-        this.build({ guide: g, scene, startAlong, route: route3 }, arrays);
+        this.build({ guide: g, scene, startAlong, route: route3, guideS: guideAlong - startAlong }, arrays);
         this.log(`3D 분기점 준비 · ${g.text} · 차로 ${scene.links.length} · 차선 ${scene.lines.length}`);
       } catch (e) {
         this.failed.add(g);
@@ -117,19 +136,43 @@ export class JunctionView {
     this.asked.set(g, p);
   }
 
-  /** Shown for [g] while [show] (the junction close and tricky); [along] reads the car's place each frame. */
-  frame(g: Guide | null, show: boolean, along: () => number | null, sign: string, distText: string) {
-    this.along = along;
-    if (!g || !show || this.closed.has(g) || this.loaded?.guide !== g) { this.hide(); return; }
+  /**
+   * Shown for [g] while [show] (the junction close and tricky); [inM] reads how far ahead it is each frame — the
+   * distance to the junction itself, not the car's metres along the line, which a re-drawn route line (the lanes
+   * threaded after the junction was fetched) shifted, and the car stood off its place in the picture.
+   */
+  frame(g: Guide | null, show: boolean, inM: () => number | null, sign: string, distText: string) {
+    this.inM = inM;
+    const now = inM();
+    if (!g || !show || this.closed.has(g) || this.loaded?.guide !== g || (this.mode === "still" && now != null && now < -STILL_PAST_M)) { this.hide(); return; }
     this.box.querySelector(".jv-sign")!.textContent = sign;
     this.box.querySelector(".jv-dist")!.textContent = distText;
     if (this.box.hidden) {
       this.box.hidden = false;
+      this.shownFor.add(g);
       document.body.classList.add("jv-open");
       this.resize();
       this.eye = null;
-      this.loop();
+      this.drawnStill = false;
+      if (this.mode === "still") this.drawStill(); else this.loop();
     }
+  }
+
+  /** Whether the picture of [g] was up: the map keeps from closing in on it after (the picture went at the fork). */
+  wasShown(g: Guide): boolean {
+    return this.shownFor.has(g);
+  }
+
+  /** The junction as a picture, once: from STILL_BACK_M before it, looking past it, without the car. */
+  private drawStill() {
+    const L = this.loaded;
+    if (!L || !this.renderer || !this.world || !this.camera || this.drawnStill) return;
+    const p = this.at(L.guideS - STILL_BACK_M), q = this.at(L.guideS + STILL_LOOK_PAST_M);
+    this.camera.position.set(p[0], p[1] + STILL_UP_M, p[2]);
+    this.camera.lookAt(q[0], q[1], q[2]);
+    if (this.car) this.car.visible = false;
+    this.renderer.render(this.world, this.camera);
+    this.drawnStill = true;
   }
 
   get open() {
@@ -198,6 +241,8 @@ export class JunctionView {
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+    // A canvas resized is cleared: the picture drawn again.
+    if (this.mode === "still" && this.drawnStill) { this.drawnStill = false; this.drawStill(); }
   }
 
   private loop = () => {
@@ -219,9 +264,10 @@ export class JunctionView {
   private draw() {
     const T = this.three, L = this.loaded;
     if (!T || !L || !this.renderer || !this.world || !this.camera) return;
-    const along = this.along();
-    if (along == null) return;
-    const s = along - L.startAlong;
+    const inM = this.inM();
+    if (inM == null) return;
+    if (this.car && !this.car.visible) this.car.visible = true;
+    const s = L.guideS - inM;
     const p = this.at(s), a = this.at(s - 2), b = this.at(s + 2), q = this.at(s + AHEAD_M);
     const dir = Math.atan2(q[0] - p[0], q[2] - p[2]);
     const eye: P3 = [p[0] - Math.sin(dir) * BACK_M, p[1] + UP_M, p[2] - Math.cos(dir) * BACK_M];

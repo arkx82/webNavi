@@ -37,8 +37,16 @@ const ROUTE_DEG = 35;
 const CLIMB_PER_M = 0.15;
 const STEEP_COST = 100;
 /** Moving sideways more than the step: a lane change, dear; and any change of lane a little. */
-const SIDE_COST = 2;
-const LANE_CHANGE_COST = 1.5;
+const SIDE_COST = 8;
+const LANE_CHANGE_COST = 3;
+/**
+ * How much a lane's distance from the provider's line counts, a metre a point. It was 1, and the band went where the
+ * line went: the line the page sends is drawn on the lane the guidance wants (thread.ts), a lane over and back as
+ * the guidance moves, and the 3D picture showed it as a zigzag where the driver wants one thing — which branch
+ * (2026-10-15). At 0.05 the band keeps to a lane within MATCH_M of the line and changes only where it must: over 60
+ * junctions of the user's drives, 465 hops to 146 for a line hopping a lane every 100 m, and the same branch at all.
+ */
+const OFF_WEIGHT = 0.05;
 
 export class Junction3D {
   private db: DatabaseSync | null = null;
@@ -195,7 +203,7 @@ export function lift(route: P3[], links: P3[][]): { points: (P3 | null)[]; match
     if (!cands[i].length) { i++; continue; }
     let j = i;
     while (j + 1 < route.length && cands[j + 1].length) j++;
-    const cost: number[][] = [cands[i].map((c) => c.off)];
+    const cost: number[][] = [cands[i].map((c) => c.off * OFF_WEIGHT)];
     const from: number[][] = [cands[i].map(() => -1)];
     for (let k = i + 1; k <= j; k++) {
       const step = Math.max(1, Math.hypot(route[k][0] - route[k - 1][0], route[k][2] - route[k - 1][2]));
@@ -209,7 +217,7 @@ export function lift(route: P3[], links: P3[][]): { points: (P3 | null)[]; match
           const v = cost[k - 1 - i][n] + steep * STEEP_COST + side * SIDE_COST + (c.link === pc.link ? 0 : LANE_CHANGE_COST);
           if (v < bestCost) { bestCost = v; bestFrom = n; }
         });
-        row.push(bestCost + c.off);
+        row.push(bestCost + c.off * OFF_WEIGHT);
         back.push(bestFrom);
       }
       cost.push(row);

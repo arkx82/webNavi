@@ -718,7 +718,8 @@ function followCar(at: LonLat, speedMps = 0) {
   // Close up on a junction: the car low on the screen, tilted, drawn back to see the fork (closeup.ts).
   // Closed on a junction (tilted, drawn back to see the fork) only where the 3D 분기점 panel does not show it: with the
   // picture of it up top, the map drawing in and out again under it was only a jolt.
-  const close = !!closeup && !junctionView.open;
+  // Nor after its picture went at the fork (3D 분기점 그림): drawn in for the last 100 m, it was a jolt just past it.
+  const close = !!closeup && !junctionView.open && !junctionView.wasShown(closeup.guide);
   let want = close ? { x: carSpot(0).x, y: layout.height * CLOSEUP_CAR_AT } : carSpot(v.carLow);
   // The lane card at the top of the map: the car kept clear below it.
   if (layout.lanesBottom > 0) want = { x: want.x, y: Math.max(want.y, layout.lanesBottom + CAR_BELOW_CARD_PX) };
@@ -799,7 +800,8 @@ function showJunction3d(shown: Shown) {
   const side = m ? branchOf(m) : null;
   const toward = g ? (g.text.match(/'([^']+)'\s*방면/)?.[1] ?? junctionOf(g)?.toward ?? g.text.match(/([^\s,]+(?:,\s*[^\s,]+)*)\s*방면/)?.[1] ?? "") : "";
   const sign = toward ? `${side === "right" ? "↗" : side === "left" ? "↖" : "↑"} ${toward.replace(/,\s*/g, " · ")}` : "";
-  junctionView.frame(g, !!c, () => tracker.frame()?.alongM ?? null, sign, c ? km(Math.max(0, Math.round(c.inM / 10) * 10)) : "");
+  junctionView.mode = guide.junction3dMode;
+  junctionView.frame(g, !!c, () => (closeup && closeup.guide === g ? closeup.inM : null), sign, c ? km(Math.max(0, Math.round(c.inM / 10) * 10)) : "");
   // The lane card goes into the 3D picture while it shows — the turn's arrow, the distance and the lanes over its sky,
   // the junction under them left clear — and back to the top of the map after.
   const lanes = el("lanes"), jv = el("jv"), view = jv.querySelector<HTMLElement>(".jv-view")!;

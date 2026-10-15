@@ -62,3 +62,12 @@ test("a provider's line drawn on the road below, 6 m beside the ramp the route t
   assert.ok(Math.abs(got[40][1] - 47) < 1.5, `half way up the ramp at 200 m: ${got[40][1]}`);
   assert.ok(Math.abs(got[30][0] - 6) < 0.5, "on the ramp, not on the road below");
 });
+
+test("a line hopping a lane over and back (the lane guidance's) is lifted onto one lane, not a zigzag", () => {
+  // Two lanes north, 3.5 m apart; the line a lane over every other 100 m, ending on the first.
+  const lane = (x: number): P3[] => Array.from({ length: 61 }, (_, i) => [x, 0, -i * 10] as P3);
+  const route: P3[] = Array.from({ length: 121 }, (_, i) => [Math.floor((i * 5) / 100) % 2 ? 3.5 : 0, 0, -i * 5] as P3).slice(0, 100);
+  const { points } = lift(route, [lane(0), lane(3.5)]);
+  const xs = new Set(points.map((p) => p![0]));
+  assert.equal(xs.size, 1, `one lane: ${[...xs].join(", ")}`);
+});

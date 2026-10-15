@@ -30,6 +30,8 @@ export interface GuideSettings {
   closeups: boolean;
   /** 3D 분기점: the junction from 정밀도로지도 at its heights, in a panel at the top of the map (junction-view.ts). */
   junction3d: boolean;
+  /** 3D 분기점 보기: a still picture of the junction (default) or the camera following the car through it. */
+  junction3dMode: "still" | "live";
   /** 정밀도로지도's lane lines and road markings on the map, close in (hdmap-layer.ts). */
   hdLanes: boolean;
   /** When, while driving: near a turn or slow (the lanes are the heaviest thing drawn in a city), or always. */
@@ -127,7 +129,7 @@ export interface GuideSettings {
 export type Mode = "voice" | "show" | "off";
 
 export const DEFAULTS: GuideSettings = {
-  voice: true, voiceName: null, volume: 1, turns: true, junctionNames: true, laneHints: true, merges: true, closeups: true, junction3d: true, sendLogs: true, layout: "classic", hdLanes: true, hdLanesWhen: "turns", laneGuide: true, colorLines: true, theme: "auto", nightCity: false, carIcon: "model3d", carPaint: PAINTS[0][0], carSize: "large", trafficBar: true, lanesAt: "car", endOnArrive: true, mapDpr: "auto", followFps: "auto", ducking: "soft", fasterRoute: "ask", avoidSchool: false, carData: "auto", rev: 4, uiScale: 1, lightsOnMap: "route", camerasOnMap: "route", nextLight: true, flashSignals: true,
+  voice: true, voiceName: null, volume: 1, turns: true, junctionNames: true, laneHints: true, merges: true, closeups: true, junction3d: true, junction3dMode: "still", sendLogs: true, layout: "classic", hdLanes: true, hdLanesWhen: "turns", laneGuide: true, colorLines: true, theme: "auto", nightCity: false, carIcon: "model3d", carPaint: PAINTS[0][0], carSize: "large", trafficBar: true, lanesAt: "car", endOnArrive: true, mapDpr: "auto", followFps: "auto", ducking: "soft", fasterRoute: "ask", avoidSchool: false, carData: "auto", rev: 4, uiScale: 1, lightsOnMap: "route", camerasOnMap: "route", nextLight: true, flashSignals: true,
   cameras: true, cameraFromM: 600, sections: true, schools: true,
   bumps: "show", curves: "off", accidents: "show", bikeAccidents: "show",
   overspeed: true, overspeedBy: 0,
@@ -299,6 +301,7 @@ const GROUPS: Group[] = [
     { key: "merges", label: "합류 구간", kind: "toggle", sub: "고속도로 입구 · 분기 뒤 램프에서" },
     { key: "closeups", label: "분기점 확대", kind: "toggle", sub: "IC · JC · 출구 500m 앞(시내 250m)에서 지도가 기울어 분기점까지 보이게" },
     { key: "junction3d", label: "3D 분기점", kind: "toggle", sub: "헷갈리는 분기점 앞(고속도로 500 m · 시내 250 m)에서 정밀도로지도의 실제 높이로 그린 분기점을 지도 위쪽에 — 탈 차로를 파란 띠로 (정밀도로지도가 있는 곳)" },
+    { key: "junction3dMode", label: "3D 분기점 보기", kind: "choice", options: [["still", "그림"], ["live", "따라가기"]], sub: "그림: 갈림길 120 m 앞 하늘에서 본 한 장을 띄우고 갈림길을 지나면 닫음 (가볍고 끊기지 않음). 따라가기: 차를 따라 움직이는 3D, 갈림길 100 m 뒤까지" },
     { key: "avoidSchool", label: "어린이 보호구역 회피", kind: "toggle", sub: "경로를 찾을 때마다 티맵·카카오는 어린이 보호구역을 피해 갑니다. 네이버·자체 경로는 피하지 못해 경로 카드에 '보호구역 포함'으로 표시되고, 더 빠른 길로 권하지 않습니다" },
     { key: "fasterRoute", label: "더 빠른 길", kind: "choice", options: [["ask", "알리기"], ["off", "끔"]], sub: "안내 중 6분마다 티맵·카카오·네이버·자체 경로를 다시 비교해 3분 이상 빠른 길이 있으면 알립니다. 지금 길이 우선 — '바꾸기'를 눌러야만 바뀌고, 누르지 않으면 2분 뒤 그대로. 꺼도 지금 길의 교통 색과 남은 시간은 6분마다 새로 받음" },
     { key: "carData", label: "차량 데이터 (테슬라)", kind: "choice", options: [["auto", "켜기"], ["force", "강제 켜기"], ["off", "끄기"]], sub: "터널 · 주차장에서 차의 속도 · 기어 · 위치로 화면의 차를 잇습니다. 켜기: 차의 위치가 이 기기와 1km 안일 때만 씀 (같은 계정의 폰이 집에 주차된 차를 따라 멈추지 않도록). 강제 켜기: 거리와 상관없이. 이 기기에만 저장되고, 지도 오른쪽 위 T 표시를 길게 눌러도 바꿀 수 있음" },
