@@ -82,7 +82,7 @@ export class CarModelLayer implements maplibregl.CustomLayerInterface {
     });
     // The Model Y L's length; its width and height as the model's.
     gltf.scene.scale.set(1, 1, LENGTH_STRETCH);
-    this.wheels = findWheels(gltf.scene);
+    this.wheels = findWheels(gltf.scene, THREE);
     scene.add(gltf.scene);
     this.scene = scene;
     this.camera = new THREE.Camera();

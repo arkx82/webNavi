@@ -162,7 +162,7 @@ export class JunctionView {
       });
       gltf.scene.scale.set(1, 1, MODEL_LENGTH_STRETCH);
       this.model = gltf.scene;
-      this.wheels = findWheels(gltf.scene);
+      this.wheels = findWheels(gltf.scene, this.three ?? undefined);
       this.setPaint(this.paint);
       // Its shaders too, before it is drawn.
       if (this.renderer && this.camera) await this.renderer.compileAsync?.(gltf.scene, this.camera).catch(() => undefined);
