@@ -239,10 +239,13 @@
     <div id="lanes" hidden></div>
     <!-- 3D 분기점: the junction ahead from 정밀도로지도 at its heights, the route's lane in blue (junction-view.ts). -->
     <div id="jv" hidden>
-      <canvas id="jv-canvas"></canvas>
-      <div class="jv-sign"></div>
-      <div class="jv-dist"></div>
-      <button class="jv-close" type="button" title="닫기" aria-label="3D 분기점 닫기">×</button>
+      <div class="jv-view">
+        <canvas id="jv-canvas"></canvas>
+        <div class="jv-sign"></div>
+        <div class="jv-dist"></div>
+        <button class="jv-close" type="button" title="닫기" aria-label="3D 분기점 닫기">×</button>
+      </div>
+      <!-- The lane card (#lanes) is moved in here while the panel shows: the arrow, the distance and the lanes under the picture (main.ts). -->
     </div>
     <!-- 분기점 확대: which junction the camera has closed on (closeup.ts). -->
     <div id="closeup" hidden></div>

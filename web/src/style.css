@@ -658,16 +658,22 @@ body.day #resume { background: #dff1fb; color: #0b4a6f; }
 /* 3D 분기점: at the top of the map's free part, the lane card under it while it shows. */
 #jv {
   position: absolute; top: 16px; left: calc(var(--hud-right) + (100% - var(--hud-right) - 88px) / 2); transform: translateX(-50%); z-index: 2;
-  width: min(560px, calc(100% - var(--hud-right) - 120px)); aspect-ratio: 16 / 9; border-radius: 16px; overflow: hidden;
-  background: #1c2533; box-shadow: 0 6px 20px rgba(0,0,0,.45);
+  width: min(560px, calc(100% - var(--hud-right) - 120px)); border-radius: 16px; overflow: hidden;
+  display: flex; flex-direction: column; background: var(--panel-solid); box-shadow: 0 6px 20px rgba(0,0,0,.45);
 }
+#jv[hidden] { display: none; }
+#jv .jv-view { position: relative; aspect-ratio: 16 / 9; background: #1c2533; }
 #jv canvas { display: block; width: 100%; height: 100%; }
+/* The lane card inside the panel, under the picture: one card, nothing laid over the junction. The fork drawing is the
+   3D picture's to show, and the distance is the card's. */
+#jv #lanes { position: static; transform: none; max-width: none; box-shadow: none; border-radius: 0; background: transparent; padding: 6px 10px 8px; }
+#jv #lanes .lc-fork { display: none; }
+#jv:has(#lanes:not([hidden])) .jv-dist { display: none; }
 #jv .jv-sign { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); max-width: calc(100% - 64px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   background: #0a6b3b; color: #fff; border: 3px solid #fff; outline: 2px solid #0a6b3b; border-radius: 6px; padding: 3px 12px; font-weight: 800; font-size: calc(17px * var(--ui, 1)); }
 #jv .jv-sign:empty { display: none; }
 #jv .jv-dist { position: absolute; left: 10px; bottom: 10px; background: rgba(0,0,0,.6); color: #fff; font-weight: 800; font-size: calc(22px * var(--ui, 1)); padding: 2px 10px; border-radius: 10px; font-variant-numeric: tabular-nums; }
 #jv .jv-close { position: absolute; right: 8px; top: 8px; width: 34px; height: 34px; min-height: 34px; border-radius: 50%; background: rgba(0,0,0,.45); color: #fff; font-size: 20px; line-height: 1; padding: 0; }
-body.jv-open #lanes { top: calc(24px + var(--jv-h, 0px)); }
 /* A side sheet open: centred in what is left of it. */
 body.side-open #lanes { left: calc(var(--hud-right) + (100% - var(--hud-right) - 440px) / 2); max-width: calc(100% - var(--hud-right) - 470px); }
 #lanes .lc-head { display: flex; align-items: center; gap: 10px; }

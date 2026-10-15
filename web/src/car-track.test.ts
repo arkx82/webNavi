@@ -146,3 +146,13 @@ test("parked: P, or the gear blank with no speed; not once it goes, nor when the
   car.add({ t: 10_000, speedMps: 3 }, 10_300);
   assert.equal(car.parked(10_500), false);
 });
+
+test("standing, the way the car points is its own word, lately said; none when the car has gone quiet", () => {
+  const car = new CarTrack();
+  assert.equal(car.headingNow(T0), null, "nothing said yet");
+  // Parked facing 211° (the GPS's course of a parked car would be its wander).
+  at(car, { t: T0, speedMps: 0, est: { lon: 126.455981, lat: 34.969141, heading: 211 } });
+  at(car, { t: T0 + 3_000, speedMps: 0, est: { lon: 126.455981, lat: 34.969141, heading: null } });
+  assert.equal(car.headingNow(T0 + 4_000), 211, "the last heading said, a sample without one in between");
+  assert.equal(car.headingNow(T0 + 3_300 + PARKED_FRESH_MS + 1), null, "the car quiet too long: not known now");
+});

@@ -545,10 +545,22 @@ gps.on((f) => trace.fix(f));
 // Routes asked on the move start on the carriageway the car is on (Kakao and TMAP take the heading).
 setHeading(() => {
   const f = gps.last;
-  // Parked, the course is the GPS wandering, not the way the car points.
-  if (!f || f.course == null || !(f.speed != null && f.speed > 2) || Date.now() - f.t > 10_000 || tracker.car?.parked()) return null;
-  return { deg: f.course, kmh: f.speed * 3.6 };
+  // Moving: the fixes' course. Parked, that is the GPS wandering, not the way the car points.
+  if (f && f.course != null && f.speed != null && f.speed > 2 && Date.now() - f.t <= 10_000 && !tracker.car?.parked()) {
+    lastCourse = { deg: f.course, at: [f.lon, f.lat], t: Date.now() };
+    return { deg: f.course, kmh: f.speed * 3.6 };
+  }
+  // Standing: the way the car itself says it points (the car linked and near); else the course it was last driven at,
+  // where it has not moved from since (a light, a jam, a stop) — so the route starts on the road the car is on.
+  const own = !sim?.running && carUsable() ? carLink.track.headingNow() : null;
+  if (own != null) return { deg: own, kmh: 0 };
+  if (f && lastCourse && Date.now() - lastCourse.t < COURSE_KEPT_MS && metres(f.lon, f.lat, lastCourse.at[0], lastCourse.at[1]) < COURSE_KEPT_M) return { deg: lastCourse.deg, kmh: 0 };
+  return null;
 });
+/** The course last driven at, and where: the heading a route asked standing still starts along, nearby and lately. */
+let lastCourse: { deg: number; at: LonLat; t: number } | null = null;
+const COURSE_KEPT_MS = 30 * 60_000;
+const COURSE_KEPT_M = 30;
 
 /** The fix's speed, m/s — 0 while the car says it is parked: a car park's GPS reads 2, 5, 3 km/h of a car in P. */
 function speedOf(fix: Fix): number | null {
@@ -773,6 +785,11 @@ function showJunction3d(shown: Shown) {
   const toward = g ? (g.text.match(/'([^']+)'\s*방면/)?.[1] ?? junctionOf(g)?.toward ?? g.text.match(/([^\s,]+(?:,\s*[^\s,]+)*)\s*방면/)?.[1] ?? "") : "";
   const sign = toward ? `${side === "right" ? "↗" : side === "left" ? "↖" : "↑"} ${toward.replace(/,\s*/g, " · ")}` : "";
   junctionView.frame(g, !!c, () => tracker.frame()?.alongM ?? null, sign, c ? km(Math.max(0, Math.round(c.inM / 10) * 10)) : "");
+  // The lane card goes into the panel while it shows — the turn's arrow, the distance and the lanes under the picture —
+  // and back to the top of the map after: laid over the picture, it hid the junction it was telling of.
+  const lanes = el("lanes"), jv = el("jv");
+  if (junctionView.open && lanes.parentElement !== jv) { lanes.style.top = ""; jv.append(lanes); measure(); }
+  else if (!junctionView.open && lanes.parentElement === jv) { jv.after(lanes); measure(); }
 }
 
 /** The junction shown close up now, or null: closeup.ts holds it a little past the junction, and a new route resets it (prepareHighway). */
@@ -814,7 +831,8 @@ function measure() {
   let top = TOP_STACK_PX, bottom = 0;
   for (const id of TOP_STACK) {
     const box = el(id);
-    if (box.hidden) continue;
+    // The lane card inside the 3D 분기점 panel is part of it.
+    if (box.hidden || (id === "lanes" && box.parentElement === el("jv"))) continue;
     box.style.top = `${top}px`;
     top += box.offsetHeight + TOP_STACK_GAP_PX;
     bottom = box.getBoundingClientRect().bottom - canvas.top;
@@ -822,7 +840,7 @@ function measure() {
   layout.lanesBottom = bottom;
 }
 /** What sits at the top middle of the map, from the top down. */
-const TOP_STACK = ["lanes", "closeup", "section-hud"];
+const TOP_STACK = ["jv", "lanes", "closeup", "section-hud"];
 const TOP_STACK_PX = 16;
 const TOP_STACK_GAP_PX = 8;
 const measuring = new ResizeObserver(measure);
@@ -2035,6 +2053,9 @@ function showTurn(shown: Shown) {
     if (shown.remainingM != null && shown.remainingM < 30 && !arrived) arriveHere();
     return;
   }
+  // Arrived (off the route near the end, before its last guide): the panel says 도착 and nothing more is said —
+  // "잠시 후 목적지에 도착합니다" came two seconds after "목적지에 도착했습니다" (2026-10-14, hantwo).
+  if (arrived) return;
   const g = shown.nextGuide.guide;
   const m = maneuverFor(g);
   putHtml("turn-icon", arrowSvg(m, TURN_ARROW_PX));
@@ -2948,15 +2969,35 @@ function paintOver() {
 }
 
 // ---- 전체화면 ---------------------------------------------------------------
-// The address bar out of the way: the Fullscreen API, where the browser lets a page use it. Whether the car's does
-// (and whether only parked) could not be learned from here: each try, and how it went, is written to the 진단 log.
+// The address bar out of the way: the Fullscreen API, where the browser lets a page use it. The car's says yes and
+// changes nothing (2026-10-14: "전체화면 켬" with the page still 804×638). The car's browser opens full screen, as its
+// 극장 mode, what it is sent to from YouTube: so in the car the button goes by youtube.com/redirect (YouTube asks once
+// "사이트로 이동", the drive in progress picked up again on the way back — resume.ts). Come that way, the page says
+// so (the referrer) and the button stands down for as long as the tab lives.
+const FULL_VIA = "https://www.youtube.com/redirect?q=";
+const viaTheatre = (() => {
+  try {
+    if (/^https:\/\/(www\.|m\.)?youtube\.com\//.test(document.referrer)) sessionStorage.setItem("nav-theatre", "1");
+    return sessionStorage.getItem("nav-theatre") === "1";
+  } catch { return false; }
+})();
 {
   type Doc = Document & { webkitFullscreenElement?: Element | null; webkitExitFullscreen?: () => Promise<void> | void };
   type El = HTMLElement & { webkitRequestFullscreen?: (o?: FullscreenOptions) => Promise<void> | void };
   const doc = document as Doc, root = document.documentElement as El;
   const can = !!(root.requestFullscreen || root.webkitRequestFullscreen) && (document.fullscreenEnabled ?? true);
   const btn = el("full-screen");
-  btn.hidden = !can;
+  btn.hidden = viaTheatre || !(can || IN_CAR);
+  if (viaTheatre) {
+    log(`전체화면 (YouTube 거쳐 열림) · 화면 ${innerWidth}×${innerHeight}`);
+    // Whether the car keeps it full screen in gear (it stops video out of P; a page is not video): any change of the
+    // window's size is written down, a second after it settles, beside the gear lines ("차량 기어 …").
+    let settle = 0;
+    window.addEventListener("resize", () => {
+      clearTimeout(settle);
+      settle = window.setTimeout(() => log(`전체화면 창 크기 바뀜 · 화면 ${innerWidth}×${innerHeight}`), 1000);
+    });
+  }
   const isFull = () => !!(document.fullscreenElement || doc.webkitFullscreenElement);
   const draw = () => {
     const on = isFull();
@@ -2968,6 +3009,14 @@ function paintOver() {
       : `<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>`;
   };
   btn.addEventListener("click", async () => {
+    if (IN_CAR) {
+      const ok = window.confirm("테슬라 브라우저는 YouTube를 거쳐 열어야 전체화면이 됩니다.\n\n"
+        + "이동하면 YouTube 확인 화면이 뜹니다. '사이트로 이동'을 누르세요. 안내 중이었다면 다시 열린 뒤 이어서 안내합니다.\n\n"
+        + "매번 전체화면으로 열려면 그때의 주소를 즐겨찾기에 저장해 두세요.");
+      log(`전체화면: YouTube 거쳐 다시 열기 ${ok ? "" : "취소"}`);
+      if (ok) location.href = FULL_VIA + encodeURIComponent(location.origin + location.pathname);
+      return;
+    }
     try {
       if (isFull()) await (document.exitFullscreen ? document.exitFullscreen() : doc.webkitExitFullscreen?.());
       else await (root.requestFullscreen ? root.requestFullscreen({ navigationUI: "hide" }) : root.webkitRequestFullscreen?.());
@@ -3029,6 +3078,8 @@ let hereAsking = false;
 /** Asked again once the car is this far on, or this long after (a standing car is asked once). */
 const HERE_MOVED_M = 40;
 const HERE_EVERY_MS = 10_000;
+/** An answer for here is shown, standing on the spot, for this long at most: not into the next drive. */
+const HERE_KEPT_MS = 10 * 60_000;
 function askHere(f: Shown) {
   if (hereAsking || demo) return;
   const moved = hereLimit ? metres(hereLimit.at[0], hereLimit.at[1], f.at[0], f.at[1]) : Infinity;
@@ -3061,7 +3112,10 @@ function drawSign() {
   askHere(f);
   // What the server said, while it is about here (not long ago, not far back).
   const away = hereLimit ? metres(hereLimit.at[0], hereLimit.at[1], f.at[0], f.at[1]) : Infinity;
-  const fresh = hereLimit && hereLimit.kmh != null && (away < HERE_MOVED_M || (Date.now() - hereLimit.t < 30_000 && away < 300));
+  // Near, but not from another drive: a morning's answer by the same gate came back as the sign that evening (a 10 TMAP
+  // since dropped, five seconds before the new answer; 2026-10-14, hantwo).
+  const age = hereLimit ? Date.now() - hereLimit.t : Infinity;
+  const fresh = hereLimit && hereLimit.kmh != null && ((away < HERE_MOVED_M && age < HERE_KEPT_MS) || (age < 30_000 && away < 300));
   showRoadSign(fresh ? { kmh: hereLimit!.kmh!, src: hereLimit!.src ?? "" } : null, f.speedMps);
 }
 // Between the road checks too, and with no route at all.

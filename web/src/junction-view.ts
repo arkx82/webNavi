@@ -113,7 +113,6 @@ export class JunctionView {
     if (this.box.hidden) {
       this.box.hidden = false;
       document.body.classList.add("jv-open");
-      document.body.style.setProperty("--jv-h", `${this.box.offsetHeight}px`);
       this.resize();
       this.eye = null;
       this.loop();

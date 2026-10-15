@@ -121,6 +121,18 @@ export class CarTrack {
     this.parkT = -Infinity;
   }
 
+  /**
+   * The way the car points by its own word, said lately (by [now], our clock), or null: what a route asked from a
+   * standstill starts along — a parked fix's course is only its wander (2026-10-14/15, hantwo: twice the route began on
+   * the road behind the car, once with a U-turn, and was left 40 s later).
+   */
+  headingNow(now = Date.now()): number | null {
+    const at = this.lastAt;
+    if (at == null || now - at >= PARKED_FRESH_MS) return null;
+    for (let j = this.ests.length - 1; j >= 0; j--) if (this.ests[j].heading != null) return this.ests[j].heading;
+    return null;
+  }
+
   /** The car says it is parked, and said so lately (by [now], our clock): it is not going anywhere, whatever the fixes say. */
   parked(now = Date.now()): boolean {
     const at = this.lastAt;
