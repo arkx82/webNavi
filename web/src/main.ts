@@ -641,7 +641,8 @@ function frame() {
       carLayer.sizeTo(carLaneM, carFloorM(carAt));
       carLayer.place(carAt, markerBearing);
       zoomSpeed += (shown.speedMps * 3.6 - zoomSpeed) * 0.03;
-      turnInM = route ? shown.nextGuide?.inM : undefined;
+      // The 3D 분기점 panel shows the junction: the map goes on as it was, not drawn in for the turn as well.
+      turnInM = route && !junctionView.open ? shown.nextGuide?.inM : undefined;
       closeup = closeupFor(shown);
       showCloseup(closeup);
       showJunction3d(shown);
@@ -705,7 +706,9 @@ function followCar(at: LonLat, speedMps = 0) {
   const frames = gap > 1000 ? 1 : Math.min(gap, 100) / (1000 / 60);
   const k = (share: number) => Math.min(0.55, 1 - Math.pow(1 - share, frames));
   // Close up on a junction: the car low on the screen, tilted, drawn back to see the fork (closeup.ts).
-  const close = !!closeup;
+  // Closed on a junction (tilted, drawn back to see the fork) only where the 3D 분기점 panel does not show it: with the
+  // picture of it up top, the map drawing in and out again under it was only a jolt.
+  const close = !!closeup && !junctionView.open;
   let want = close ? { x: carSpot(0).x, y: layout.height * CLOSEUP_CAR_AT } : carSpot(v.carLow);
   // The lane card at the top of the map: the car kept clear below it.
   if (layout.lanesBottom > 0) want = { x: want.x, y: Math.max(want.y, layout.lanesBottom + CAR_BELOW_CARD_PX) };
@@ -785,11 +788,11 @@ function showJunction3d(shown: Shown) {
   const toward = g ? (g.text.match(/'([^']+)'\s*방면/)?.[1] ?? junctionOf(g)?.toward ?? g.text.match(/([^\s,]+(?:,\s*[^\s,]+)*)\s*방면/)?.[1] ?? "") : "";
   const sign = toward ? `${side === "right" ? "↗" : side === "left" ? "↖" : "↑"} ${toward.replace(/,\s*/g, " · ")}` : "";
   junctionView.frame(g, !!c, () => tracker.frame()?.alongM ?? null, sign, c ? km(Math.max(0, Math.round(c.inM / 10) * 10)) : "");
-  // The lane card goes into the panel while it shows — the turn's arrow, the distance and the lanes under the picture —
-  // and back to the top of the map after: laid over the picture, it hid the junction it was telling of.
-  const lanes = el("lanes"), jv = el("jv");
-  if (junctionView.open && lanes.parentElement !== jv) { lanes.style.top = ""; jv.append(lanes); measure(); }
-  else if (!junctionView.open && lanes.parentElement === jv) { jv.after(lanes); measure(); }
+  // The lane card goes into the 3D picture while it shows — the turn's arrow, the distance and the lanes over its sky,
+  // the junction under them left clear — and back to the top of the map after.
+  const lanes = el("lanes"), jv = el("jv"), view = jv.querySelector<HTMLElement>(".jv-view")!;
+  if (junctionView.open && lanes.parentElement !== view) { lanes.style.top = ""; view.prepend(lanes); measure(); }
+  else if (!junctionView.open && jv.contains(lanes)) { jv.after(lanes); measure(); }
 }
 
 /** The junction shown close up now, or null: closeup.ts holds it a little past the junction, and a new route resets it (prepareHighway). */
@@ -817,6 +820,7 @@ function showCloseup(_c: Closeup | null) {
  * card's bottom, the canvas — measured when something changes size (a ResizeObserver), not sixty times a second:
  * reading a box mid-frame after the frame's own writes makes the browser lay the page out again there and then.
  */
+let nearbyEl: HTMLElement | null = null, guideEl: HTMLElement | null = null, weatherEl: HTMLElement | null = null, musicDockEl: HTMLElement | null = null;
 const layout = { hudRight: 0, destRight: 0, lanesBottom: 0, width: 0, height: 0 };
 function measure() {
   const canvas = map.getCanvas().getBoundingClientRect();
@@ -832,13 +836,31 @@ function measure() {
   for (const id of TOP_STACK) {
     const box = el(id);
     // The lane card inside the 3D 분기점 panel is part of it.
-    if (box.hidden || (id === "lanes" && box.parentElement === el("jv"))) continue;
+    if (box.hidden || (id === "lanes" && el("jv").contains(box))) continue;
     box.style.top = `${top}px`;
     top += box.offsetHeight + TOP_STACK_GAP_PX;
     bottom = box.getBoundingClientRect().bottom - canvas.top;
   }
   layout.lanesBottom = bottom;
+  // The cards at the top over the car, the route line under them — not the middle of what is right of a 352 px panel
+  // (the panel floats, narrower, and the car is the map's middle: the cards stood 130 px right of it). Kept clear of
+  // the panel and the buttons; where that leaves too little room round the car, the middle of the room there is.
+  const hudRight = el("hud").getBoundingClientRect().right - canvas.left;
+  const controls = el("controls").getBoundingClientRect();
+  const lo = Math.max(hudRight, layout.destRight - canvas.left) + TOP_GAP_PX;
+  const hi = (controls.width > 0 ? controls.left - canvas.left : layout.width) - TOP_GAP_PX;
+  let x = carSpot(0).x, half = Math.min(x - lo, hi - x);
+  if (half < TOP_MIN_HALF_PX) { x = (lo + hi) / 2; half = Math.max(0, (hi - lo) / 2); }
+  // In the cards' own pixels: they are drawn at the panel's scale (style.css: zoom: var(--ui), 크기 in 안내 설정), the
+  // measures above in the screen's — at 0.85 the 3D panel stood over the trip panel, 70 px left of where it was meant.
+  const ui = Number(getComputedStyle(el("jv")).zoom) || 1;
+  const root = document.documentElement.style;
+  root.setProperty("--top-x", `${Math.round((x + canvas.left) / ui)}px`);
+  root.setProperty("--top-room", `${Math.round((2 * half) / ui)}px`);
 }
+/** Room kept between the top cards and the panel or the buttons; and the least half-width worth centring on the car. */
+const TOP_GAP_PX = 12;
+const TOP_MIN_HALF_PX = 170;
 /** What sits at the top middle of the map, from the top down. */
 const TOP_STACK = ["jv", "lanes", "closeup", "section-hud"];
 const TOP_STACK_PX = 16;
@@ -848,7 +870,6 @@ for (const id of ["hud", "dest-panel", "map", ...TOP_STACK]) measuring.observe(e
 // Once now as well: the observer's first report comes after the first frame's layout, and a frame before it would
 // place the car by a canvas of no size.
 measure();
-let nearbyEl: HTMLElement | null = null, guideEl: HTMLElement | null = null, weatherEl: HTMLElement | null = null, musicDockEl: HTMLElement | null = null;
 function carSpot(carLow = 0) {
   // Center horizontally in the visible driving view.
   // The HUD card floats on the top-left and does not obstruct the car at the bottom,
@@ -2527,6 +2548,8 @@ function sideChanged() {
   const open = !el("nearby").hidden || !el("guide").hidden || !el("weather").hidden || !el("music-dock").classList.contains("closed");
   document.body.classList.toggle("side-open", open);
   el("nearby-open").classList.toggle("on", nearby.isOpen);
+  // The car moves to the middle of what is left: the cards over it with it.
+  measure();
 }
 
 // ---- the road ahead --------------------------------------------------------
@@ -2969,35 +2992,18 @@ function paintOver() {
 }
 
 // ---- 전체화면 ---------------------------------------------------------------
-// The address bar out of the way: the Fullscreen API, where the browser lets a page use it. The car's says yes and
-// changes nothing (2026-10-14: "전체화면 켬" with the page still 804×638). The car's browser opens full screen, as its
-// 극장 mode, what it is sent to from YouTube: so in the car the button goes by youtube.com/redirect (YouTube asks once
-// "사이트로 이동", the drive in progress picked up again on the way back — resume.ts). Come that way, the page says
-// so (the referrer) and the button stands down for as long as the tab lives.
-const FULL_VIA = "https://www.youtube.com/redirect?q=";
-const viaTheatre = (() => {
-  try {
-    if (/^https:\/\/(www\.|m\.)?youtube\.com\//.test(document.referrer)) sessionStorage.setItem("nav-theatre", "1");
-    return sessionStorage.getItem("nav-theatre") === "1";
-  } catch { return false; }
-})();
+// The address bar out of the way: the Fullscreen API, where the browser lets a page use it (a phone's Chrome).
+// Not in the car, where the button is not shown:
+// - the car's browser says yes to the API and changes nothing (2026-10-14: "전체화면 켬", the page still 804×638);
+// - by youtube.com/redirect the page does open full screen — the car's 극장 mode — but the car will not drive in it
+//   (tried 2026-10-15). Taken out again (3e82212 had it), until the car lets a page be full screen in gear.
 {
   type Doc = Document & { webkitFullscreenElement?: Element | null; webkitExitFullscreen?: () => Promise<void> | void };
   type El = HTMLElement & { webkitRequestFullscreen?: (o?: FullscreenOptions) => Promise<void> | void };
   const doc = document as Doc, root = document.documentElement as El;
   const can = !!(root.requestFullscreen || root.webkitRequestFullscreen) && (document.fullscreenEnabled ?? true);
   const btn = el("full-screen");
-  btn.hidden = viaTheatre || !(can || IN_CAR);
-  if (viaTheatre) {
-    log(`전체화면 (YouTube 거쳐 열림) · 화면 ${innerWidth}×${innerHeight}`);
-    // Whether the car keeps it full screen in gear (it stops video out of P; a page is not video): any change of the
-    // window's size is written down, a second after it settles, beside the gear lines ("차량 기어 …").
-    let settle = 0;
-    window.addEventListener("resize", () => {
-      clearTimeout(settle);
-      settle = window.setTimeout(() => log(`전체화면 창 크기 바뀜 · 화면 ${innerWidth}×${innerHeight}`), 1000);
-    });
-  }
+  btn.hidden = IN_CAR || !can;
   const isFull = () => !!(document.fullscreenElement || doc.webkitFullscreenElement);
   const draw = () => {
     const on = isFull();
@@ -3009,14 +3015,6 @@ const viaTheatre = (() => {
       : `<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>`;
   };
   btn.addEventListener("click", async () => {
-    if (IN_CAR) {
-      const ok = window.confirm("테슬라 브라우저는 YouTube를 거쳐 열어야 전체화면이 됩니다.\n\n"
-        + "이동하면 YouTube 확인 화면이 뜹니다. '사이트로 이동'을 누르세요. 안내 중이었다면 다시 열린 뒤 이어서 안내합니다.\n\n"
-        + "매번 전체화면으로 열려면 그때의 주소를 즐겨찾기에 저장해 두세요.");
-      log(`전체화면: YouTube 거쳐 다시 열기 ${ok ? "" : "취소"}`);
-      if (ok) location.href = FULL_VIA + encodeURIComponent(location.origin + location.pathname);
-      return;
-    }
     try {
       if (isFull()) await (document.exitFullscreen ? document.exitFullscreen() : doc.webkitExitFullscreen?.());
       else await (root.requestFullscreen ? root.requestFullscreen({ navigationUI: "hide" }) : root.webkitRequestFullscreen?.());
