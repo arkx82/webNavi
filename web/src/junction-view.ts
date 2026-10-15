@@ -10,8 +10,8 @@ import type { Line } from "./geo";
  * following the car in. What the car apps show as a drawn picture, made
  * from the survey itself (server: junction3d.ts, /api/hdmap/junction).
  */
-type P3 = [number, number, number];
-interface Scene {
+export type P3 = [number, number, number];
+export interface Scene {
   centre: LonLat;
   links: P3[][];
   lines: { t: string; pts: P3[] }[];
@@ -66,6 +66,11 @@ export class JunctionView {
   private eye: P3 | null = null;
   private easedAt = 0;
   private look: P3 | null = null;
+  /** The worker the triangles are made in (junction-worker.ts), and the answers awaited from it. */
+  private worker: Worker | null = null;
+  private noWorker = false;
+  private asks = 0;
+  private waiting = new Map<number, { resolve: (a: JunctionArrays) => void; reject: (e: Error) => void }>();
 
   constructor(private box: HTMLElement, private canvas: HTMLCanvasElement, private log: (m: string) => void) {
     box.querySelector<HTMLButtonElement>(".jv-close")?.addEventListener("click", () => {
@@ -93,8 +98,12 @@ export class JunctionView {
           this.log(`3D 분기점 정밀도로지도 모자람 · ${g.text} · 경로 ${scene.matched}/${scene.route.length} · 차로 ${scene.links.length} · 차선 ${scene.lines.length}`);
           return;
         }
-        this.three ??= await import("three");
-        this.build({ guide: g, scene, startAlong, route: scene.route.map((p, i) => p ?? lifted[Math.min(i, lifted.length - 1)]) });
+        const route3 = scene.route.map((p, i) => p ?? lifted[Math.min(i, lifted.length - 1)]);
+        // The triangles made off the page's thread (junction-worker.ts): made here they held the map up a tenth of a
+        // second at a big junction, 400 m before it.
+        const [arrays, three] = await Promise.all([this.shape(scene, route3), this.three ?? import("three")]);
+        this.three = three;
+        this.build({ guide: g, scene, startAlong, route: route3 }, arrays);
         this.log(`3D 분기점 준비 · ${g.text} · 차로 ${scene.links.length} · 차선 ${scene.lines.length}`);
       } catch (e) {
         this.failed.add(g);
@@ -150,6 +159,8 @@ export class JunctionView {
       gltf.scene.scale.set(1, 1, MODEL_LENGTH_STRETCH);
       this.model = gltf.scene;
       this.setPaint(this.paint);
+      // Its shaders too, before it is drawn.
+      if (this.renderer && this.camera) await this.renderer.compileAsync?.(gltf.scene, this.camera).catch(() => undefined);
       // Into the scene drawn now, in the box's place.
       if (this.world && this.car) {
         this.world.remove(this.car);
@@ -238,7 +249,37 @@ export class JunctionView {
     this.loaded = null;
   }
 
-  private build(l: Loaded) {
+  /** The junction's triangles from the worker; made here where there is no worker to be had. */
+  private shape(scene: Scene, route: P3[]): Promise<JunctionArrays> {
+    try {
+      if (!this.worker) {
+        this.worker = new Worker(new URL("./junction-worker.ts", import.meta.url), { type: "module" });
+        this.worker.onmessage = (e: MessageEvent<{ id: number; arrays?: JunctionArrays; error?: string }>) => {
+          const w = this.waiting.get(e.data.id);
+          this.waiting.delete(e.data.id);
+          if (e.data.arrays) w?.resolve(e.data.arrays); else w?.reject(new Error(e.data.error ?? "worker"));
+        };
+        this.worker.onerror = (e) => {
+          this.log(`3D 분기점 작업 스레드 오류 · ${e.message}`);
+          for (const w of this.waiting.values()) w.reject(new Error(e.message));
+          this.waiting.clear();
+          this.worker?.terminate();
+          this.worker = null;
+          this.noWorker = true;
+        };
+      }
+      if (this.noWorker) throw new Error("no worker");
+      const id = ++this.asks;
+      return new Promise<JunctionArrays>((resolve, reject) => {
+        this.waiting.set(id, { resolve, reject });
+        this.worker!.postMessage({ id, scene, route });
+      }).catch(async () => junctionArrays(scene, route, this.three ?? (this.three = await import("three"))));
+    } catch {
+      return (async () => junctionArrays(scene, route, this.three ?? (this.three = await import("three"))))();
+    }
+  }
+
+  private build(l: Loaded, arrays: JunctionArrays) {
     const T = this.three!;
     this.dispose();
     this.renderer ??= new T.WebGLRenderer({ canvas: this.canvas, antialias: true });
@@ -254,78 +295,139 @@ export class JunctionView {
     sun.position.set(-200, 400, 150);
     world.add(sun);
     const { scene } = l;
-    const allY = scene.links.flatMap((x) => x.map((p) => p[1]));
-    const minY = Math.min(...allY);
+    const g = arrays;
     const ground = new T.Mesh(new T.PlaneGeometry(3000, 3000), new T.MeshLambertMaterial({ color: day ? 0xa9b89b : 0x2b3528 }));
     ground.rotation.x = -Math.PI / 2;
-    ground.position.y = minY - 0.5;
+    ground.position.y = g.groundY;
     world.add(ground);
-
-    // Everything of one material in one geometry: a junction is some thousands of strips.
-    const asphalt = new Geo(), deck = new Geo(), piers = new Geo(), white = new Geo(), yellow = new Geo(), blue = new Geo(), band = new Geo(), chevrons = new Geo();
-    const roadPts = scene.links.flatMap((x) => x.filter((_, i) => i % 3 === 0));
-    const groundAt = (x: number, z: number) => {
-      let g = Infinity;
-      for (const p of roadPts) if (Math.abs(p[0] - x) < 45 && Math.abs(p[2] - z) < 45) g = Math.min(g, p[1]);
-      return Math.min(g, minY + 30) - 0.2;
+    // Each material's triangles as they came (the lit ones with their normals made already).
+    const add = (a: Arrays | undefined, mat: THREE_NS.Material) => {
+      if (!a || !a.idx.length) return;
+      const geo = new T.BufferGeometry();
+      geo.setAttribute("position", new T.BufferAttribute(a.pos, 3));
+      if (a.normal) geo.setAttribute("normal", new T.BufferAttribute(a.normal, 3));
+      geo.setIndex(new T.BufferAttribute(a.idx, 1));
+      world.add(new T.Mesh(geo, mat));
     };
-    for (const link of scene.links) {
-      asphalt.ribbon(link, 3.7, 0);
-      deck.ribbon(link.map((p) => [p[0], p[1] - 0.6, p[2]] as P3), 3.9, 0);
-      let along = 0;
-      for (let i = 0; i < link.length; i++) {
-        const p = link[i];
-        if (i) along += Math.hypot(p[0] - link[i - 1][0], p[2] - link[i - 1][2]);
-        const g = groundAt(p[0], p[2]);
-        if (p[1] - g > 4 && along % 35 < 4) piers.box(p[0], g, p[2], 1.6, p[1] - 0.6 - g);
-      }
-    }
-    for (const ln of scene.lines) {
-      const into = ln.t.startsWith("1") ? yellow : ln.t.startsWith("3") ? blue : white;
-      const dense = densify(ln.pts);
-      if (!ln.t.endsWith("2")) { into.ribbon(dense, 0.18, 0.04); continue; }
-      let run: P3[] = [], acc = 0;
-      for (let i = 0; i < dense.length; i++) {
-        if (i) acc += Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][2] - dense[i - 1][2]);
-        if (acc % 9 < 3) run.push(dense[i]);
-        else { if (run.length > 1) into.ribbon(run, 0.18, 0.04); run = []; }
-      }
-      if (run.length > 1) into.ribbon(run, 0.18, 0.04);
-    }
-    for (const mk of scene.marks) {
-      try {
-        const tris = T.ShapeUtils.triangulateShape(mk.pts.map((p) => new T.Vector2(p[0], p[2])), []);
-        white.polygon(mk.pts, tris, 0.05);
-      } catch { /* a ring that does not triangulate is left out */ }
-    }
-    band.ribbon(l.route, 3.0, 0.08);
-    for (let m = 10; m < (l.route.length - 1) * STEP_M; m += 14) {
-      const a = this.atOf(l.route, m - 1), b = this.atOf(l.route, m + 1);
-      chevrons.chevron(b, Math.atan2(b[0] - a[0], b[2] - a[2]));
-    }
-    const add = (g: Geo, mat: THREE_NS.Material) => { if (g.size) world.add(new T.Mesh(g.geometry(T), mat)); };
-    add(asphalt, new T.MeshLambertMaterial({ color: day ? 0x4d5463 : 0x3a404c, side: T.DoubleSide }));
-    add(deck, new T.MeshLambertMaterial({ color: 0xc4c8ce, side: T.DoubleSide }));
-    add(piers, new T.MeshLambertMaterial({ color: 0xb8bcc2 }));
-    add(white, new T.MeshBasicMaterial({ color: 0xf2f2f2, side: T.DoubleSide }));
-    add(yellow, new T.MeshBasicMaterial({ color: 0xf2c230, side: T.DoubleSide }));
-    add(blue, new T.MeshBasicMaterial({ color: 0x3b82f6, side: T.DoubleSide }));
-    add(band, new T.MeshBasicMaterial({ color: 0x2f7df6, transparent: true, opacity: 0.88, side: T.DoubleSide }));
-    add(chevrons, new T.MeshBasicMaterial({ color: 0xffffff, side: T.DoubleSide }));
+    const p = g.parts;
+    add(p.asphalt, new T.MeshLambertMaterial({ color: day ? 0x4d5463 : 0x3a404c, side: T.DoubleSide }));
+    add(p.deck, new T.MeshLambertMaterial({ color: 0xc4c8ce, side: T.DoubleSide }));
+    add(p.piers, new T.MeshLambertMaterial({ color: 0xb8bcc2 }));
+    add(p.white, new T.MeshBasicMaterial({ color: 0xf2f2f2, side: T.DoubleSide }));
+    add(p.yellow, new T.MeshBasicMaterial({ color: 0xf2c230, side: T.DoubleSide }));
+    add(p.blue, new T.MeshBasicMaterial({ color: 0x3b82f6, side: T.DoubleSide }));
+    add(p.band, new T.MeshBasicMaterial({ color: 0x2f7df6, transparent: true, opacity: 0.88, side: T.DoubleSide }));
+    add(p.chevrons, new T.MeshBasicMaterial({ color: 0xffffff, side: T.DoubleSide }));
     // The Model Y where the server has it (the same as on the map), else a plain box until it comes.
     this.car = this.model ?? new T.Mesh(new T.BoxGeometry(1.9, 1.4, 4.6), new T.MeshLambertMaterial({ color: 0xffffff }));
     world.add(this.car);
-    void this.loadModel();
     this.world = world;
     this.loaded = l;
     this.resize();
+    // The shaders made ready now, off the page's thread where the browser can (KHR_parallel_shader_compile), not on
+    // the first frame shown: done there they held the map up as the panel came. The car model after them.
+    const ready = this.renderer.compileAsync?.(world, this.camera) ?? Promise.resolve();
+    void ready.catch(() => undefined).then(() => this.loadModel());
   }
 
-  private atOf(r: P3[], m: number): P3 {
-    const x = Math.max(0, Math.min(r.length - 1.001, m / STEP_M));
-    const i = Math.floor(x), t = x - i;
-    return [0, 1, 2].map((k) => r[i][k] + t * (r[i + 1][k] - r[i][k])) as P3;
+}
+
+/** [r]'s point [m] metres along, between its STEP_M points. */
+function atOf(r: P3[], m: number): P3 {
+  const x = Math.max(0, Math.min(r.length - 1.001, m / STEP_M));
+  const i = Math.floor(x), t = x - i;
+  return [0, 1, 2].map((k) => r[i][k] + t * (r[i + 1][k] - r[i][k])) as P3;
+}
+
+/** The ground's cells, for the height under a ramp: a cell this wide, and a pier this often along a deck. */
+const GROUND_CELL_M = 45;
+const PIER_EVERY_M = 35;
+
+/**
+ * The junction's triangles, a set a material: the lanes as asphalt on their decks, piers where a deck stands high,
+ * lines and painted marks, the route's band and chevrons — the work of the page's thread when a junction comes, kept
+ * here apart from the drawing (and timed: junction-view.test.ts). [triangulate] is three's ShapeUtils, given.
+ */
+export function junctionGeometry(scene: Scene, route: P3[], triangulate: (pts: [number, number][]) => number[][]) {
+  const asphalt = new Geo(), deck = new Geo(), piers = new Geo(), white = new Geo(), yellow = new Geo(), blue = new Geo(), band = new Geo(), chevrons = new Geo();
+  let minY = Infinity;
+  for (const link of scene.links) for (const p of link) if (p[1] < minY) minY = p[1];
+  // The lowest road about each point, for where a pier stands: every third point of the lanes, by cells (each point
+  // against every road point had 상일IC's twelve thousand against four thousand — a tenth of a second on a desk).
+  const cells = new Map<string, number>();
+  const cellOf = (x: number, z: number) => `${Math.floor(x / GROUND_CELL_M)},${Math.floor(z / GROUND_CELL_M)}`;
+  for (const link of scene.links) for (let i = 0; i < link.length; i += 3) {
+    const p = link[i], key = cellOf(p[0], p[2]);
+    const had = cells.get(key);
+    if (had == null || p[1] < had) cells.set(key, p[1]);
   }
+  const groundAt = (x: number, z: number) => {
+    let g = Infinity;
+    const cx = Math.floor(x / GROUND_CELL_M), cz = Math.floor(z / GROUND_CELL_M);
+    for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+      const v = cells.get(`${cx + dx},${cz + dz}`);
+      if (v != null && v < g) g = v;
+    }
+    return Math.min(g, minY + 30) - 0.2;
+  };
+  for (const link of scene.links) {
+    asphalt.ribbon(link, 3.7, 0);
+    deck.ribbon(link.map((p) => [p[0], p[1] - 0.6, p[2]] as P3), 3.9, 0);
+    let along = 0;
+    for (let i = 0; i < link.length; i++) {
+      const p = link[i];
+      if (i) along += Math.hypot(p[0] - link[i - 1][0], p[2] - link[i - 1][2]);
+      // The ground asked only where a pier may stand.
+      if (along % PIER_EVERY_M >= 4) continue;
+      const g = groundAt(p[0], p[2]);
+      if (p[1] - g > 4) piers.box(p[0], g, p[2], 1.6, p[1] - 0.6 - g);
+    }
+  }
+  for (const ln of scene.lines) {
+    const into = ln.t.startsWith("1") ? yellow : ln.t.startsWith("3") ? blue : white;
+    const dense = densify(ln.pts);
+    if (!ln.t.endsWith("2")) { into.ribbon(dense, 0.18, 0.04); continue; }
+    let run: P3[] = [], acc = 0;
+    for (let i = 0; i < dense.length; i++) {
+      if (i) acc += Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][2] - dense[i - 1][2]);
+      if (acc % 9 < 3) run.push(dense[i]);
+      else { if (run.length > 1) into.ribbon(run, 0.18, 0.04); run = []; }
+    }
+    if (run.length > 1) into.ribbon(run, 0.18, 0.04);
+  }
+  for (const mk of scene.marks) {
+    try {
+      white.polygon(mk.pts, triangulate(mk.pts.map((p) => [p[0], p[2]])), 0.05);
+    } catch { /* a ring that does not triangulate is left out */ }
+  }
+  band.ribbon(route, 3.0, 0.08);
+  for (let m = 10; m < (route.length - 1) * STEP_M; m += 14) {
+    const a = atOf(route, m - 1), b = atOf(route, m + 1);
+    chevrons.chevron(b, Math.atan2(b[0] - a[0], b[2] - a[2]));
+  }
+  return { asphalt, deck, piers, white, yellow, blue, band, chevrons, groundY: minY - 0.5 };
+}
+
+/** One material's triangles as arrays: positions, indices, and normals where it is lit. */
+export interface Arrays { pos: Float32Array; idx: Uint16Array | Uint32Array; normal: Float32Array | null }
+export interface JunctionArrays { parts: Record<string, Arrays>; groundY: number }
+/** The parts that are lit (and want normals); the rest are flat colour. */
+const LIT = new Set(["asphalt", "deck", "piers"]);
+
+/** [junctionGeometry] as arrays to hand over (from the worker, transferred): three [T] for the triangulation and the normals. */
+export function junctionArrays(scene: Scene, route: P3[], T: Three): JunctionArrays {
+  const g = junctionGeometry(scene, route, (pts) => T.ShapeUtils.triangulateShape(pts.map(([x, z]) => new T.Vector2(x, z)), []));
+  const parts: Record<string, Arrays> = {};
+  for (const [name, geo] of Object.entries(g)) {
+    if (!(geo instanceof Geo) || !geo.size) continue;
+    const b = geo.geometry(T, LIT.has(name));
+    parts[name] = {
+      pos: b.getAttribute("position").array as Float32Array,
+      idx: b.getIndex()!.array as Uint16Array | Uint32Array,
+      normal: LIT.has(name) ? (b.getAttribute("normal").array as Float32Array) : null,
+    };
+  }
+  return { parts, groundY: g.groundY };
 }
 
 /** [pts] with a point every metre, so a dash is a dash wherever the survey put its points. */
@@ -339,7 +441,7 @@ function densify(pts: P3[]): P3[] {
 }
 
 /** Triangles gathered for one mesh. */
-class Geo {
+export class Geo {
   private pos: number[] = [];
   private idx: number[] = [];
   get size() { return this.idx.length; }
@@ -379,11 +481,12 @@ class Geo {
     for (const [x, y] of shape) this.pos.push(p[0] + x * c + y * s, p[1] + 0.12, p[2] - x * s + y * c);
     for (const t of [[0, 1, 4], [0, 4, 5], [4, 1, 2], [4, 2, 3]]) this.idx.push(base + t[0], base + t[1], base + t[2]);
   }
-  geometry(T: Three): THREE_NS.BufferGeometry {
+  /** As three's geometry; with normals where it is to be lit ([lit]). */
+  geometry(T: Three, lit = true): THREE_NS.BufferGeometry {
     const g = new T.BufferGeometry();
     g.setAttribute("position", new T.Float32BufferAttribute(this.pos, 3));
     g.setIndex(this.pos.length / 3 > 65535 ? new T.Uint32BufferAttribute(this.idx, 1) : new T.Uint16BufferAttribute(this.idx, 1));
-    g.computeVertexNormals();
+    if (lit) g.computeVertexNormals();
     return g;
   }
 }
