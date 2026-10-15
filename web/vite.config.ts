@@ -12,6 +12,6 @@ export default defineConfig({
     // es2020 did.
     target: "es2022",
     // The car's page, and the phone's page for sending it a place (share.html).
-    rollupOptions: { input: { main: "index.html", share: "share.html" } },
+    rollupOptions: { input: { main: "index.html", share: "share.html", car: "car.html" } },
   },
 });

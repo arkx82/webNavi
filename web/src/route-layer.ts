@@ -6,7 +6,7 @@ import type { Route } from "./types";
  * colour changes along the road, and a dot per turn guide. Sources are
  * added once and refilled, which is cheaper than layers coming and going.
  */
-const COLOURS: Record<number, string> = {
+export const COLOURS: Record<number, string> = {
   0: "#5b8def", // unknown: plain route blue
   1: "#3ddc84", // free
   2: "#ffb300", // slow

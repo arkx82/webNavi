@@ -39,6 +39,14 @@ export class CameraLayer {
       this.ready = false;
       void this.install();
     });
+    // A limit sign is made the first time the map asks for it (sign:limit:60, sign:school:30, sign:end:해제): drawn on
+    // a canvas there and then, the number part of the picture.
+    map.on("styleimagemissing", (e: { id: string }) => {
+      const [what, kind, label] = e.id.split(":");
+      if (what !== "sign" || !label || this.map.hasImage(e.id)) return;
+      const image = limitSign(kind as SignKind, label);
+      if (image) this.map.addImage(e.id, image, { pixelRatio: SIGN_RATIO });
+    });
     // Made after the style came, or the style not done at the time: the next quiet moment tries again.
     map.on("idle", () => { if (!this.ready) void this.install(); });
     window.setInterval(() => void this.ask(), CHECK_MS);
@@ -131,11 +139,8 @@ export class CameraLayer {
     try {
       // Each icon on its own: one that fails to decode is left out (its cameras draw without a sign), the rest still come.
       await Promise.all([
-        this.image("cam-limit", sign("#e5484d", "#ffffff")),
-        this.image("cam-school", sign("#e5484d", "#ffd60a")),
         this.image("cam-signal", signal()),
         this.image("cam-camera", camera()),
-        this.image("cam-end", sign("#8a8f99", "#ffffff")),
         this.image("light", lamp("#33343a")),
         this.image("light-flash", lamp("#ffb020")),
       ]);
@@ -180,24 +185,17 @@ export class CameraLayer {
       layout: {
         "icon-image": ["get", "icon"],
         // Small as the map draws back, full size close in: a sign the size of a street block at zoom 13 looked adrift.
-        // The zoom curve must be the outermost expression (MapLibre drops the layer otherwise); the next one's 1.5 goes in each stop.
-        "icon-size": ["interpolate", ["exponential", 1.6], ["zoom"], ...[[12, 0.35], [14, 0.55], [16, 0.8], [18, 1]].flatMap(([z, s]) => [z, ["*", ["case", ["get", "next"], 1.5, 1], s]])] as maplibregl.ExpressionSpecification,
+        // The zoom curve must be the outermost expression (MapLibre drops the layer otherwise); the next one's goes in each stop.
+        // The next camera's sign about 42 css px at zoom 16 and the others 31 — read at a glance, as NAVER's cluster
+        // draws its 60 (2026-10-15); before, 24 px with the number a small label laid over it.
+        "icon-size": ["interpolate", ["exponential", 1.6], ["zoom"], ...[[12, 0.35], [14, 0.5], [16, 0.7], [18, 0.85]].flatMap(([z, s]) => [z, ["*", ["case", ["get", "next"], NEXT_SCALE, 1], s]])] as maplibregl.ExpressionSpecification,
         // Standing on its place facing the driver, as the car apps draw a camera sign (2026-10-11: flat on the road it
-        // read as painted on): raised by half its height (30 css px at pixel ratio 2, times icon-size), the limit on
-        // its face raised by the same — 1.1 em at every zoom, the icon and text sizes keeping one ratio.
+        // read as painted on): its foot — a limit sign's point — at its place.
         "icon-pitch-alignment": "viewport",
-        "text-pitch-alignment": "viewport",
-        "icon-offset": [0, -15],
+        "icon-anchor": "bottom",
         "icon-allow-overlap": true,
-        "text-allow-overlap": true,
-        "text-field": ["get", "text"],
-        // On the sign's face, which sits a little below the icon's centre under the camera body.
-        "text-offset": [0, -0.75],
-        "text-font": ["Noto Sans Bold"],
-        "text-size": ["interpolate", ["exponential", 1.6], ["zoom"], 12, 5, 14, 7.5, 16, 11, 18, 13],
         "symbol-sort-key": ["get", "z"],
       },
-      paint: { "text-color": "#111111" },
     }, before);
     this.ready = true;
     this.fill();
@@ -205,11 +203,11 @@ export class CameraLayer {
 
   private fill() {
     const features = [...this.known.values()].filter((f) => this.wanted(f, this.lightsAhead)).map((f) => {
-      const { icon, text } = look(f);
+      const { icon } = look(f);
       return {
         type: "Feature" as const,
         geometry: { type: "Point" as const, coordinates: [f.lon, f.lat] },
-        properties: { id: f.id, icon, text, z: f.id === this.nextCamera ? 3 : f.kind === "school" ? 2 : 1, light: f.kind === "signal-light", next: f.id === this.nextCamera },
+        properties: { id: f.id, icon, z: f.id === this.nextCamera ? 3 : f.kind === "school" ? 2 : 1, light: f.kind === "signal-light", next: f.id === this.nextCamera },
       };
     });
     (this.map.getSource("cams") as maplibregl.GeoJSONSource | undefined)?.setData({ type: "FeatureCollection", features });
@@ -240,31 +238,69 @@ export function shouldAsk(s: { askedAt: LonLat | null; askedWhen: number; at: Lo
   return metres(s.askedAt[0], s.askedAt[1], s.at[0], s.at[1]) >= ASK_AGAIN_M;
 }
 
-/** Which icon a camera is drawn with, and the number on it. */
-export function look(f: Pick<Feature, "kind" | "limit" | "flash">, now = Date.now()): { icon: string; text: string } {
+/** Which icon a camera is drawn with: a limit sign names its kind and number (made on demand, limitSign). */
+export function look(f: Pick<Feature, "kind" | "limit" | "flash">, now = Date.now()): { icon: string } {
+  const limit = f.limit && f.limit > 0 && f.limit < 1000 ? String(Math.round(f.limit)) : null;
   switch (f.kind) {
-    case "signal-light": return { icon: flashingNow(f, now) ? "light-flash" : "light", text: "" };
-    case "signal": return { icon: "cam-signal", text: "" };
-    case "section-end": return { icon: "cam-end", text: "해제" };
-    case "school": return f.limit ? { icon: "cam-school", text: String(f.limit) } : { icon: "cam-camera", text: "" };
-    case "section-start": return f.limit ? { icon: "cam-limit", text: String(f.limit) } : { icon: "cam-camera", text: "" };
-    default: return f.limit ? { icon: "cam-limit", text: String(f.limit) } : { icon: "cam-camera", text: "" };
+    case "signal-light": return { icon: flashingNow(f, now) ? "light-flash" : "light" };
+    case "signal": return { icon: "cam-signal" };
+    case "section-end": return { icon: "sign:end:해제" };
+    case "school": return { icon: limit ? `sign:school:${limit}` : "cam-camera" };
+    default: return { icon: limit ? `sign:limit:${limit}` : "cam-camera" };
   }
 }
 
+/** The next camera's sign this many times the others'. */
+const NEXT_SCALE = 1.35;
+/** Signs are drawn at twice their css size. */
+const SIGN_RATIO = 2;
+type SignKind = "limit" | "school" | "end";
+const SIGN_LOOK: Record<SignKind, { ring: string; face: string }> = {
+  limit: { ring: "#e5484d", face: "#ffffff" },
+  school: { ring: "#e5484d", face: "#ffd60a" },
+  end: { ring: "#8a8f99", face: "#ffffff" },
+};
+
 /**
- * A 60 px camera sign (30 css px): a small camera body over a limit sign,
- * the ring's colour, the face's. The number is drawn on the sign's face,
- * a little below the icon's centre (the layer's text-offset).
+ * A camera's limit sign, 44 × 52 css px: a red ring round a white face (yellow in a school zone, grey ring for the
+ * end of a 구간 단속), the number bold on it, a small camera at its shoulder, and a point under it on the camera's
+ * place. Null where there is no canvas (a test).
  */
-function sign(ring: string, face: string): string {
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="60" height="60" viewBox="0 0 60 60">` +
-    `<circle cx="30" cy="36" r="21" fill="${face}" stroke="${ring}" stroke-width="6"/>` +
-    `<circle cx="30" cy="36" r="23.5" fill="none" stroke="rgba(0,0,0,.35)" stroke-width="1.2"/>` +
-    `<rect x="24" y="1" width="12" height="5" rx="1.5" fill="#1c1c20"/>` +
-    `<rect x="16" y="4" width="28" height="16" rx="4" fill="#1c1c20" stroke="#ffffff" stroke-width="1.5"/>` +
-    `<circle cx="30" cy="12" r="5" fill="#ffffff"/><circle cx="30" cy="12" r="2.4" fill="#1c1c20"/>` +
-    `<circle cx="39" cy="9" r="1.6" fill="#ff4d4f"/></svg>`;
+function limitSign(kind: SignKind, label: string): ImageData | null {
+  const look = SIGN_LOOK[kind];
+  if (!look || typeof document === "undefined") return null;
+  const w = 88, h = 104, cx = 44, cy = 44;
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const g = canvas.getContext("2d");
+  if (!g) return null;
+  // The point, then the sign over it, with a soft shadow to stand off the map by day and night.
+  g.shadowColor = "rgba(0, 0, 0, 0.45)";
+  g.shadowBlur = 5;
+  g.shadowOffsetY = 1.5;
+  g.fillStyle = look.ring;
+  g.beginPath(); g.moveTo(cx - 11, 78); g.lineTo(cx + 11, 78); g.lineTo(cx, 101); g.closePath(); g.fill();
+  g.beginPath(); g.arc(cx, cy, 41, 0, Math.PI * 2); g.fill();
+  g.shadowColor = "transparent";
+  g.fillStyle = look.face;
+  g.beginPath(); g.arc(cx, cy, 31, 0, Math.PI * 2); g.fill();
+  g.fillStyle = "#111111";
+  g.textAlign = "center";
+  g.textBaseline = "middle";
+  const size = label.length >= 3 || !/^\d+$/.test(label) ? 26 : 36;
+  g.font = `800 ${size}px "Noto Sans KR", "Noto Sans", Arial, sans-serif`;
+  g.fillText(label, cx, cy + 2, 56);
+  // The camera at the top right of the ring.
+  g.fillStyle = "#1c1c20";
+  g.strokeStyle = "#ffffff";
+  g.lineWidth = 2.5;
+  g.beginPath(); g.roundRect(59, 1, 27, 18, 4); g.fill(); g.stroke();
+  g.fillStyle = "#ffffff";
+  g.beginPath(); g.arc(72.5, 10, 4.5, 0, Math.PI * 2); g.fill();
+  g.fillStyle = "#1c1c20";
+  g.beginPath(); g.arc(72.5, 10, 2, 0, Math.PI * 2); g.fill();
+  return g.getImageData(0, 0, w, h);
 }
 
 /** A small traffic-light head, 40 px (20 css px): dark, or amber while it flashes. */

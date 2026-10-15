@@ -89,6 +89,10 @@ export interface GuideSettings {
   camerasOnMap: "route" | "all" | "off";
   /** "다음 신호등 250 m" on the drive panel. */
   nextLight: boolean;
+  /** 경로 막힘 막대: the whole route's traffic up the map's right edge (traffic-bar.ts). */
+  trafficBar: boolean;
+  /** Where the lane card stands on the map: under the car (NAVER's cluster screen, 2026-10-15) or at the top. */
+  lanesAt: "car" | "top";
   /** "잠시 후 점멸 신호 교차로입니다" at a light switched to flashing for the night. */
   flashSignals: boolean;
   cameras: boolean;
@@ -123,7 +127,7 @@ export interface GuideSettings {
 export type Mode = "voice" | "show" | "off";
 
 export const DEFAULTS: GuideSettings = {
-  voice: true, voiceName: null, volume: 1, turns: true, junctionNames: true, laneHints: true, merges: true, closeups: true, junction3d: true, sendLogs: true, layout: "classic", hdLanes: true, hdLanesWhen: "turns", laneGuide: true, colorLines: true, theme: "auto", nightCity: false, carIcon: "model3d", carPaint: PAINTS[0][0], carSize: "large", endOnArrive: true, mapDpr: "auto", followFps: "auto", ducking: "soft", fasterRoute: "ask", avoidSchool: false, carData: "auto", rev: 4, uiScale: 1, lightsOnMap: "route", camerasOnMap: "route", nextLight: true, flashSignals: true,
+  voice: true, voiceName: null, volume: 1, turns: true, junctionNames: true, laneHints: true, merges: true, closeups: true, junction3d: true, sendLogs: true, layout: "classic", hdLanes: true, hdLanesWhen: "turns", laneGuide: true, colorLines: true, theme: "auto", nightCity: false, carIcon: "model3d", carPaint: PAINTS[0][0], carSize: "large", trafficBar: true, lanesAt: "car", endOnArrive: true, mapDpr: "auto", followFps: "auto", ducking: "soft", fasterRoute: "ask", avoidSchool: false, carData: "auto", rev: 4, uiScale: 1, lightsOnMap: "route", camerasOnMap: "route", nextLight: true, flashSignals: true,
   cameras: true, cameraFromM: 600, sections: true, schools: true,
   bumps: "show", curves: "off", accidents: "show", bikeAccidents: "show",
   overspeed: true, overspeedBy: 0,
@@ -290,6 +294,7 @@ const GROUPS: Group[] = [
     { key: "junctionNames", label: "IC · JC 이름", kind: "toggle", sub: "고속도로에서 \"1킬로미터 앞 신갈JC에서 원주 방면\" (이름마다 처음 한 번 음성 합성)" },
     { key: "laneHints", label: "차로 미리 이동", kind: "toggle", sub: "고속도로 출구 · 분기 1km 앞, 나갈 쪽 차로로 (차로 정보가 아닌 방향 기준)" },
     { key: "laneGuide", label: "차로 안내", kind: "toggle", sub: "회전 800m 앞(고속도로 2km)부터 지날 때까지, 그리고 직진 중 앞 차로가 좌·우회전 전용이 되는 곳에서 탈 차로를 아래쪽에 (정밀도로지도가 있는 곳)" },
+    { key: "lanesAt", label: "차로 안내 위치", kind: "choice", options: [["car", "내 차 아래"], ["top", "지도 위쪽"]], sub: "내 차 아래: 차 바로 밑에 거리와 탈 차로를 작게. 3D 분기점 화면이 뜨면 그 안에" },
     { key: "colorLines", label: "색깔 유도선", kind: "toggle", sub: "고속도로 분기점 · 나들목(한국도로공사)과 서울시 도로(서울시 위치 자료, 색은 매뉴얼 기준: 오른쪽 분홍 · 두 갈래 왼쪽 녹색)에서 \"분홍색 유도선을 따라가세요\"" },
     { key: "merges", label: "합류 구간", kind: "toggle", sub: "고속도로 입구 · 분기 뒤 램프에서" },
     { key: "closeups", label: "분기점 확대", kind: "toggle", sub: "IC · JC · 출구 500m 앞(시내 250m)에서 지도가 기울어 분기점까지 보이게" },
@@ -324,6 +329,7 @@ const GROUPS: Group[] = [
     { key: "camerasOnMap", label: "지도에 카메라", kind: "choice", options: [["route", "경로만"], ["all", "모두"], ["off", "끔"]], sub: "경로만: 안내 중 가는 길 앞 3km 안의 것만 (제한 속도 표지판)" },
     { key: "lightsOnMap", label: "지도에 신호등", kind: "choice", options: [["route", "경로만"], ["all", "모두"], ["off", "끔"]], sub: "경로만: 안내 중 가는 길 앞 3km 안의 것만. 점멸 중이면 노란색" },
     { key: "nextLight", label: "다음 신호등 거리", kind: "toggle", sub: "안내 중 왼쪽 패널에 \"다음 신호등 250 m · 약 15초\"" },
+    { key: "trafficBar", label: "경로 막힘 막대", kind: "toggle", sub: "지도 오른쪽 끝에 경로 전체를 세로 막대로 — 아래가 출발, 위가 목적지, 초록 원활 · 노랑 서행 · 빨강 정체, 지나온 곳은 회색, 점이 내 차 (교통 정보가 있는 경로만)" },
     { key: "hdLanes", label: "정밀 차선 그리기", kind: "toggle", sub: "정밀도로지도가 있는 곳에서 크게 확대하면 실제 차선 · 화살표 · 횡단보도 (느린 차량이면 끄세요)" },
     { key: "hdLanesWhen", label: "주행 중 정밀 차선", kind: "choice", options: [["turns", "회전 근처 · 저속만"], ["always", "항상"]], sub: "회전 400 m 안이거나 30 km/h 아래일 때만 그리고, 그 밖에서는 숨겨 시내 주행을 가볍게. 지도를 손으로 움직이면 다 나옴" },
     { key: "nightCity", label: "야경 건물", kind: "toggle", sub: "밤에 3D 화면이면 티맵·네이버 바탕 위에 건물을 옅은 금빛으로 (OpenStreetMap 건물이라 도심 밖에는 드묾. 도로가 가려 보이면 끄세요)" },

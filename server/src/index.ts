@@ -681,6 +681,8 @@ if (existsSync(webDir)) {
   await app.register(fastifyStatic, { root: webDir, prefix: "/" });
   // The phone's page for sending a place to a car (web/share.html), and the share sheet's way in.
   app.get("/share", async (_request, reply) => reply.sendFile("share.html"));
+  // The page at the car browser's size, in a frame on a desk's Chrome (web/car.html).
+  app.get("/car", async (_request, reply) => reply.sendFile("car.html"));
   app.setNotFoundHandler((request, reply) => {
     if (isApiPath(request.url)) return reply.code(404).send({ error: "no such call" });
     return reply.sendFile("index.html");

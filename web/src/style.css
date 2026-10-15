@@ -886,3 +886,34 @@ body, button, #hud, #controls { touch-action: manipulation; }
 #saved-menu button { min-height: 44px; line-height: 1.2; padding: 0 12px; font-size: 15px; white-space: nowrap; }
 #saved-menu .sm-actions button { flex: 1; }
 #saved-menu .sm-actions button.narrow { flex: 0 0 auto; }
+
+/* 차로 안내 위치 "내 차 아래": the lane card just under the car (main.ts placeLanesUnderCar sets left and top), small —
+   the arrow, the distance and the lanes in one row; the words are the turn card's, the fork drawing only without lanes. */
+/* A grid, not a wrapping row: a wrapping flex box is as wide as all its items on one line, the words under included. */
+#lanes.under { display: grid; grid-template-columns: auto auto; align-items: center; justify-content: center; padding: 6px 10px; gap: 4px 8px;
+  border-radius: 14px; max-width: 440px; transition: top 0.25s, left 0.25s; }
+#lanes.under .lc-head { order: 1; gap: 6px; }
+#lanes.under .lc-lanes { order: 2; padding: 3px; }
+#lanes.under .lc-fork { order: 3; }
+#lanes.under .lc-fork svg { width: auto; height: 64px; }
+#lanes.under .lc-note, #lanes.under .lc-follow { order: 4; grid-column: 1 / -1; text-align: center; }
+/* Only the arrow and the distance (no lanes, no fork): one column. */
+#lanes.under:not(:has(.lc-lanes:not([hidden]))):not(:has(.lc-fork:not([hidden]))) { grid-template-columns: auto; }
+#lanes.under .lc-what { display: none; }
+#lanes.under:has(.lc-lanes:not([hidden])) .lc-fork { display: none; }
+#lanes.under .lc-arrow { width: 32px; height: 32px; border-radius: 8px; }
+#lanes.under .lc-arrow svg { width: 24px; height: 24px; }
+#lanes.under .lc-in { font-size: 19px; }
+#lanes.under .lane { height: 42px; min-width: 30px; flex-basis: 38px; }
+#lanes.under .lane svg { width: 26px; height: 26px; }
+#lanes.under .lc-follow { font-size: 16px; }
+
+/* 경로 막힘 막대 (traffic-bar.ts): start at the foot, destination at the top, the part driven grey, the car a dot. */
+#traffic-bar { position: absolute; right: 7px; top: 20px; bottom: 20px; width: 10px; border-radius: 5px; z-index: 1; pointer-events: none;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.92), 0 1px 6px rgba(0, 0, 0, 0.5); }
+#traffic-bar[hidden], body.side-open #traffic-bar { display: none; }
+#traffic-bar .tb-done { position: absolute; left: 0; right: 0; bottom: 0; height: var(--tb-at, 0%); border-radius: 5px; background: rgba(128, 132, 140, 0.95); }
+#traffic-bar .tb-car { position: absolute; left: 50%; bottom: var(--tb-at, 0%); width: 14px; height: 14px; transform: translate(-50%, 50%); border-radius: 50%;
+  background: #fff; box-shadow: 0 0 0 3px #1a73e8, 0 1px 4px rgba(0, 0, 0, 0.5); transition: bottom 1s linear; }
+body.traffic-bar:not(.side-open) #controls { right: 30px; }
+body.traffic-bar #music-dock { right: 30px; }

@@ -241,7 +241,9 @@ export function registerGuard(app: FastifyInstance) {
   });
   app.addHook("onSend", async (_request, reply, payload) => {
     reply.header("X-Content-Type-Options", "nosniff");
-    reply.header("X-Frame-Options", "DENY");
+    // Framed by the site itself alone: /car shows the page at the car's size in a frame; nobody else's page may.
+    reply.header("X-Frame-Options", "SAMEORIGIN");
+    reply.header("Content-Security-Policy", "frame-ancestors 'self'");
     reply.header("Referrer-Policy", "same-origin");
     return payload;
   });

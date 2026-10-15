@@ -10,7 +10,8 @@ import { CarTrack } from "./car-track";
 import { DriveTrace } from "./drive-trace";
 import { RouteLayer, casingPx } from "./route-layer";
 import { OFF_M, Tracker, type Shown } from "./tracker";
-import { Line, bearing, lerpAngle, metres } from "./geo";
+import { Line, bearing, lerpAngle, metres, offset } from "./geo";
+import { TrafficBar } from "./traffic-bar";
 import { arrowSvg, fromBend, maneuverOf, shapedOf, type Bend, type Maneuver } from "./maneuver";
 import { lazy, type MusicSource, type NowPlaying, type Playlist } from "./music/source";
 import { debounce, matches } from "./music/find";
@@ -599,6 +600,10 @@ let cameraMovedAt = 0;
 let tracedAt = 0;
 /** The lane width the car is drawn as wide as, eased toward the road's (car-icon.ts LANE_WIDTH_M). */
 let carLaneM: number = LANE_WIDTH_M.town;
+/** The least width the car was drawn at this frame (carFloorM), for the lane card under it. */
+let carFloorNowM = 0;
+/** 경로 막힘 막대 (traffic-bar.ts). */
+const routeBar = new TrafficBar(el("traffic-bar"));
 /** The car at least this many times the route line's edge across, on the screen. */
 const CAR_OVER_ROUTE = 1.3;
 /**
@@ -640,7 +645,8 @@ function frame() {
       // or so, not a jump at the ramp.
       const onMotorwayNow = !!route && !!routeLine && shown.alongM != null && motorwayAt(route, routeLine.place(shown.alongM).segment);
       carLaneM += ((onMotorwayNow ? LANE_WIDTH_M.motorway : LANE_WIDTH_M.town) - carLaneM) * 0.03;
-      carLayer.sizeTo(carLaneM, carFloorM(carAt));
+      carFloorNowM = carFloorM(carAt);
+      carLayer.sizeTo(carLaneM, carFloorNowM);
       carLayer.place(carAt, markerBearing, shown.speedMps);
       zoomSpeed += (shown.speedMps * 3.6 - zoomSpeed) * 0.03;
       // The 3D 분기점 panel shows the junction: the map goes on as it was, not drawn in for the turn as well.
@@ -658,6 +664,8 @@ function frame() {
       hdLayer?.setAway(guide.hdLanesWhen === "turns" && follow && !handsOn() && lanesAway(shown));
       showTurn(shown);
       showLanes(shown);
+      placeLanesUnderCar();
+      routeBar.show(route, routeLine, shown.alongM ?? null, guide.trafficBar);
       showSectionHud(shown);
       backoff.seen(!shown.offRoute && (shown.offM == null || shown.offM <= OFF_M));
     }
@@ -714,6 +722,8 @@ function followCar(at: LonLat, speedMps = 0) {
   let want = close ? { x: carSpot(0).x, y: layout.height * CLOSEUP_CAR_AT } : carSpot(v.carLow);
   // The lane card at the top of the map: the car kept clear below it.
   if (layout.lanesBottom > 0) want = { x: want.x, y: Math.max(want.y, layout.lanesBottom + CAR_BELOW_CARD_PX) };
+  // The lane card under the car: the car kept high enough for it (a close-up puts the car at 84 % of the height).
+  if (layout.lanesUnderH > 0) want = { x: want.x, y: Math.min(want.y, layout.height - LANES_UNDER_FOOT_PX - layout.lanesUnderH - CAR_OVER_LANES_PX) };
   spot = spot ? { x: approach(spot.x, want.x, k(0.08)), y: approach(spot.y, want.y, k(0.08)) } : want;
   const before = map.getCenter();
   const zoomTo = Math.max(10, Math.min(ZOOM_MAX, (close ? zoomToSee(Math.max(0, closeup!.inM), at[1], layout.height * (CLOSEUP_CAR_AT - 0.12)) : speedZoom()) + zoomBias));
@@ -793,7 +803,7 @@ function showJunction3d(shown: Shown) {
   // The lane card goes into the 3D picture while it shows — the turn's arrow, the distance and the lanes over its sky,
   // the junction under them left clear — and back to the top of the map after.
   const lanes = el("lanes"), jv = el("jv"), view = jv.querySelector<HTMLElement>(".jv-view")!;
-  if (junctionView.open && lanes.parentElement !== view) { lanes.style.top = ""; view.prepend(lanes); measure(); }
+  if (junctionView.open && lanes.parentElement !== view) { lanes.style.top = ""; lanes.style.left = ""; view.prepend(lanes); measure(); }
   else if (!junctionView.open && jv.contains(lanes)) { jv.after(lanes); measure(); }
 }
 
@@ -823,7 +833,7 @@ function showCloseup(_c: Closeup | null) {
  * reading a box mid-frame after the frame's own writes makes the browser lay the page out again there and then.
  */
 let nearbyEl: HTMLElement | null = null, guideEl: HTMLElement | null = null, weatherEl: HTMLElement | null = null, musicDockEl: HTMLElement | null = null;
-const layout = { hudRight: 0, destRight: 0, lanesBottom: 0, width: 0, height: 0 };
+const layout = { hudRight: 0, destRight: 0, lanesBottom: 0, width: 0, height: 0, lanesUnderH: 0, lanesUnderW: 0, dock: null as DOMRect | null, ui: 1 };
 function measure() {
   const canvas = map.getCanvas().getBoundingClientRect();
   layout.width = canvas.width;
@@ -835,10 +845,29 @@ function measure() {
   // before it that shows, by its real height (a lane card with a fork and a note runs to twice a plain one's, and a
   // fixed offset left the 구간단속 box on top of it). The car is kept clear of the lot.
   let top = TOP_STACK_PX, bottom = 0;
+  // The lane card under the car (차로 안내 위치): out of the stack; its size kept for placeLanesUnderCar. In the 3D
+  // panel it is the panel's, as before.
+  const lanes = el("lanes");
+  // measure() runs once before the settings are read (the first frame needs the canvas's size): the default till then.
+  let at: GuideSettings["lanesAt"] = "car";
+  try { at = guide.lanesAt; } catch { /* not yet */ }
+  const under = at === "car" && !el("jv").contains(lanes);
+  if (lanes.classList.contains("under") !== under) {
+    lanes.classList.toggle("under", under);
+    lanes.style.left = "";
+    lanes.style.top = "";
+    lanesPlaced = "";
+  }
+  const ui0 = Number(getComputedStyle(el("jv")).zoom) || 1;
+  layout.ui = ui0;
+  layout.lanesUnderH = under && !lanes.hidden ? lanes.offsetHeight * ui0 : 0;
+  layout.lanesUnderW = under && !lanes.hidden ? lanes.offsetWidth * ui0 : 0;
+  const dock = el("music-dock");
+  layout.dock = dock.hidden ? null : dock.getBoundingClientRect();
   for (const id of TOP_STACK) {
     const box = el(id);
-    // The lane card inside the 3D 분기점 panel is part of it.
-    if (box.hidden || (id === "lanes" && el("jv").contains(box))) continue;
+    // The lane card inside the 3D 분기점 panel is part of it; under the car it is not up here.
+    if (box.hidden || (id === "lanes" && (under || el("jv").contains(box)))) continue;
     box.style.top = `${top}px`;
     top += box.offsetHeight + TOP_STACK_GAP_PX;
     bottom = box.getBoundingClientRect().bottom - canvas.top;
@@ -859,6 +888,39 @@ function measure() {
   const root = document.documentElement.style;
   root.setProperty("--top-x", `${Math.round((x + canvas.left) / ui)}px`);
   root.setProperty("--top-room", `${Math.round((2 * half) / ui)}px`);
+}
+/** The lane card under the car: this far below the car's tail, kept this far off the map's foot; the car kept this far above it. */
+const LANES_UNDER_GAP_PX = 10;
+const LANES_UNDER_FOOT_PX = 10;
+const CAR_OVER_LANES_PX = 70;
+let lanesPlaced = "";
+/**
+ * 차로 안내 위치 "내 차 아래": the lane card just under the car on the screen, where the eye already is (NAVER's
+ * cluster screen draws its lanes there, 2026-10-15) — below its tail as drawn (lane-wide, or the 자차 크기 floor),
+ * kept on the map and off the music player.
+ */
+function placeLanesUnderCar() {
+  const lanes = el("lanes");
+  if (!lanes.classList.contains("under") || lanes.hidden || !carAt) return;
+  try {
+    const p = map.project(carAt);
+    // The car's tail: half its length behind it, as wide as it is drawn (the model is 2.12 m across, 4.98 m long).
+    const scale = Math.max(1, carLaneM / 2.12, carFloorNowM / 2.12);
+    const tail = map.project(offset(carAt, (markerBearing ?? map.getBearing()) + 180, 2.49 * scale));
+    const canvas = map.getCanvas().getBoundingClientRect();
+    const h = layout.lanesUnderH || lanes.offsetHeight * layout.ui, w = layout.lanesUnderW || lanes.offsetWidth * layout.ui;
+    let y = Math.max(p.y, tail.y) + LANES_UNDER_GAP_PX;
+    y = Math.min(y, layout.height - LANES_UNDER_FOOT_PX - h);
+    const x = Math.max(w / 2 + 8, Math.min(layout.width - w / 2 - 8, p.x));
+    const d = layout.dock;
+    if (d && d.width > 0 && x + w / 2 > d.left - canvas.left && x - w / 2 < d.right - canvas.left) y = Math.min(y, d.top - canvas.top - 8 - h);
+    const placed = `${Math.round((x + canvas.left) / layout.ui)}:${Math.round((y + canvas.top) / layout.ui)}`;
+    if (placed === lanesPlaced) return;
+    lanesPlaced = placed;
+    const [left, top] = placed.split(":");
+    lanes.style.left = `${left}px`;
+    lanes.style.top = `${top}px`;
+  } catch { /* the map not ready */ }
 }
 /** Room kept between the top cards and the panel or the buttons; and the least half-width worth centring on the car. */
 const TOP_GAP_PX = 12;
@@ -3257,6 +3319,8 @@ function applyGuide() {
   voice.ducking = guide.ducking;
   voice.voiceName = guide.voiceName;
   voice.setVolume(guide.volume);
+  // 차로 안내 위치 may have changed.
+  measure();
   cameraLayer?.redraw();
 }
 // The cameras on the map, the kinds the driver asked to hear (안내 설정).
@@ -4037,7 +4101,7 @@ function logEnvironment() {
   if (softwareGpu) log(`GPU 가속 꺼짐 — 소프트웨어로 그림 (${gpu})`);
   const canvases = [...document.querySelectorAll("canvas")].map((c) => `${c.width}×${c.height}`).join(", ");
   const nav = navigator as Navigator & { deviceMemory?: number };
-  log(`환경 GPU ${gpu} · 화면 ${screen.width}×${screen.height} · DPR ${realDpr} (지도 ${mapPixelRatio}) · 캔버스 ${canvases} · 최대 텍스처 ${maxTex} · 메모리 ${nav.deviceMemory ?? "?"} GB · 코어 ${navigator.hardwareConcurrency ?? "?"} · 프레임 ${guide.followFps} · 해상도 ${guide.mapDpr}`);
+  log(`환경 GPU ${gpu} · 화면 ${screen.width}×${screen.height} · 창 ${innerWidth}×${innerHeight} · DPR ${realDpr} (지도 ${mapPixelRatio}) · 캔버스 ${canvases} · 최대 텍스처 ${maxTex} · 메모리 ${nav.deviceMemory ?? "?"} GB · 코어 ${navigator.hardwareConcurrency ?? "?"} · 프레임 ${guide.followFps} · 해상도 ${guide.mapDpr}`);
 }
 // The maps' GPU contexts lost and given back: a GPU process that fell over is seen, not only a black map.
 map.on("webglcontextlost", () => log("지도 WebGL 컨텍스트 잃음 (MapLibre)"));

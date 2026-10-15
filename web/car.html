@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>차 화면으로 보기</title>
+  <!--
+    A desk's look at the car's screen: the page itself in a frame the size of the car browser's page (its map,
+    measured from the cars' 환경 lines), scaled to fit the window. Layout, zoom and what fits are worked out at the
+    car's size, as the car does; only the sharpness is the desk's (its own DPR). Whatever follows /car? goes on to
+    the page (/car?demo, /car?debug).
+  -->
+  <style>
+    :root { color-scheme: dark; }
+    html, body { margin: 0; height: 100%; background: #111; color: #ddd; font: 14px system-ui, sans-serif; overflow: hidden; }
+    #bar { height: 40px; display: flex; align-items: center; gap: 12px; padding: 0 12px; background: #1c1c1e; border-bottom: 1px solid #333; }
+    #bar select, #bar button, #bar input { background: #2c2c2e; color: #eee; border: 1px solid #444; border-radius: 6px; padding: 4px 8px; font: inherit; }
+    #bar input { width: 64px; }
+    #bar label { display: flex; align-items: center; gap: 6px; }
+    #bar label[hidden] { display: none; }
+    #size { color: #999; margin-left: auto; }
+    #stage { position: absolute; top: 41px; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center; }
+    #holder { position: relative; box-shadow: 0 0 0 1px #444, 0 8px 32px #000; }
+    #car { border: 0; display: block; transform-origin: 0 0; background: #000; }
+  </style>
+</head>
+<body>
+  <div id="bar">
+    <b>차 화면</b>
+    <select id="preset">
+      <option value="804x638">내 차 · 804×638</option>
+      <option value="773x601">hantwo · 773×601</option>
+      <option value="1306x816">화면 전체 · 1306×816</option>
+      <option value="custom">직접 입력</option>
+    </select>
+    <label id="custom" hidden><input id="w" type="number" min="320" max="3840" />×<input id="h" type="number" min="240" max="2160" /></label>
+    <label><input id="fit" type="checkbox" checked /> 창에 맞추기</label>
+    <button id="reload" type="button">새로고침</button>
+    <span id="size"></span>
+  </div>
+  <div id="stage"><div id="holder"><iframe id="car" allow="geolocation; autoplay; fullscreen; screen-wake-lock"></iframe></div></div>
+  <script type="module">
+    const KEY = "nav-car-frame";
+    const $ = (id) => document.getElementById(id);
+    let kept = {};
+    try { kept = JSON.parse(localStorage.getItem(KEY) ?? "{}"); } catch { /* private window */ }
+    const save = () => { try { localStorage.setItem(KEY, JSON.stringify(kept)); } catch { /* private window */ } };
+    $("preset").value = kept.preset ?? "804x638";
+    $("w").value = kept.w ?? 804;
+    $("h").value = kept.h ?? 638;
+    $("fit").checked = kept.fit ?? true;
+    const frame = $("car");
+    frame.src = "/" + location.search;
+
+    function size() {
+      const p = $("preset").value;
+      $("custom").hidden = p !== "custom";
+      const [w, h] = p === "custom" ? [Number($("w").value) || 804, Number($("h").value) || 638] : p.split("x").map(Number);
+      const stage = $("stage").getBoundingClientRect();
+      const scale = $("fit").checked ? Math.min((stage.width - 24) / w, (stage.height - 24) / h) : 1;
+      frame.style.width = `${w}px`;
+      frame.style.height = `${h}px`;
+      frame.style.transform = scale === 1 ? "" : `scale(${scale})`;
+      $("holder").style.width = `${w * scale}px`;
+      $("holder").style.height = `${h * scale}px`;
+      $("size").textContent = `${w}×${h} CSS px · ${Math.round(scale * 100)}%로 보임`;
+      Object.assign(kept, { preset: p, w: $("w").value, h: $("h").value, fit: $("fit").checked });
+      save();
+    }
+    for (const id of ["preset", "w", "h", "fit"]) $(id).addEventListener("input", size);
+    $("reload").addEventListener("click", () => frame.contentWindow?.location.reload());
+    addEventListener("resize", size);
+    size();
+  </script>
+</body>
+</html>
