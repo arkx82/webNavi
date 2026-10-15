@@ -276,7 +276,9 @@ type View = "3d" | "heading";
 // Zoom follows the speed (autozoom.ts); each view only shifts it — flat
 // views a little further out, since they show no road beyond the top edge.
 const VIEWS: Record<View, { pitch: number; zoomShift: number; label: string; /** Share of the height pushed above the car. */ carLow: number }> = {
-  "3d": { pitch: 55, zoomShift: 0, label: "3D", carLow: 0.4 },
+  // The car at 76 % of the height in the tilted view (was 70 %): more road ahead, as TMAP and Kakao (80–85 %) show
+  // it, room left under it for the lane card (2026-10-16).
+  "3d": { pitch: 55, zoomShift: 0, label: "3D", carLow: 0.52 },
   heading: { pitch: 0, zoomShift: -0.4, label: "2D", carLow: 0.28 },
 };
 const ORDER: View[] = ["3d", "heading"];
@@ -759,7 +761,7 @@ function followCar(at: LonLat, speedMps = 0) {
  * The camera centre that puts [at] at screen point [to]. This is what
  * padding would do, but TMAP's camera takes no padding, so both maps keep
  * a plain centre and the car is placed by moving it: aim at the car, slide
- * by the offset, then once more for the tilt's perspective.
+ * by the offset, then again till the tilt's perspective is allowed for.
  */
 function centreFor(at: LonLat, to: { x: number; y: number }, camera: { bearing: number; pitch: number; zoom: number }): LonLat {
   // On a copy of the map's transform: three jumpTo a frame moved the map (and the TMAP ground under it) three times a frame.
@@ -769,11 +771,39 @@ function centreFor(at: LonLat, to: { x: number; y: number }, camera: { bearing: 
   t.setPitch(camera.pitch);
   t.setCenter(new maplibregl.LngLat(at[0], at[1]));
   const cx = t.width / 2, cy = t.height / 2;
-  let q = t.screenPointToLocation(new maplibregl.Point(2 * cx - to.x, 2 * cy - to.y));
-  t.setCenter(q);
-  const p = t.locationToScreenPoint(new maplibregl.LngLat(at[0], at[1]));
-  q = t.screenPointToLocation(new maplibregl.Point(cx + p.x - to.x, cy + p.y - to.y));
-  return [q.lng, q.lat];
+  const car = new maplibregl.LngLat(at[0], at[1]);
+  // The centre for the car [o] pixels from the middle, and where the car then is.
+  const place = (o: { x: number; y: number }) => {
+    t.setCenter(car);
+    const q = t.screenPointToLocation(new maplibregl.Point(cx - o.x, cy - o.y));
+    t.setCenter(q);
+    return { q, p: t.locationToScreenPoint(car) };
+  };
+  // The tilt makes the ground nearer the foot of the screen larger: one correction overshot and the next fell short,
+  // and the car sat 60 px above its place (66 % of the height for 76 %, 2026-10-16). The centre further ahead puts
+  // the car lower, up to the horizon, so its height is found by halving; then the side, which barely bends, by two
+  // plain corrections.
+  const bad = (r: { q: maplibregl.LngLat; p: maplibregl.Point }) => !(Number.isFinite(r.q.lng) && Number.isFinite(r.q.lat) && Number.isFinite(r.p.x) && Number.isFinite(r.p.y));
+  // Past the horizon the answer turns over (the car above the screen, then below it): a car higher than at the low
+  // bound is a guess past it, as much too far as one below the mark.
+  let ox = to.x - cx, lo = -t.height, hi = t.height, atLo = -Infinity;
+  let best = place({ x: ox, y: 0 });
+  for (let i = 0; i < 24 && hi - lo > 0.25; i++) {
+    const mid = (lo + hi) / 2, r = place({ x: ox, y: mid });
+    if (bad(r) || r.p.y > to.y || r.p.y < atLo) { hi = mid; continue; }
+    lo = mid;
+    atLo = r.p.y;
+    if (Math.abs(r.p.y - to.y) < Math.abs(best.p.y - to.y)) best = r;
+  }
+  const oy = (lo + hi) / 2;
+  for (let i = 0; i < 2; i++) {
+    const r = place({ x: ox, y: oy });
+    if (bad(r)) break;
+    best = r;
+    if (Math.abs(r.p.x - to.x) < 0.5) break;
+    ox -= r.p.x - to.x;
+  }
+  return bad(best) ? [at[0], at[1]] : [best.q.lng, best.q.lat];
 }
 
 /** The middle of the map's free part — right of the trip panel, left of whatever holds the right side — lowered by [carLow]. */
@@ -892,9 +922,9 @@ function measure() {
   root.setProperty("--top-room", `${Math.round((2 * half) / ui)}px`);
 }
 /** The lane card under the car: this far below the car's tail, kept this far off the map's foot; the car kept this far above it. */
-const LANES_UNDER_GAP_PX = 10;
+const LANES_UNDER_GAP_PX = 18;
 const LANES_UNDER_FOOT_PX = 10;
-const CAR_OVER_LANES_PX = 70;
+const CAR_OVER_LANES_PX = 60;
 let lanesPlaced = "";
 /**
  * 차로 안내 위치 "내 차 아래": the lane card just under the car on the screen, where the eye already is (NAVER's
@@ -4075,6 +4105,8 @@ if (new URLSearchParams(location.search).has("debug")) {
   (window as unknown as { nav: unknown }).nav = {
     said, heard, late, voice, tracker, gps, map, lanesAsked, guide,
     get heldTurn() { return heldTurn; },
+    /** Where the camera means the car to be on the screen, and the map's height (the 진단 of the car's place). */
+    get spot() { return { spot, want: carSpot(VIEWS[view].carLow), height: layout.height, lanesUnderH: layout.lanesUnderH, view }; },
     get route() { return route; },
     get watch() { return watch; },
     get sim() { return sim; },
