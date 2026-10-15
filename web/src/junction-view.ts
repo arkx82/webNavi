@@ -1,6 +1,7 @@
 import type * as THREE_NS from "three";
 import type { Guide, LonLat } from "./types";
 import type { Line } from "./geo";
+import { findWheels, rollWheels, type Wheels } from "./car-wheels";
 
 /**
  * 3D 분기점: before a junction a driver can get wrong, the junction as
@@ -53,6 +54,9 @@ export class JunctionView {
   private model: THREE_NS.Object3D | null = null;
   private modelAsked = false;
   private modelPaints: THREE_NS.MeshStandardMaterial[] = [];
+  /** The model's wheels, rolled by how fast the car goes along the route, steered by how its way turns. */
+  private wheels: Wheels | null = null;
+  private rolled: { at: number; s: number; yaw: number } | null = null;
   private paint = "#4f5459";
   /** Whether the server has the model (main.ts asks once); the plain box stands in where it has not. */
   modelUrl: string | null = null;
@@ -158,6 +162,7 @@ export class JunctionView {
       });
       gltf.scene.scale.set(1, 1, MODEL_LENGTH_STRETCH);
       this.model = gltf.scene;
+      this.wheels = findWheels(gltf.scene);
       this.setPaint(this.paint);
       // Its shaders too, before it is drawn.
       if (this.renderer && this.camera) await this.renderer.compileAsync?.(gltf.scene, this.camera).catch(() => undefined);
@@ -235,6 +240,17 @@ export class JunctionView {
     const isModel = this.car === this.model;
     this.car!.position.set(p[0], p[1] + (isModel ? 0.05 : 0.8), p[2]);
     this.car!.rotation.y = isModel ? Math.atan2(-(b[0] - a[0]), -(b[2] - a[2])) : Math.atan2(b[0] - a[0], b[2] - a[2]);
+    // The wheels: rolled by how far the car came since the last frame, the front ones steered by how its way turned
+    // (a turn to the right is the car turning clockwise seen from above, negative about its up).
+    if (isModel && this.wheels) {
+      const yaw = this.car!.rotation.y;
+      if (this.rolled) {
+        const dt = Math.min(0.5, (now - this.rolled.at) / 1000);
+        const turned = ((((yaw - this.rolled.yaw) * 180) / Math.PI % 360) + 540) % 360 - 180;
+        if (dt > 0) rollWheels(this.wheels, Math.max(0, s - this.rolled.s) / dt, (-turned * Math.PI) / 180 / dt, dt);
+      }
+      this.rolled = { at: now, s, yaw };
+    }
     this.renderer.render(this.world, this.camera);
   }
 

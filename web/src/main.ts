@@ -639,7 +639,7 @@ function frame() {
       const onMotorwayNow = !!route && !!routeLine && shown.alongM != null && motorwayAt(route, routeLine.place(shown.alongM).segment);
       carLaneM += ((onMotorwayNow ? LANE_WIDTH_M.motorway : LANE_WIDTH_M.town) - carLaneM) * 0.03;
       carLayer.sizeTo(carLaneM, carFloorM(carAt));
-      carLayer.place(carAt, markerBearing);
+      carLayer.place(carAt, markerBearing, shown.speedMps);
       zoomSpeed += (shown.speedMps * 3.6 - zoomSpeed) * 0.03;
       // The 3D 분기점 panel shows the junction: the map goes on as it was, not drawn in for the turn as well.
       turnInM = route && !junctionView.open ? shown.nextGuide?.inM : undefined;

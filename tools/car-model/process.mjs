@@ -10,12 +10,16 @@
 // the small parts that show, the paint's material
 // renamed "paint" for the page to colour, clearcoat/transmission and the rim's texture dropped, meshopt-compressed
 // (11.5 MB → 0.3 MB). Another model may have other axes and another paint material: check them first (the headlights'
-// end is the front).
+// end is the front). The wheels — the tyres, rims and their trim, all four in one mesh a material in the download —
+// are cut into four nodes wheelFL, wheelFR, wheelRL, wheelRR (front −Z, right +X), each about its own axle (the
+// tyre's middle there), for the page to roll them and turn the front ones (car-model.ts). [wheelParts] names the
+// materials, the tyre's first.
 import { NodeIO } from "@gltf-transform/core";
 import { ALL_EXTENSIONS, EXTMeshoptCompression, KHRMaterialsClearcoat, KHRMaterialsTransmission } from "@gltf-transform/extensions";
 import { dedup, prune, weld, simplifyPrimitive, flatten, join, quantize, reorder } from "@gltf-transform/functions";
 import { MeshoptSimplifier, MeshoptEncoder } from "meshoptimizer";
-const [inFile, outFile, targetArg, paintArg] = process.argv.slice(2);
+const [inFile, outFile, targetArg, paintArg, wheelArg] = process.argv.slice(2);
+const wheelParts = (wheelArg ?? "Rubber_Rough,Iron_Clean_Distorted,black.001,black.002,black222").split(",");
 const paintName = paintArg ?? "Material_2125780493";
 const io = new NodeIO().registerExtensions(ALL_EXTENSIONS).registerDependencies({ "meshopt.encoder": MeshoptEncoder });
 await MeshoptSimplifier.ready; await MeshoptEncoder.ready;
@@ -67,8 +71,73 @@ for (const p of root.listMeshes().flatMap((m) => m.listPrimitives())) {
   simplifyPrimitive(p, { simplifier: MeshoptSimplifier, ratio: target, error: 0.0015, lockBorder: false });
 }
 console.log("triangles after", tris());
+// Cut after the simplifying: a quarter simplified alone keeps more of itself (meshoptimizer's error is a share of the
+// mesh's size) — the tyres came out 36k, not 15k.
+splitWheels();
 await doc.transform(prune(), reorder({ encoder: MeshoptEncoder }), quantize());
 doc.createExtension(EXTMeshoptCompression).setRequired(true).setEncoderOptions({ method: EXTMeshoptCompression.EncoderMethod.QUANTIZE });
 await io.write(outFile, doc);
 const b = [[Infinity, Infinity, Infinity], [-Infinity, -Infinity, -Infinity]];
 console.log("bounds X(across) Y(up) Z(along, front -):", mn.map((v, k) => k).map((k) => (k === 0 ? [mn[1] - cy, mx[1] - cy] : k === 1 ? [0, mx[2] - z0] : [mn[0] - cx, mx[0] - cx]).map((v) => v.toFixed(2)).join("..")).join(" | "));
+
+/**
+ * The wheels' parts (one primitive a material after join, all four wheels in each) cut by quadrant into four wheels:
+ * each a node at its axle — the middle of its tyre — holding a node a part, the parts' vertices moved to be about it.
+ */
+function splitWheels() {
+  const scene = root.getDefaultScene() ?? root.listScenes()[0];
+  const parts = root.listMeshes().flatMap((m) => m.listPrimitives().map((p) => ({ m, p }))).filter(({ p }) => wheelParts.includes(p.getMaterial()?.getName()));
+  const tyre = parts.find(({ p }) => p.getMaterial().getName() === wheelParts[0]);
+  if (!tyre) { console.log("no tyre material", wheelParts[0], "— wheels left whole"); return; }
+  const quadOf = (x, z) => (z < 0 ? "F" : "R") + (x < 0 ? "L" : "R");
+  // Each wheel's axle: the middle of its tyre's vertices' box.
+  const box = {};
+  const tp = tyre.p.getAttribute("POSITION");
+  for (let i = 0; i < tp.getCount(); i++) {
+    const [x, y, z] = tp.getElement(i, []);
+    const q = quadOf(x, z), b = (box[q] ??= [[Infinity, Infinity, Infinity], [-Infinity, -Infinity, -Infinity]]);
+    for (const [k, v] of [x, y, z].entries()) { b[0][k] = Math.min(b[0][k], v); b[1][k] = Math.max(b[1][k], v); }
+  }
+  const axle = Object.fromEntries(Object.entries(box).map(([q, b]) => [q, b[0].map((v, k) => (v + b[1][k]) / 2)]));
+  const wheels = {};
+  for (const q of Object.keys(axle)) {
+    wheels[q] = doc.createNode(`wheel${q}`).setTranslation(axle[q]);
+    scene.addChild(wheels[q]);
+    console.log(`wheel${q} axle`, axle[q].map((v) => v.toFixed(3)).join(", "), "tyre radius", ((box[q][1][1] - box[q][0][1]) / 2).toFixed(3));
+  }
+  for (const { m, p } of parts) {
+    const pos = p.getAttribute("POSITION"), nor = p.getAttribute("NORMAL"), idx = p.getIndices();
+    const tri = idx.getArray();
+    const byQuad = {};
+    for (let t = 0; t < tri.length; t += 3) {
+      let sx = 0, sz = 0;
+      for (let k = 0; k < 3; k++) { const v = pos.getElement(tri[t + k], []); sx += v[0]; sz += v[2]; }
+      (byQuad[quadOf(sx / 3, sz / 3)] ??= []).push(tri[t], tri[t + 1], tri[t + 2]);
+    }
+    for (const [q, list] of Object.entries(byQuad)) {
+      const at = axle[q];
+      if (!at) continue;
+      // The vertices this wheel's triangles use, about its axle.
+      const remap = new Map(), P = [], N = [];
+      const out = list.map((v) => {
+        if (!remap.has(v)) {
+          remap.set(v, remap.size);
+          const e = pos.getElement(v, []);
+          P.push(e[0] - at[0], e[1] - at[1], e[2] - at[2]);
+          if (nor) N.push(...nor.getElement(v, []));
+        }
+        return remap.get(v);
+      });
+      const buffer = root.listBuffers()[0];
+      const prim = doc.createPrimitive().setMaterial(p.getMaterial())
+        .setAttribute("POSITION", doc.createAccessor().setType("VEC3").setArray(new Float32Array(P)).setBuffer(buffer))
+        .setIndices(doc.createAccessor().setType("SCALAR").setArray(new Uint32Array(out)).setBuffer(buffer));
+      if (nor) prim.setAttribute("NORMAL", doc.createAccessor().setType("VEC3").setArray(new Float32Array(N)).setBuffer(buffer));
+      const mesh = doc.createMesh(`${p.getMaterial().getName()}-${q}`).addPrimitive(prim);
+      wheels[q].addChild(doc.createNode(`${p.getMaterial().getName()}-${q}`).setMesh(mesh));
+    }
+    m.removePrimitive(p);
+    p.dispose();
+    if (m.listPrimitives().length === 0) { for (const n of m.listParents()) if (n.propertyType === "Node") n.setMesh(null); m.dispose(); }
+  }
+}

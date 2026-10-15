@@ -182,7 +182,8 @@ export class CarLayer {
    * standing still had the city (lanes, buildings, tiles) redrawn sixty times a second (2026-10-11: 28.7 s of long
    * tasks in a 30 s standing at a light in 도봉).
    */
-  place(at: LonLat, headingDeg = this.heading) {
+  /** [speedMps]: how fast it goes, for the 3D model's wheels. */
+  place(at: LonLat, headingDeg = this.heading, speedMps = 0) {
     this.at = at;
     this.heading = headingDeg;
     if (this.useModel && this.model) {
@@ -191,7 +192,7 @@ export class CarLayer {
       const key = `m${at[0].toFixed(7)},${at[1].toFixed(7)},${headingDeg.toFixed(1)},${scale.toFixed(3)}`;
       if (key === this.laid) return;
       this.laid = key;
-      this.model.place(at, headingDeg, scale);
+      this.model.place(at, headingDeg, scale, speedMps);
       this.map.triggerRepaint();
       return;
     }

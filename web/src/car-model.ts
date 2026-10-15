@@ -1,6 +1,7 @@
 import maplibregl from "maplibre-gl";
 import type * as THREE_NS from "three";
 import type { LonLat } from "./types";
+import { findWheels, rollWheels, type Wheels } from "./car-wheels";
 
 /**
  * "You" on the map as a model in three dimensions: a Model Y (the owner's download from Sketchfab, by BloxBloger,
@@ -21,6 +22,7 @@ const LENGTH_STRETCH = 4.976 / MODEL_LENGTH_M;
 
 type Three = typeof THREE_NS;
 
+
 export class CarModelLayer implements maplibregl.CustomLayerInterface {
   readonly id = "car-model";
   readonly type = "custom" as const;
@@ -37,6 +39,12 @@ export class CarModelLayer implements maplibregl.CustomLayerInterface {
   private at: LonLat | null = null;
   private heading = 0;
   private scale = 1;
+  /** The wheels to roll, the speed and the heading's turning to roll and steer them by, and when they were last rolled. */
+  private wheels: Wheels | null = null;
+  private speed = 0;
+  private yawRate = 0;
+  private placedAt = 0;
+  private rolledAt = 0;
   shown = true;
 
   constructor(private url: string, private onFailed: (why: string) => void = () => {}, private onReady: () => void = () => {}) {}
@@ -74,6 +82,7 @@ export class CarModelLayer implements maplibregl.CustomLayerInterface {
     });
     // The Model Y L's length; its width and height as the model's.
     gltf.scene.scale.set(1, 1, LENGTH_STRETCH);
+    this.wheels = findWheels(gltf.scene);
     scene.add(gltf.scene);
     this.scene = scene;
     this.camera = new THREE.Camera();
@@ -109,11 +118,22 @@ export class CarModelLayer implements maplibregl.CustomLayerInterface {
     for (const m of this.paints) m.color.set(paint);
   }
 
-  /** Where the car is, the way it faces (degrees clockwise from north), and how many times its true size it is drawn. */
-  place(at: LonLat, headingDeg: number, scale: number) {
+  /**
+   * Where the car is, the way it faces (degrees clockwise from north), how many times its true size it is drawn, and
+   * how fast it goes: the wheels roll by it, and the front ones turn by how fast the heading turns.
+   */
+  place(at: LonLat, headingDeg: number, scale: number, speedMps = 0) {
+    const now = performance.now();
+    if (this.placedAt) {
+      const dt = (now - this.placedAt) / 1000;
+      const turned = ((((headingDeg - this.heading) % 360) + 540) % 360) - 180;
+      if (dt > 0 && dt < 1) this.yawRate += ((turned * Math.PI) / 180 / dt - this.yawRate) * Math.min(1, dt / 0.3);
+    }
+    this.placedAt = now;
     this.at = at;
     this.heading = headingDeg;
     this.scale = scale;
+    this.speed = speedMps;
   }
 
   render(_gl: WebGLRenderingContext | WebGL2RenderingContext, args: maplibregl.CustomRenderMethodInput) {
@@ -121,6 +141,10 @@ export class CarModelLayer implements maplibregl.CustomLayerInterface {
     if (!this.ready || !THREE || !this.renderer || !this.scene || !this.camera || !this.at || !this.shown) return;
     const origin = maplibregl.MercatorCoordinate.fromLngLat({ lng: this.at[0], lat: this.at[1] }, 0);
     const s = origin.meterInMercatorCoordinateUnits() * this.scale;
+    // The wheels rolled on since the last frame drawn (none drawn while the car stands: nothing moves then).
+    const now = performance.now();
+    if (this.wheels && this.rolledAt) rollWheels(this.wheels, this.speed, this.yawRate, Math.min(0.2, (now - this.rolledAt) / 1000), this.scale);
+    this.rolledAt = now;
     // Model space (X across, Y up, Z along with the front at −Z) into the map's: up turned onto the map's up (its
     // mercator y runs south, hence the flip), then turned to face the heading, clockwise from north.
     const toMap = new THREE.Matrix4()
