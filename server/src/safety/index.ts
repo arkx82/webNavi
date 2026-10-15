@@ -2,7 +2,7 @@ import Flatbush from "flatbush";
 import { parse } from "csv-parse/sync";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { beforeOf, dedupeCameras, type Merged } from "./dedupe.js";
+import { SAME_CAMERA_M, beforeOf, dedupeCameras, siteDirection, type Merged } from "./dedupe.js";
 
 /**
  * What the road has in store: enforcement cameras, speed bumps, school
@@ -34,7 +34,7 @@ export interface Feature {
   /** How far before the place its coordinates are the site puts the camera ("양문사거리전400m지점"): not one camera with what stands there. */
   beforeM?: number;
   /** The carriageways the camera stands on: the way each runs and the camera put on it (safety/roads.ts). */
-  ways?: { deg: number; at: [number, number]; far?: boolean }[];
+  ways?: { deg: number; at: [number, number]; far?: boolean; doubt?: boolean }[];
   name?: string;
   /** For an area rather than a point (an accident hotspot, a school zone): how far round the centre it reaches. */
   radiusM?: number;
@@ -42,6 +42,10 @@ export interface Feature {
   detail?: string;
   /** A traffic light's flashing hours: "00:00-05:00" (KST), or "always" for a flashing-yellow lamp. */
   flash?: string;
+  /** The day the agency last said its row was so (데이터기준일자, "2026-03-27"): how old what it says is. */
+  asOf?: string;
+  /** A camera the list gives as 99 기타 with a limit, taken all the same (featuresOf): what it is was not said. */
+  unsaid?: true;
 }
 
 const M_PER_DEG_LAT = 111_320;
@@ -235,14 +239,27 @@ export function parseStandardData(text: string, file: string): Feature[] {
 /** Rows with the standard data's Korean column names, into features; rows without a position are dropped. */
 export function featuresOf(rows: Record<string, string | undefined>[], source: string, bumps = false): Feature[] {
   const out: Feature[] = [];
+  // The places each point is given for: one agency puts several of its rows at one placeholder point (광양's
+  // 금호교차로 and 기술연구소삼거리 both at one spot), which says nothing of where an unsaid camera is.
+  const placesAt = new Map<string, Set<string>>();
+  if (!bumps) for (const row of rows) {
+    const key = `${row["경도"]},${row["위도"]}`;
+    placesAt.set(key, (placesAt.get(key) ?? new Set()).add((row["설치장소"] ?? "").trim()));
+  }
   rows.forEach((row, n) => {
     const lat = Number(row["위도"]);
     const lon = Number(row["경도"]);
     if (!Number.isFinite(lat) || !Number.isFinite(lon) || lat === 0 || lon === 0) return;
     const limit = Number(row["제한속도"]);
-    const kind = bumps ? "bump" : cameraKind(row["단속구분"], row["보호구역구분"], row["단속구간위치구분"]);
-    // Cameras a driver on the move is not warned of: parking, bus lanes, the unexplained.
+    let kind = bumps ? "bump" : cameraKind(row["단속구분"], row["보호구역구분"], row["단속구간위치구분"]);
+    // 99 기타 with a limit and a place of its own: a camera all the same, said as 신호·과속 (a 구간 단속's end where
+    // its site says 시점 or 종점). 386 such rows in October 2026 — 서산시's 231 among them, all its cameras — were
+    // dropped, and their roads went unwarned.
+    const unsaid = !bumps && !kind && unsaidCamera(row["단속구분"], limit) && (placesAt.get(`${row["경도"]},${row["위도"]}`)?.size ?? 1) === 1;
+    if (unsaid) kind = /시점/.test(row["설치장소"] ?? "") ? "section-start" : /종점/.test(row["설치장소"] ?? "") ? "section-end" : "speed-signal";
+    // Cameras a driver on the move is not warned of: bus lanes, parking, 99 기타 without a limit.
     if (!kind) return;
+    const asOf = /^\d{4}-\d{2}-\d{2}$/.test((row["데이터기준일자"] ?? "").trim()) ? row["데이터기준일자"]!.trim() : undefined;
     out.push({
       id: `${source}:${row["무인교통단속카메라관리번호"] ?? row["과속방지턱관리번호"] ?? n}`,
       kind,
@@ -253,17 +270,49 @@ export function featuresOf(rows: Record<string, string | undefined>[], source: s
       ...(zoneOf(row["보호구역구분"]) ? { zone: zoneOf(row["보호구역구분"]) } : {}),
       ...(!bumps && row["설치장소"] ? { site: row["설치장소"].trim() } : {}),
       ...(!bumps && beforeOf(row["설치장소"]) ? { beforeM: beforeOf(row["설치장소"]) } : {}),
+      ...(asOf ? { asOf } : {}),
+      ...(unsaid ? { unsaid: true as const } : {}),
     });
   });
-  return out;
+  return bumps ? out : withoutSaidTwice(out);
+}
+
+/** 단속구분 99 (기타) alone, with a limit: a camera the list does not say the kind of. */
+function unsaidCamera(code: string | undefined, limit: number): boolean {
+  const parts = (code ?? "").trim().split(/[+,/\s]+/).map((p) => p.replace(/^0+/, ""));
+  return parts.length > 0 && parts.every((p) => p === "99") && Number.isFinite(limit) && limit > 0;
+}
+
+/**
+ * Without an unsaid camera (99 기타) where a camera of a said kind stands within SAME_CAMERA_M facing no other way:
+ * the list's second row for it (곡성's 용두교차로, a 신호 row 10 m from the 99 row of the same site).
+ */
+function withoutSaidTwice(features: Feature[]): Feature[] {
+  const said = features.filter((f) => !f.unsaid);
+  if (said.length === features.length) return features;
+  const cell = (lon: number, lat: number) => `${Math.floor(lon * 500)},${Math.floor(lat * 500)}`;
+  const grid = new Map<string, Feature[]>();
+  for (const f of said) grid.set(cell(f.lon, f.lat), [...(grid.get(cell(f.lon, f.lat)) ?? []), f]);
+  return features.filter((f) => {
+    if (!f.unsaid) return true;
+    const way = siteDirection(f.site);
+    for (const dx of [-1, 0, 1]) for (const dy of [-1, 0, 1]) {
+      for (const o of grid.get(cell(f.lon + dx / 500, f.lat + dy / 500)) ?? []) {
+        if (metres(f.lon, f.lat, o.lon, o.lat) > SAME_CAMERA_M) continue;
+        const other = siteDirection(o.site);
+        if (!way || !other || way === other) return false;
+      }
+    }
+    return true;
+  });
 }
 
 /**
  * What a camera is, from the standard data: 단속구분 1 속도, 2 신호,
- * 3 불법주정차, 4 버스전용차로, 99 기타 — written "1", "01", "01+02" or in
+ * 3 버스전용차로, 4 불법주정차, 99 기타 — written "1", "01", "01+02" or in
  * words — and 단속구간위치구분 1 시점, 2 종점 for a 구간 단속, which is
  * what makes one a section whatever its 단속구분 says. Null for the kinds a
- * moving car is not warned of.
+ * moving car is not warned of (99 with a limit is taken in featuresOf).
  */
 export function cameraKind(code: string | undefined, zone: string | undefined, section?: string): Kind | null {
   const pos = (section ?? "").trim().replace(/^0+/, "");

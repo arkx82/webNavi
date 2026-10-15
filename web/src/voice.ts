@@ -61,7 +61,7 @@ export class Voice {
   /** The voice asked of the server (안내 설정 → 목소리); null is the server's own. */
   voiceName: string | null = null;
   /** How far the music drops while the voice speaks. */
-  duckTo = 0.5;
+  duckTo = 0.3;
   /** 안내 중 음악 줄이기: faded (soft), at once (quick), or not at all (off) — 안내 설정. */
   ducking: "soft" | "quick" | "off" = "soft";
   /** Players outside the graph (a TIDAL <audio>) told the level to go to and how long to take getting there. */
@@ -341,15 +341,19 @@ export class Voice {
 }
 
 /** [buffer] with LEAD_S of silence before, TAIL_S after, and its last FADE_S faded out (a cut-off syllable does not click). */
-/** 안내 음량 goes this far up (200 %): some found the voice too quiet over the road (2026-10-14). */
-export const MAX_VOLUME = 2;
+/**
+ * 안내 음량 goes this far up (300 %): some found the voice too quiet over the road (2026-10-14), and at 200 % still
+ * (a tester, 2026-10-15). The limiter after the knob holds what this pushes past full scale.
+ */
+export const MAX_VOLUME = 3;
 /**
  * Each sentence brought to one loudness: the service renders them anywhere from -17 to -26 dBFS (measured over the
  * server's 3,225 on 2026-10-14), so one sentence was half as loud as the next. Raised (or lowered) to this RMS over
- * its voiced part, never past PEAK.
+ * its voiced part, never past PEAK. -14 dBFS since 2026-10-15 (was -17): at 100 % it is as loud as a podcast, not
+ * under one.
  */
-const TARGET_RMS = 0.14; // about -17 dBFS
-const PEAK = 0.9;
+const TARGET_RMS = 0.2; // about -14 dBFS
+const PEAK = 1;
 /** The gain that brings [data] to TARGET_RMS without its peak going over PEAK (and never more than 4×). */
 export function levelGain(data: Float32Array): number {
   let peak = 0, sum = 0, n = 0;

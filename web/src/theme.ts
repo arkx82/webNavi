@@ -29,9 +29,34 @@ export function isNight(ms: number, at: LonLat): boolean {
   return sunAltitude(ms, at) < -2;
 }
 
+/**
+ * The browser's own light or dark (prefers-color-scheme). Most say only what the device was set to once, so 자동 goes
+ * by the sun; but one seen to change while the page was up reports the screen's mode as it goes — the car's, if the
+ * Tesla browser passes its 다크 모드 on (asked by a tester, 2026-10-15; not yet seen) — and from then on, on that
+ * device, 자동 follows it instead. Remembered across visits.
+ */
+const DARK = typeof matchMedia === "function" ? matchMedia("(prefers-color-scheme: dark)") : null;
+const FOLLOW_KEY = "nav-theme-follows";
+let follows = (() => { try { return localStorage.getItem(FOLLOW_KEY) === "1"; } catch { return false; } })();
+
+/** What the browser says now ("dark", "light", or "?" without matchMedia), and whether 자동 follows it. */
+export function screenMode(): { mode: "dark" | "light" | "?"; follows: boolean } {
+  return { mode: DARK ? (DARK.matches ? "dark" : "light") : "?", follows };
+}
+
+/** [onChange] whenever the browser's light or dark changes; the first change makes 자동 follow it. */
+export function watchScreenMode(onChange: (dark: boolean) => void) {
+  DARK?.addEventListener?.("change", (e) => {
+    follows = true;
+    try { localStorage.setItem(FOLLOW_KEY, "1"); } catch { /* private window */ }
+    onChange(e.matches);
+  });
+}
+
 /** Sets the screen's theme; true when it is day. */
 export function applyTheme(choice: Theme, at: LonLat, now = Date.now()): boolean {
-  const night = choice === "dark" || (choice === "auto" && isNight(now, at));
+  const byScreen = follows && DARK ? DARK.matches : isNight(now, at);
+  const night = choice === "dark" || (choice === "auto" && byScreen);
   document.body.classList.toggle("night", night);
   document.body.classList.toggle("day", !night);
   return !night;

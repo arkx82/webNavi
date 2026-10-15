@@ -26,6 +26,7 @@ const FIELDS: Record<string, string> = {
   roadRouteNm: "도로노선명",
   regltSctnLcSe: "단속구간위치구분",
   itlpc: "설치장소",
+  referenceDate: "데이터기준일자",
 };
 
 export function korean(row: Record<string, unknown>): Record<string, string> {
@@ -43,11 +44,12 @@ export interface KeptCameras {
   features: Feature[];
   /**
    * What the kept list carries: 2 marks each camera's 보호구역 (zone), 3 a 구간 단속 camera's site, 4 every camera's
-   * site (what tells two rows of one camera apart, safety/dedupe.ts) and the "전 N m" it names; an older list is asked again.
+   * site (what tells two rows of one camera apart, safety/dedupe.ts) and the "전 N m" it names, 5 the 99 기타 rows
+   * with a limit (index.ts featuresOf) and each row's 데이터기준일자; an older list is asked again.
    */
   v?: number;
 }
-export const CAMERAS_VERSION = 4;
+export const CAMERAS_VERSION = 5;
 
 export function keptCameras(dir: string): KeptCameras | null {
   const file = join(dir, "cameras.json");

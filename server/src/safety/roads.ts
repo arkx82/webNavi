@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Feature } from "./index.js";
+import { siteDirection } from "./dedupe.js";
 
 /**
  * Each enforcement camera put on its own carriageway: for each of eight
@@ -53,6 +54,8 @@ export interface CameraWay {
   name?: string;
   /** Put on a road of its name from further than SNAP_MAX_M (waysFrom): both carriageways, until one is picked. */
   far?: boolean;
+  /** The other way of the carriageway it was put on, added where its site's direction says that way (doubtCarriageways). */
+  doubt?: boolean;
 }
 
 type Kept = Record<string, CameraWay[] | null>;
@@ -133,6 +136,78 @@ export function pickCarriageways(features: Feature[]): Feature[] {
   });
 }
 
+/** Within this of a camera, the cameras of its road whose sites name its way (or the reverse) say which carriageway. */
+const DOUBT_WITHIN_M = 3000;
+/** At least this many of them name the other way, and none this one: one camera put wrong is not enough to doubt the next. */
+const DOUBT_AGAINST = 2;
+/** Each say is the nearest this many. */
+const DOUBT_VOTERS = 6;
+/** Cameras nearer than this are of the same place (the other lanes' row, a junction's other camera): no say. */
+const DOUBT_FROM_M = 30;
+
+/**
+ * A camera put on one carriageway of a divided road, where the site's direction names the other: both ways. A
+ * list's point is where its agency put it — often the pole on the far side, or the gantry's middle — and the nearest
+ * carriageway to it is no surer than that. 영산로's G4699 "청수가든앞(목포→무안)" stands on the 무안→목포
+ * carriageway, and was warned of going home and not going to work (a tester's 목포↔무안 drive, 2026-10-15).
+ *
+ * Which way a site's "A→B" runs is read from the cameras of the same road round it that name A→B (that way) or B→A
+ * (the other): where none of them agrees with the carriageway it was put on and DOUBT_AGAINST say the other, the
+ * other way is added (CameraWay.doubt). Not where its agency's direction codes on that road agree with where it is
+ * (two at least and none against): a site written the wrong way round, as some are (G1820's says 무안→목포, code 2
+ * of 목포→무안, put on the 목포→무안 carriageway — kept both too: its codes are split). Over the October 2026 list
+ * 125 of 22,217 cameras on one carriageway (837 had one neighbour been enough, 태봉's J4480 among them for
+ * G4699 alone): told of both ways, a camera the other way's driver passes is one warning more, which costs less
+ * than one missed.
+ */
+export function doubtCarriageways(features: Feature[]): Feature[] {
+  type One = { f: Feature; deg: number; road: string; agency: string; code: string; from: string; to: string } ;
+  const one: One[] = [];
+  for (const f of features) {
+    const ways = (f.ways ?? []).filter((w) => w.deg >= 0);
+    if (!ways.length || ZONES.has(f.kind) || ways.some((w) => w.far || w.doubt) || ways.length !== (f.ways ?? []).length) continue;
+    if (ways.some((w) => angle(w.deg, ways[0].deg) >= 90) || /후면/.test(f.site ?? "")) continue;
+    const road = roadName(f.name ?? "");
+    if (road.length < 2) continue;
+    const [from, to] = (siteDirection(f.site) ?? "").split("→");
+    const id = f.id.slice(f.id.indexOf(":") + 1);
+    one.push({ f, deg: ways[0].deg, road, agency: id.slice(0, Math.max(0, id.lastIndexOf("-"))), code: (f.direction ?? "").trim().replace(/^0+/, ""), from: (from ?? "").slice(0, 2), to: (to ?? "").slice(0, 2) });
+  }
+  const cell = (lon: number, lat: number) => `${Math.floor(lon * 30)},${Math.floor(lat * 30)}`;
+  const grid = new Map<string, One[]>();
+  for (const o of one) grid.set(cell(o.f.lon, o.f.lat), [...(grid.get(cell(o.f.lon, o.f.lat)) ?? []), o]);
+  const metres = (a: Feature, b: Feature) => Math.hypot((a.lon - b.lon) * 111_320 * Math.cos((a.lat * Math.PI) / 180), (a.lat - b.lat) * 111_320);
+  /** Of [voters] (nearest first, each with the heading it says this camera's way runs), how many agree and disagree. */
+  const tally = (o: One, says: [One, number][]) => {
+    let agree = 0, against = 0;
+    for (const [, deg] of says.slice(0, DOUBT_VOTERS)) {
+      const a = angle(deg, o.deg);
+      if (a < 60) agree++;
+      else if (a > 120) against++;
+    }
+    return { agree, against };
+  };
+  const doubted = new Set<Feature>();
+  for (const o of one) {
+    if (!o.from || !o.to) continue;
+    const near: One[] = [];
+    const cx = Math.floor(o.f.lon * 30), cy = Math.floor(o.f.lat * 30);
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (const n of grid.get(`${cx + dx},${cy + dy}`) ?? []) {
+      const d = metres(o.f, n.f);
+      if (n !== o && n.road === o.road && d > DOUBT_FROM_M && d <= DOUBT_WITHIN_M) near.push(n);
+    }
+    near.sort((a, b) => metres(o.f, a.f) - metres(o.f, b.f));
+    const site = tally(o, near.flatMap((n): [One, number][] =>
+      n.from === o.from && n.to === o.to ? [[n, n.deg]] : n.from === o.to && n.to === o.from ? [[n, (n.deg + 180) % 360]] : []));
+    if (site.agree > 0 || site.against < DOUBT_AGAINST) continue;
+    const codes = o.code ? tally(o, near.filter((n) => n.agency === o.agency && n.code).map((n): [One, number] => [n, n.code === o.code ? n.deg : (n.deg + 180) % 360])) : { agree: 0, against: 0 };
+    if (codes.agree >= 2 && codes.against === 0) continue;
+    doubted.add(o.f);
+  }
+  if (!doubted.size) return features;
+  return features.map((f) => !doubted.has(f) ? f : { ...f, ways: [...f.ways!, ...f.ways!.map((w) => ({ deg: (w.deg + 180) % 360, at: w.at, doubt: true }))] });
+}
+
 export class CameraRoads {
   private kept: Kept = {};
   private running = false;
@@ -155,10 +230,10 @@ export class CameraRoads {
 
   /** [features] with their ways, where known; a camera far off its road on the carriageway its neighbours say. */
   apply(features: Feature[]): Feature[] {
-    return pickCarriageways(features.map((f) => {
+    return doubtCarriageways(pickCarriageways(features.map((f) => {
       const ways = this.kept[f.id];
       return ways ? { ...f, ways } : f;
-    }));
+    })));
   }
 
   /** The camera's ways, asked of the graph; null where no road is near; throws where the graph cannot be asked. */

@@ -20,7 +20,7 @@ import { RouteWatch, phraseFor, type Ahead, type Feature, type Kind } from "./wa
 import { Notes, incidentNote, popupNote, restNote, schoolNote, type Note } from "./notes";
 import { CameraLayer } from "./camera-layer";
 import { loadDrive, loadLast, saveDrive, saveLast, worthResuming } from "./resume";
-import { applyTheme } from "./theme";
+import { applyTheme, screenMode, watchScreenMode } from "./theme";
 import { HdLayer } from "./hdmap-layer";
 import { ZoneLayer } from "./zone-layer";
 import { drawLaneCard, onlyWords, type GuideColour, type Junction as JunctionView, type LaneCard, type Lanes, type Turn as LaneTurn } from "./lanes-strip";
@@ -37,7 +37,7 @@ import { RerouteBackoff } from "./reroute-backoff";
 import { Stillness } from "./still";
 import { THEN_M, TURN_NEAR_M, fasterPhrase, thenPhrase, turnPhrase, warningPhrase, type Turn } from "../../server/src/phrases";
 import { SectionTracker, type ActiveSectionInfo } from "./section-tracker";
-import { drawGuide, loadGuide, saveGuide, shows, wants, type GuideSettings, type VoiceList } from "./guide-settings";
+import { CAR_MIN_PX, drawGuide, loadGuide, saveGuide, shows, wants, type GuideSettings, type VoiceList } from "./guide-settings";
 import { currentUser, logout, push as pushUserData } from "./userdata";
 import { WeatherPanel } from "./weather";
 import { isFavourite, labelOf, loadPlaces, samePlace, savePlaces, toggleFavourite, toward } from "./places";
@@ -606,13 +606,15 @@ const CAR_OVER_ROUTE = 1.3;
  * where it sits on the screen: standing, its lane is wider than that and the car fills the lane; drawn back with the
  * speed, or where no lane lines are drawn, the lane on the screen is narrower than the line and this holds the car
  * above it. Measured across the screen at the car's own place, so a tilted view's nearer, larger ground counts.
+ * 자차 크기 (guide.carSize) raises the floor to CAR_MIN_PX across: the car is what a glance looks for.
  */
 function carFloorM(at: LonLat): number {
   try {
     const p = map.project(at);
     const a = map.unproject([p.x - 20, p.y]), b = map.unproject([p.x + 20, p.y]);
     const mPerPx = metres(a.lng, a.lat, b.lng, b.lat) / 40;
-    return Number.isFinite(mPerPx) ? casingPx(map.getZoom()) * CAR_OVER_ROUTE * mPerPx : 0;
+    const px = Math.max(casingPx(map.getZoom()) * CAR_OVER_ROUTE, CAR_MIN_PX[guide.carSize] ?? CAR_MIN_PX.large);
+    return Number.isFinite(mPerPx) ? px * mPerPx : 0;
   } catch {
     return 0;
   }
@@ -3272,6 +3274,15 @@ const hdLayer: HdLayer | null = new HdLayer(map, () => guide.hdLanes);
 // 야경: the buildings lit by night, only in the tilted view and where the driver left it on.
 nightCity = new NightCity(map, () => guide.nightCity && view === "3d" && base !== "osm", showBuildings);
 themed(applyTheme(guide.theme, loadLast() ?? HOME));
+// Whether this browser tells the page the screen's light or dark, and when it changes (the car's 다크 모드?).
+{
+  const { mode, follows } = screenMode();
+  log(`화면 모드: 브라우저 ${mode} · 자동 테마 ${follows ? "브라우저 따름" : "해 기준"}`);
+  watchScreenMode((dark) => {
+    log(`화면 모드 바뀜: 브라우저 ${dark ? "dark" : "light"} — 자동 테마가 이제 브라우저를 따름`);
+    themed(applyTheme(guide.theme, here()));
+  });
+}
 /** 들어보기: a warning and a turn, as the drive will say them, from the settings sheet. */
 function listenSample() {
   voice.preview(warningPhrase("speed", 600, 50));
@@ -3996,7 +4007,7 @@ if (new URLSearchParams(location.search).has("debug")) {
   voice.onSaid = (text, playedS, lengthS, waitedS, fetchedS) => { heard.push({ t: Date.now(), text, playedS, lengthS, waitedS }); onSaid(text, playedS, lengthS, waitedS, fetchedS); };
   voice.onLate = (text, waitedS) => { late.push({ t: Date.now(), text, waitedS }); onLate(text, waitedS); };
   (window as unknown as { nav: unknown }).nav = {
-    said, heard, late, voice, tracker, gps, map, lanesAsked,
+    said, heard, late, voice, tracker, gps, map, lanesAsked, guide,
     get heldTurn() { return heldTurn; },
     get route() { return route; },
     get watch() { return watch; },

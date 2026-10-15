@@ -29,7 +29,7 @@ test("the police CSV is read by column name, in either byte order", () => {
     "3,서울,,,0,0,1,60,\n" +
     "4,서울,강남대로,,37.4990,127.0280,4,,\n";
   const features = parseStandardData(csv, "전국무인교통단속카메라표준데이터.csv");
-  // The one without a position and the bus-lane camera are not kept.
+  // The one without a position and the parking camera (4) are not kept.
   assert.equal(features.length, 2);
   assert.equal(features[0].kind, "speed");
   assert.equal(features[0].limit, 60);
@@ -51,13 +51,44 @@ test("the camera API's English fields read as the CSV's Korean ones", async () =
     { insttCode: "626", mnlssRegltCameraManageNo: "20", latitude: "", longitude: "", regltSe: "2" },
   ].map(korean);
   const out = featuresOf(rows, "police-api");
-  // The same number from two agencies stays two cameras; the bus lane goes.
+  // The same number from two agencies stays two cameras; the parking camera (04) goes.
   assert.deepEqual(out.map((f) => [f.id, f.kind, f.limit]), [
     ["police-api:611-16", "speed", 50],
     ["police-api:626-16", "section-start", 80],
     ["police-api:626-17", "section-end", 80],
     ["police-api:626-18", "speed-signal", 60],
   ]);
+});
+
+test("99 기타 with a limit is a camera all the same — not at a placeholder point, nor where a said one stands", async () => {
+  const { korean } = await import("./cameras.js");
+  const { featuresOf } = await import("./index.js");
+  const row = (no: string, lon: number, lat: number, se: string, itlpc: string, lmttVe = "60") =>
+    korean({ insttCode: "4530000", mnlssRegltCameraManageNo: no, latitude: String(lat), longitude: String(lon), regltSe: se, lmttVe, itlpc, referenceDate: "2026-03-27" });
+  const out = featuresOf([
+    row("57", 126.40, 36.70, "99", "동남아파트입구(해미→서산)"),
+    row("58", 126.41, 36.70, "99", "웅소성리사거리 서산방향 시점", "80"),
+    row("59", 126.42, 36.70, "99", "웅소성리사거리 서산방향 종점", "80"),
+    // No limit: not a camera a driver is told of.
+    row("60", 126.43, 36.70, "99", "어딘가", ""),
+    // Two places at one point: a placeholder.
+    row("61", 126.44, 36.70, "99", "금호교차로(마린센터→광영동)"),
+    row("62", 126.44, 36.70, "1", "기술연구소삼거리(제철1문→시추대삼거리)"),
+    // A 신호 row of the same place 10 m off: the 99 row is its second.
+    row("63", 126.45, 36.70, "2", "용두교차로(옥과IC→석곡)"),
+    row("64", 126.45011, 36.70, "99", "용두교차로(옥과IC→석곡)"),
+    // ... but one facing the other way is a camera of its own.
+    row("65", 126.45, 36.7001, "99", "용두교차로(석곡→옥과IC)"),
+  ], "police-api");
+  assert.deepEqual(out.map((f) => [f.id.split("-").at(-1), f.kind, !!f.unsaid]), [
+    ["57", "speed-signal", true],
+    ["58", "section-start", true],
+    ["59", "section-end", true],
+    ["62", "speed", false],
+    ["63", "signal", false],
+    ["65", "speed-signal", true],
+  ]);
+  assert.equal(out[0].asOf, "2026-03-27");
 });
 
 test("a school zone's limit is its cameras': 50 where they say 50, none where they disagree or there are none", async () => {

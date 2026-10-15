@@ -8,6 +8,10 @@ import { MAX_VOLUME } from "./voice";
  * What the voice says, and from how far: the 안내 설정 sheet. Kept in the
  * car's browser; every change is in force at once.
  */
+export type CarSize = "true" | "large" | "xlarge";
+/** 자차 크기's least width of the car on the screen, CSS px. */
+export const CAR_MIN_PX: Record<CarSize, number> = { true: 0, large: 26, xlarge: 34 };
+
 export interface GuideSettings {
   /** The voice at all. */
   voice: boolean;
@@ -46,6 +50,12 @@ export interface GuideSettings {
   carIcon: CarIcon;
   /** 차 색: the paint the car is drawn in. */
   carPaint: string;
+  /**
+   * 자차 크기: the car's least size on the screen, whatever the zoom — "true" only its lane's width (and a little over
+   * the route line); "large" and "xlarge" at least CAR_MIN_PX wide. A navigation is about the car: drawn back at speed
+   * it came to 18 × 42 px on the car's screen, hard to find at a glance (a tester, 2026-10-15).
+   */
+  carSize: CarSize;
   /** 도착하면 안내 종료: the drive ends by itself a few seconds after the arrival is announced. */
   endOnArrive: boolean;
   /** 카메라 프레임: the map moved every frame, or an even thirty a second for a car computer that cannot keep sixty. */
@@ -113,7 +123,7 @@ export interface GuideSettings {
 export type Mode = "voice" | "show" | "off";
 
 export const DEFAULTS: GuideSettings = {
-  voice: true, voiceName: null, volume: 1, turns: true, junctionNames: true, laneHints: true, merges: true, closeups: true, junction3d: true, sendLogs: true, layout: "classic", hdLanes: true, hdLanesWhen: "turns", laneGuide: true, colorLines: true, theme: "auto", nightCity: false, carIcon: "model3d", carPaint: PAINTS[0][0], endOnArrive: true, mapDpr: "auto", followFps: "auto", ducking: "soft", fasterRoute: "ask", avoidSchool: false, carData: "auto", rev: 4, uiScale: 1, lightsOnMap: "route", camerasOnMap: "route", nextLight: true, flashSignals: true,
+  voice: true, voiceName: null, volume: 1, turns: true, junctionNames: true, laneHints: true, merges: true, closeups: true, junction3d: true, sendLogs: true, layout: "classic", hdLanes: true, hdLanesWhen: "turns", laneGuide: true, colorLines: true, theme: "auto", nightCity: false, carIcon: "model3d", carPaint: PAINTS[0][0], carSize: "large", endOnArrive: true, mapDpr: "auto", followFps: "auto", ducking: "soft", fasterRoute: "ask", avoidSchool: false, carData: "auto", rev: 4, uiScale: 1, lightsOnMap: "route", camerasOnMap: "route", nextLight: true, flashSignals: true,
   cameras: true, cameraFromM: 600, sections: true, schools: true,
   bumps: "show", curves: "off", accidents: "show", bikeAccidents: "show",
   overspeed: true, overspeedBy: 0,
@@ -273,7 +283,7 @@ const GROUPS: Group[] = [
     { key: "voiceName", label: "목소리", kind: "voices" },
     { key: "voice", label: "들어보기", kind: "listen", sub: "지금 목소리로 안내 문장 두 개를 바로 들려줍니다" },
     { key: "volume", label: "안내 음량", kind: "slider" },
-    { key: "ducking", label: "안내 중 음악 줄이기", kind: "choice", options: [["soft", "부드럽게"], ["quick", "바로"], ["off", "끔"]], sub: "음성이 나오는 동안 이 페이지의 음악을 50 %로. 부드럽게: 0.4초에 걸쳐 낮추고 1초에 걸쳐 되돌림" },
+    { key: "ducking", label: "안내 중 음악 줄이기", kind: "choice", options: [["soft", "부드럽게"], ["quick", "바로"], ["off", "끔"]], sub: "음성이 나오는 동안 이 페이지의 음악을 30 %로. 부드럽게: 0.4초에 걸쳐 낮추고 1초에 걸쳐 되돌림" },
   ] },
   { id: "drive", title: "주행 안내", sub: "회전 · 차로 · 더 빠른 길 · 차량 데이터", rows: [
     { key: "turns", label: "회전 안내", kind: "toggle", sub: "1킬로미터 · 500미터 · 300미터 앞, 잠시 후 (고속도로 2킬로미터 · 1킬로미터 · 600미터, TMAP 기준)" },
@@ -319,7 +329,8 @@ const GROUPS: Group[] = [
     { key: "nightCity", label: "야경 건물", kind: "toggle", sub: "밤에 3D 화면이면 티맵·네이버 바탕 위에 건물을 옅은 금빛으로 (OpenStreetMap 건물이라 도심 밖에는 드묾. 도로가 가려 보이면 끄세요)" },
   ] },
   { id: "display", title: "디스플레이", sub: "테마 · 자차 · 배치 · 크기 · 해상도", rows: [
-    { key: "theme", label: "화면 테마", kind: "choice", options: [["auto", "자동 (해 기준)"], ["light", "밝게"], ["dark", "어둡게"]], sub: "밤에는 바탕 지도도 어둡게" },
+    { key: "theme", label: "화면 테마", kind: "choice", options: [["auto", "자동"], ["light", "밝게"], ["dark", "어둡게"]], sub: "자동: 해가 지면 어둡게. 브라우저가 화면 모드(다크 모드) 바뀜을 알려주는 기기에서는 한 번 바뀐 뒤부터 그것을 따름. 밤에는 바탕 지도도 어둡게" },
+    { key: "carSize", label: "자차 크기", kind: "choice", options: [["true", "실제 비율"], ["large", "크게"], ["xlarge", "아주 크게"]], sub: "지도를 멀리 볼 때(빠를 때, 축소했을 때)도 내 차가 이보다 작아지지 않게. 실제 비율: 차로 폭에 맞춰서만" },
     { key: "carIcon", label: "자차 모양", kind: "choice", options: [["model3d", "3D"], ["tesla", "Model Y L"], ["arrow", "화살표"], ["photo", "내 사진"]], sub: "지도 위 내 차를 지도와 같은 축척, 차로 폭에 맞춰. 3D: 서버 설정 폴더의 car-model.glb (기울인 지도에서 입체로 서 있음 · 3D 모델: BloxBloger · Sketchfab, CC BY-NC 4.0). 내 사진: 서버 설정 폴더의 car-icon.png (위에서 본 모습, 앞이 위)" },
     { key: "carPaint", label: "차 색", kind: "choice", options: PAINTS, sub: "Model Y L 모양일 때의 색" },
     { key: "layout", label: "화면 배치", kind: "choice", options: [["classic", "기본"], ["mini", "미니"]], sub: "미니: 왼쪽 창을 좁게, 시계 · 다음 신호등 · 그다음 안내는 숨김" },
