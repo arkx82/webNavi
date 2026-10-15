@@ -228,6 +228,11 @@ const BLEND_M = 60;
  * from its neighbours' shift with nothing between — the step in the line.
  */
 const SLOPE = 0.15;
+/** A stretch in another lane shorter than this, with the line in one lane either side of it, is not drawn. */
+const EXCURSION_M = 200;
+/** What a step between lanes is, sideways; and how far either side of it the line takes to cross. */
+const LANE_STEP_M = 1.8;
+const STEP_SPREAD_M = 25;
 const SLOPE_TOL_M = 1;
 /** A bend the snapping put into the line (none this sharp in the provider's) is undone there. */
 const KINK_DEG = 50;
@@ -299,9 +304,10 @@ export function applySnap(path: LonLat[], snapped: (LonLat | null)[], fixed: boo
   const piece = (i: number) => sides.pieces?.[i] ?? 0;
   const sameRoad = (i: number, j: number) => piece(i) === piece(j) && bias(i) === bias(j);
   const keep = snapped.map((s, i) => (s && !fixed[i] && Number.isFinite(headings[i]) ? s : null));
-  // Where the turn's lane is first asked for on a road, the line moves over to it between the snaps either side of RAMP_M.
+  // Where a side is asked for on a road, or let go of (a fork's side kept FORK_EXIT_M, then the road's middle), the
+  // line moves over between the snaps either side of RAMP_M — not from one snap to the next, 20 m on.
   for (let i = 1, start = -Infinity; i < n; i++) {
-    if (!sameRoad(i, i - 1)) start = piece(i) === piece(i - 1) && bias(i) !== 0 ? along[i] : -Infinity;
+    if (!sameRoad(i, i - 1)) start = piece(i) === piece(i - 1) ? along[i] : -Infinity;
     if (along[i] - start < RAMP_M) keep[i] = null;
   }
   const bendAt = (q: LonLat[], i: number): number => {
@@ -338,6 +344,38 @@ export function applySnap(path: LonLat[], snapped: (LonLat | null)[], fixed: boo
       const road = roads[roads.length - 1];
       if (road && sameRoad(road[road.length - 1], i)) road.push(i); else roads.push([i]);
     }
+    const runsOf = (ids: number[]) => {
+      const runs: number[][] = [];
+      for (const i of ids) {
+        const run = runs[runs.length - 1];
+        if (run && agree(run[run.length - 1], i)) run.push(i); else runs.push([i]);
+      }
+      return runs;
+    };
+    const mean = (run: number[]) => run.reduce((sum, i) => sum + lateral[i], 0) / run.length;
+    /**
+     * What is left of a road's snaps, smoothed across its lanes: a short stretch in another lane with the same lane
+     * either side of it goes (a lane added on the turn's side for 100 m, the line stepping over to it and back —
+     * 묵동IC, 2026-10-15); and where the line does move over, the snaps STEP_SPREAD_M either side of the step go, so
+     * the line crosses over that far, not between two snaps 20 m apart (춘천분기점's two-lane ramp).
+     */
+    const smoothRoad = (ids: number[]) => {
+      const runs = runsOf(ids.filter((i) => !drop.has(i)));
+      for (let k = 1; k + 1 < runs.length; k++) {
+        const [a, b, c] = [runs[k - 1], runs[k], runs[k + 1]];
+        const long = along[b[b.length - 1]] - along[b[0]];
+        if (long < EXCURSION_M && Math.abs(mean(a) - mean(c)) <= SLOPE_TOL_M * 1.5 && Math.abs(mean(b) - mean(a)) > LANE_STEP_M) for (const i of b) drop.add(i);
+      }
+      const left = runsOf(ids.filter((i) => !drop.has(i)));
+      for (let k = 1; k < left.length; k++) {
+        const at = (along[left[k - 1][left[k - 1].length - 1]] + along[left[k][0]]) / 2;
+        const before = left[k - 1].filter((i) => at - along[i] < STEP_SPREAD_M);
+        const after = left[k].filter((i) => along[i] - at < STEP_SPREAD_M);
+        // Never a whole run: one snap of each stays to cross between.
+        if (before.length < left[k - 1].length) for (const i of before) drop.add(i);
+        if (after.length < left[k].length) for (const i of after) drop.add(i);
+      }
+    };
     for (const road of roads) {
       const side = bias(road[0]);
       if (side === 0) {
@@ -346,17 +384,9 @@ export function applySnap(path: LonLat[], snapped: (LonLat | null)[], fixed: boo
           if (last < 0 || agree(last, i)) { last = i; continue; }
           if (Math.abs(lateral[i]) > Math.abs(lateral[last])) drop.add(i); else { drop.add(last); last = i; }
         }
+        smoothRoad(road);
         continue;
       }
-      const runsOf = (ids: number[]) => {
-        const runs: number[][] = [];
-        for (const i of ids) {
-          const run = runs[runs.length - 1];
-          if (run && agree(run[run.length - 1], i)) run.push(i); else runs.push([i]);
-        }
-        return runs;
-      };
-      const mean = (run: number[]) => run.reduce((sum, i) => sum + lateral[i], 0) / run.length;
       /**
        * Of two runs side by side, the one that goes; null when both stay. A run of MIN_RUN snaps or more is a lane
        * the road has there (dropped, the line cut diagonally over the lanes from the snaps before to those after it):
@@ -381,6 +411,7 @@ export function applySnap(path: LonLat[], snapped: (LonLat | null)[], fixed: boo
         for (const i of gone) drop.add(i);
         ids = ids.filter((i) => !gone.has(i));
       }
+      smoothRoad(ids);
     }
     for (const i of drop) keep[i] = null;
     const shift: (readonly [number, number] | null)[] = keep.map((s, i) => {
@@ -441,7 +472,7 @@ export function applySnap(path: LonLat[], snapped: (LonLat | null)[], fixed: boo
  */
 const BIAS_TOWN_M = 300;
 const BIAS_FAST_M = 600;
-export interface BiasTurn { alongM: number; bias: number; reach: number }
+export interface BiasTurn { alongM: number; bias: number; reach: number; /** How far out of it its side is kept (EXIT_M; a fork's FORK_EXIT_M). */ exit?: number }
 /** The turns of [route] that want a lane on their side: where they are along [line], which side, and from how far before. */
 export function biasTurns(route: Route, line = new Line(route.path)): BiasTurn[] {
   const turns: BiasTurn[] = [];
@@ -454,7 +485,8 @@ export function biasTurns(route: Route, line = new Line(route.path)): BiasTurn[]
     if (bias !== 0) {
       const p = line.project(g.at, 0, line.path.length);
       const fast = route.motorways?.some(([a, b]) => p.segment >= a && p.segment < b) ?? false;
-      turns.push({ alongM: p.alongM, bias, reach: (fast ? BIAS_FAST_M : BIAS_TOWN_M) + RAMP_M });
+      const fork = m === "slight-left" || m === "slight-right" || m === "ramp-left" || m === "ramp-right";
+      turns.push({ alongM: p.alongM, bias, reach: (fast ? BIAS_FAST_M : BIAS_TOWN_M) + RAMP_M, ...(fork ? { exit: FORK_EXIT_M } : {}) });
     }
   }
   return turns.sort((a, b) => a.alongM - b.alongM);
@@ -466,6 +498,12 @@ export function biasTurns(route: Route, line = new Line(route.path)): BiasTurn[]
  * the left turn's side reached back over the corner, and the change of road started no ramp.
  */
 export const EXIT_M = 30;
+/**
+ * Out of a fork — an exit, a ramp, a split of the motorway — its side is kept this far: the ramp runs on beside the
+ * road it left, its lanes the road's neighbours, and with no side asked the line took the middle of them all — the
+ * motorway's lanes — for 350 m, then came back to the ramp (춘천분기점, the pretend drive of 2026-10-15).
+ */
+export const FORK_EXIT_M = 400;
 /** Before the next turn the line is to be over in its lane by at least this, whatever is left between the two. */
 const SETTLE_M = 20;
 /**
@@ -484,7 +522,7 @@ export function sidesAlong(line: Line, turns: BiasTurn[]): Required<SnapSides> {
     const prev = [...turns].reverse().find((p) => p.alongM + 0.5 < along);
     if (prev) {
       const gap = t ? t.alongM - prev.alongM : Infinity;
-      const exit = Math.max(0, Math.min(EXIT_M, gap - RAMP_M - SETTLE_M));
+      const exit = Math.max(0, Math.min(prev.exit ?? EXIT_M, gap - RAMP_M - SETTLE_M));
       if (along - prev.alongM <= exit + 0.5) { biases[i] = prev.bias; continue; }
     }
     if (t) biases[i] = t.bias;
@@ -558,7 +596,7 @@ export async function snapRouteWith(route: Route, snap: Snapper): Promise<Route>
     const fixed0: boolean[] = [];
     for (const [a, b] of route.threaded ?? []) for (let i = a; i < b; i++) fixed0[i] = true;
     // Dense before each turn (its lane's reach) and just after it (the exit lane and the move on to the next one's).
-    const dense = densify(route.path, turns.flatMap((t) => [[t.alongM - t.reach - DENSE_M, t.alongM], [t.alongM, t.alongM + EXIT_M + RAMP_M + DENSE_M]] as [number, number][]), fixed0);
+    const dense = densify(route.path, turns.flatMap((t) => [[t.alongM - t.reach - DENSE_M, t.alongM], [t.alongM, t.alongM + (t.exit ?? EXIT_M) + RAMP_M + DENSE_M]] as [number, number][]), fixed0);
     const move = (i: number) => dense.map[Math.min(i, n0)];
     const threaded = (route.threaded ?? []).map(([a, b]) => [move(a), move(b)] as [number, number]);
     const fixed: boolean[] = [];
