@@ -44,25 +44,31 @@ export function laneGlyph(turns: Turn[]): string {
 }
 
 /**
- * A U-turn lane that may go other ways too, as one arrow: the stem up the
- * right, the U-turn bending over off it to the left and coming down, the
- * other ways branching off the same stem below it — never two arrows laid
- * on one another. Without 직진 the stem's top is itself the U-turn.
+ * A U-turn lane that may go other ways too, as one arrow, as the road has it painted: the stem up the right, the way
+ * on at its top — straight on, else the left turn bending off it — and the U-turn as a hook lower down, off the stem
+ * to the left and back down; a left turn beside straight on branches off between the two. Never two arrows laid on one
+ * another. (The U-turn was the top and the left turn under it, upside down to what is painted — 2026-10-15.) A U-turn
+ * that goes only right besides keeps the U-turn on top.
  */
 function uturnGlyph(set: Set<Turn>): string {
   const x = 16;
   const out: string[] = [];
+  if (!set.has("straight") && !set.has("left")) {
+    // U-turn or right: the U-turn is the stem's top, the right turn off it low down.
+    out.push(`<path d="M${x} 22V8.5a3.5 3.5 0 0 0-7 0v3"/>`, `<path d="M${x - 9.5} 9l2.5 2.5 2.5-2.5"/>`);
+    if (set.has("right")) out.push(`<path d="M${x} 19.5h5"/>`, `<path d="M19 17l2.5 2.5-2.5 2.5"/>`);
+    return out.join("");
+  }
   if (set.has("straight")) {
     out.push(`<path d="M${x} 22V3"/>`, `<path d="M${x - 3.5} 6.5 ${x} 3l3.5 3.5"/>`);
-    // Off the stem's side, under the straight arrow's head.
-    out.push(`<path d="M${x} 13a3.5 3.5 0 0 0-7 0v1.5"/>`, `<path d="M${x - 9.5} 12l2.5 2.5 2.5-2.5"/>`);
+    if (set.has("left")) out.push(`<path d="M${x} 11H5"/>`, `<path d="M7.5 8.5 5 11l2.5 2.5"/>`);
   } else {
-    out.push(`<path d="M${x} 22V8.5a3.5 3.5 0 0 0-7 0v3"/>`, `<path d="M${x - 9.5} 9l2.5 2.5 2.5-2.5"/>`);
+    // The left turn is the stem's top, bending round to the left.
+    out.push(`<path d="M${x} 22V10a3 3 0 0 0-3-3H5"/>`, `<path d="M8.5 3.5 5 7l3.5 3.5"/>`);
   }
-  // The other ways low on the stem, clear of the U-turn's head.
-  const y = 19.5;
-  if (set.has("left")) out.push(`<path d="M${x} ${y}H5"/>`, `<path d="M7.5 ${y - 2.5} 5 ${y}l2.5 2.5"/>`);
-  if (set.has("right")) out.push(`<path d="M${x} ${y}h5"/>`, `<path d="M19 ${y - 2.5}l2.5 2.5-2.5 2.5"/>`);
+  if (set.has("right")) out.push(`<path d="M${x} 13h5"/>`, `<path d="M19 10.5l2.5 2.5-2.5 2.5"/>`);
+  // The U-turn low on the stem: off to the left, over, and back down.
+  out.push(`<path d="M${x} 19a3.5 3.5 0 0 0-7 0v2"/>`, `<path d="M${x - 9.5} 18.5l2.5 2.5 2.5-2.5"/>`);
   return out.join("");
 }
 
