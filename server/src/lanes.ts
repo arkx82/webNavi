@@ -256,6 +256,39 @@ export class LaneIndex {
     }
   }
 
+  /**
+   * The carriageway at [p] running [deg]: the IDs of the lane nearest it that way (within SNAP_M) and of the lanes
+   * beside it by the map's own neighbours (l, r). Null where there is none.
+   */
+  carriageway(p: LonLat, deg: number): Set<string> | null {
+    const db = this.open();
+    if (!db) return null;
+    const d = SNAP_M / M, k = d / Math.cos((p[1] * Math.PI) / 180);
+    const near = db.near.all(p[0] + k, p[0] - k, p[1] + d, p[1] - d) as unknown as Link[];
+    let best: { l: Link; off: number } | null = null;
+    for (const l of near) {
+      const hit = nearestOn(p, JSON.parse(l.coords) as LonLat[]);
+      if (!hit || hit.off > SNAP_M || Math.abs(diff(deg, hit.bearing)) > SNAP_DEG || !l.id) continue;
+      if (!best || hit.off < best.off) best = { l, off: hit.off };
+    }
+    if (!best) return null;
+    const out = new Set<string>([best.l.id!]);
+    for (const side of ["l", "r"] as const) {
+      for (let at: Link | null = best.l, guard = 0; at && at[side] && guard < 12; guard++) {
+        at = this.byId(db, at[side]);
+        if (at?.id) out.add(at.id);
+      }
+    }
+    return out;
+  }
+
+  /** A lane link's line by its ID; null where the index has none (or is not built). */
+  linkLine(id: string): LonLat[] | null {
+    const db = this.open();
+    const l = db ? this.byId(db, id) : null;
+    return l ? (JSON.parse(l.coords) as LonLat[]) : null;
+  }
+
   private byId(db: Statements, id: string | null): Link | null {
     return id ? ((db.byId.get(id) as unknown as Link | undefined) ?? null) : null;
   }

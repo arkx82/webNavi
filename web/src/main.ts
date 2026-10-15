@@ -3053,7 +3053,7 @@ async function placeLimits(w: RouteWatch, r: Route) {
   }
 }
 
-const SOURCE_NAMES: Record<string, string> = { tmap: "TMAP", nodelink: "표준노드링크", camera: "단속 카메라", zone: "보호구역", section: "구간 단속" };
+const SOURCE_NAMES: Record<string, string> = { tmap: "TMAP", nodelink: "표준노드링크", sign: "표지판", camera: "단속 카메라", zone: "보호구역", section: "구간 단속" };
 let signShown: { kmh: number; src: string } | null = null;
 function showRoadSign(sign: { kmh: number; src: string } | null, speedMps: number | null | undefined) {
   const box = el("road-sign");

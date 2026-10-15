@@ -36,6 +36,7 @@ import { Db } from "./db.js";
 import { registerUsers } from "./users.js";
 import { RefusedUrl, fetchPublic, isApiPath, registerGuard } from "./guard.js";
 import { hdJunctions, hdLanes, registerHdmap } from "./hdmap.js";
+import { SpeedSigns } from "./road/signs.js";
 import { registerShare } from "./share.js";
 import { registerCar } from "./car/index.js";
 import fastifyCompress from "@fastify/compress";
@@ -589,7 +590,7 @@ const admin = registerAdmin(app, settings, {
     "음성 모델": speaker.ready ? (speaker.spent.current() ?? "무료 한도 모두 소진") + (speaker.spent.spentModels().length ? ` (소진: ${speaker.spent.spentModels().length}개)` : "") : false,
     "주유 가격": nearby.opinet.ready, 충전소: nearby.ev.ready ? true : nearby.kakao.ready ? "카카오 (빈 충전기 수 없음)" : false,
     시설물: safety.features.length,
-    제한속도: (() => { const l = limits.status(); return `TMAP 오늘 ${l.tmapCallsToday}/${l.budget}건 · 노드링크 ${l.nodelink ? "있음" : "없음"}${l.lastError ? ` · 마지막 오류 ${l.lastError}` : ""}`; })(),
+    제한속도: (() => { const l = limits.status(); return `TMAP 오늘 ${l.tmapCallsToday}/${l.budget}건 · 노드링크 ${l.nodelink ? "있음" : "없음"} · 정밀도로지도 속도 표지판 ${speedSigns.size}개${l.lastError ? ` · 마지막 오류 ${l.lastError}` : ""}`; })(),
     "색깔 유도선": `${colourGuides.ready ? "도로공사 있음" : "도로공사 없음"} · 서울시 ${seoulLines.count}곳`,
     "단속 카메라": cameras ? `${cameras.features.length}대 (${new Date(cameras.at).toLocaleDateString("ko-KR")})` : camerasError ?? "아직 없음",
     ...Object.fromEntries(DATASETS.map((d) => {
@@ -637,6 +638,14 @@ registerGuard(app);
 registerShare(app, db, search);
 // 정밀도로지도 tiles, built into WORK_DIR by tools/hdmap/build.py.
 const hdTiles = registerHdmap(app, workDir);
+// The speed signs by the road from 정밀도로지도 (road/signs.ts), their lanes' way read from the lane index: over the
+// route's limits from TMAP and 표준노드링크. Read again when tools/hdmap/build.py makes a newer file (checked hourly).
+const speedSigns = new SpeedSigns(join(workDir, "hdmap", "signs.geojsons"), (id) => hdLanes?.linkLine(id) ?? null, (m) => app.log.info(m),
+  (p, deg) => hdLanes?.carriageway(p, deg) ?? null);
+limits.useSigns(speedSigns);
+const readSigns = () => void speedSigns.refresh().catch((e) => app.log.warn({ err: (e as Error).message }, "speed signs"));
+readSigns();
+setInterval(readSigns, 3_600_000).unref();
 
 // The owner's own picture of the car, seen from above with its front up (안내 설정 → 자차 모양 → 내 사진): kept in
 // CONFIG_DIR beside the keys, never in the repository, so a picture of someone else's is the owner's alone.

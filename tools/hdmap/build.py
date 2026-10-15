@@ -7,6 +7,9 @@
   links.geojsons   lane-level links (A2_LINK / NT2_LINK), for the lane guidance: lane no., type, turn, from/to/left/right
   lights.geojsons  traffic lights (C1_TRAFFICLIGHT / SF3_TRAFFICLIGHT): t = type (2019: 1–9 a car's, 11 a walker's; 2024: 1xx a car's)
   bumps.geojsons   speed bumps (C4_SPEEDBUMP / SF5_SPEEDBUMP) as polygons; the server takes their middle
+  signs.geojsons   speed signs (B1_SAFETYSIGN whose Remark speaks of 속도 — 최고속도제한 50km …), with the lane link
+                   they stand for; the server puts the posted limit on the route (server/src/road/signs.ts). The 2024
+                   schema's SF2_TRAFFICSIGN is not read: a class (200 …) and a bare number, no link to tell its way
   hdmap.mbtiles    lines + marks as vector tiles, zoom 15–18 (tippecanoe), served by the server
 
 The zips are read in place (GDAL /vsizip/): of their 360 GB only the vector
@@ -50,7 +53,10 @@ LAYERS = {
               for layer in ("A2_LINK", "NT2_LINK")],
     "lights": [("C1_TRAFFICLIGHT", {"id": ["ID"], "t": ["Type"], "link": ["LinkID"]}), ("SF3_TRAFFICLIGHT", {"id": ["ID"], "t": ["LightType"]})],
     "bumps": [("C4_SPEEDBUMP", {"id": ["ID"], "link": ["LinkID"]}), ("SF5_SPEEDBUMP", {"id": ["ID"]})],
+    "signs": [("B1_SAFETYSIGN", {"id": ["ID"], "t": ["Type"], "rem": ["Remark"], "link": ["LinkID"], "lane": ["Ref_Lane"]})],
 }
+# Of a layer, only the features this keeps (all, where none is named): of the signs, the speed ones (a few in a hundred).
+KEEP = {"signs": lambda p: "속도" in str(p.get("rem") or "")}
 if ONLY_LAYERS:
     unknown = [l for l in ONLY_LAYERS if l not in LAYERS]
     if unknown: sys.exit(f"모르는 레이어: {unknown} (있는 것: {list(LAYERS)})")
@@ -127,10 +133,10 @@ def in_korea(coords):
         return len(coords) >= 2 and LON[0] <= coords[0] <= LON[1] and LAT[0] <= coords[1] <= LAT[1]
     return all(in_korea(c) for c in coords)
 
-def clean_join(parts, out_path):
+def clean_join(parts, out_path, keep=None):
     """The parts into one file, a feature a line; anything else (a half-written part, NUL bytes, a
-    feature off the map) is left out. Written as <out>.new and moved into place whole, so the server
-    never reads a half of it. Returns (kept, bad lines dropped, features outside Korea dropped)."""
+    feature off the map, one [keep] turns down) is left out. Written as <out>.new and moved into place
+    whole, so the server never reads a half of it. Returns (kept, bad lines dropped, features outside Korea dropped)."""
     kept = dropped = far = 0
     tmp = out_path + ".new"
     with open(tmp, "w", encoding="utf-8") as out:
@@ -149,6 +155,8 @@ def clean_join(parts, out_path):
                         continue
                     if not in_korea(feature["geometry"].get("coordinates")):
                         far += 1
+                        continue
+                    if keep and not keep(feature.get("properties") or {}):
                         continue
                     out.write(line + "\n")
                     kept += 1
@@ -228,7 +236,7 @@ def main():
     # One file a layer, a whole feature a line.
     for layer in LAYERS:
         parts = [os.path.join(stage, layer, f) for f in sorted(os.listdir(os.path.join(stage, layer)))]
-        kept, dropped, far = clean_join(parts, os.path.join(OUT, f"{layer}.geojsons"))
+        kept, dropped, far = clean_join(parts, os.path.join(OUT, f"{layer}.geojsons"), KEEP.get(layer))
         print(f"{layer}: {kept} features ({dropped} bad lines, {far} outside Korea dropped), {os.path.getsize(os.path.join(OUT, f'{layer}.geojsons')) / 1e6:.0f} MB", flush=True)
     shutil.rmtree(stage, ignore_errors=True)
     if "lines" in LAYERS or "marks" in LAYERS: tiles()

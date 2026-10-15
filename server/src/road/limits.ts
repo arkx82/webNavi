@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
+import type { PostedAt } from "./signs.js";
 
 /**
  * The speed limit of the road, all the way: the round sign at the top of the
@@ -20,7 +21,7 @@ import { DatabaseSync, type StatementSync } from "node:sqlite";
  */
 
 export type LonLat = [number, number];
-export type LimitSource = "tmap" | "nodelink";
+export type LimitSource = "tmap" | "nodelink" | "sign";
 /** A stretch of the route at one limit: [from, to] as path positions (vertex index + the fraction to the next). */
 export interface LimitRun {
   from: number;
@@ -61,6 +62,40 @@ const INNER_ID = 9_000_000_000;
 const plausible = (v: unknown): v is number => typeof v === "number" && v >= 20 && v <= 130;
 /** A run shorter than this with the same limit either side is a junction's link, not a change of limit: it takes theirs. */
 export const BLIP_M = 150;
+/**
+ * A speed sign's limit holds from the sign on (road/signs.ts) until the next sign, or where the road's own data
+ * changes (another road), or this far at most; over a stretch the data has nothing for, this far.
+ */
+export const SIGN_HOLD_M = 2_000;
+export const SIGN_FILL_M = 500;
+
+/**
+ * The posted limits [posted] put over the limits each sample has [kmh] (from TMAP and 표준노드링크): from each sign's
+ * sample on, the sign's, while the data says the one road (its value as at the sign) — the data's old or wrong value
+ * for that road is the sign's to put right — up to the next sign, SIGN_HOLD_M at most (SIGN_FILL_M where the data
+ * had none). Returns how many samples a sign set.
+ */
+export function overlaySigns(samples: Sample[], kmh: (number | null)[], src: (LimitSource | null)[], posted: PostedAt[]): number {
+  const data = kmh.slice();
+  let set = 0;
+  for (let k = 0; k < posted.length; k++) {
+    const sign = posted[k], next = posted[k + 1];
+    // The first sample whose stretch (from halfway back) the sign stands in or before.
+    let j0 = samples.findIndex((s, i) => (i + 1 < samples.length ? (s.m + samples[i + 1].m) / 2 : Infinity) >= sign.m);
+    if (j0 < 0) continue;
+    const road = data[j0];
+    for (let j = j0; j < samples.length; j++) {
+      const on = samples[j].m - sign.m;
+      if (on > (road == null ? SIGN_FILL_M : SIGN_HOLD_M)) break;
+      if (next && samples[j].m >= next.m) break;
+      if (j > j0 && data[j] != null && data[j] !== road) break;
+      kmh[j] = sign.kmh;
+      src[j] = "sign";
+      set++;
+    }
+  }
+  return set;
+}
 
 const R = 6_371_008.8;
 const RAD = Math.PI / 180;
@@ -204,6 +239,8 @@ export class SpeedLimits {
   /** The last TMAP limit each car off its route was given, where and which way. */
   private lastTold = new Map<string, { kmh: number; p: LonLat; deg: number; t: number }>();
   private sweptAt = 0;
+  /** 정밀도로지도's speed signs (road/signs.ts), when the HD map is there: useSigns. */
+  private signs: { ready: boolean; along: (path: LonLat[]) => PostedAt[] } | null = null;
 
   constructor(
     private tmapKey: () => string | undefined,
@@ -215,6 +252,11 @@ export class SpeedLimits {
   ) {
     this.remembered = new Remembered(now);
     this.links = new Links(linksDb);
+  }
+
+  /** The posted limits by the road, put over TMAP's and 표준노드링크's along a route. */
+  useSigns(signs: { ready: boolean; along: (path: LonLat[]) => PostedAt[] }) {
+    this.signs = signs;
   }
 
   status() {
@@ -269,6 +311,8 @@ export class SpeedLimits {
       const nl = await this.nodelinkAlong(samples).catch((e) => { this.lastError = `노드링크 ${(e as Error).message}`; return [] as (number | null)[]; });
       nl.forEach((v, i) => { if (kmh[i] == null && v != null) { kmh[i] = v; src[i] = "nodelink"; } });
     }
+    // The speed signs by the road (정밀도로지도), over both.
+    if (this.signs?.ready) overlaySigns(samples, kmh, src, this.signs.along(path));
     // Runs: each sample holds from halfway back to halfway on.
     const runs: LimitRun[] = [];
     for (let i = 0; i < samples.length; i++) {
@@ -474,7 +518,8 @@ export function smooth(runs: LimitRun[], samples: Sample[]): LimitRun[] {
   for (let i = 1; i + 1 < out.length; i++) {
     const before = out[i - 1], r = out[i], after = out[i + 1];
     const touching = Math.abs(before.to - r.from) < 1e-9 && Math.abs(r.to - after.from) < 1e-9;
-    if (touching && before.kmh === after.kmh && r.kmh !== before.kmh && metresAt(r.to) - metresAt(r.from) < BLIP_M) {
+    // A sign's run is what is posted: not a junction's link to be smoothed away.
+    if (touching && r.src !== "sign" && before.kmh === after.kmh && r.kmh !== before.kmh && metresAt(r.to) - metresAt(r.from) < BLIP_M) {
       r.kmh = before.kmh;
       r.src = before.src;
     }
