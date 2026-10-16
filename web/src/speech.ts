@@ -132,11 +132,20 @@ export function turnSay(maneuver: Maneuver, inM: number, road: RoadKind, said: S
 }
 
 /**
+ * TMAP names the place and then its kind again: "공릉터널에서 터널 진입", "구리남양주졸음쉼터에서 졸음쉼터",
+ * "창동 지하차도에서 지하차도" — said as written, "잠시 후 공릉터널에서 터널 진입입니다". The kind once:
+ * "공릉터널 진입", "구리남양주졸음쉼터".
+ */
+export function unrepeated(text: string): string {
+  return text.replace(/(터널|지하차도|고가차도|졸음쉼터|휴게소)에서\s+\1(?=\s|,|$)/g, "$1");
+}
+
+/**
  * A provider's guide text, made sayable: without the "…후 …을 따라 15m 이동"
  * tail, the quotes and brackets, and with metres in words.
  */
 export function spokenGuide(text: string): string {
-  return text
+  return unrepeated(text)
     .replace(/\s*후\s+.*?(을|를)?\s*따라\s*\d+\s*m\s*이동\s*$/, "")
     .replace(/\s*(을|를)\s*따라\s*\d+\s*m\s*이동\s*$/, "")
     .replace(/[“”"'‘’]/g, "")

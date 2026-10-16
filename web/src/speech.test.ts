@@ -222,3 +222,12 @@ test("a roundabout says its way out as a clock hour at 300 m and 잠시 후", ()
   const fixed = new Set(fixedPhrases());
   for (let h = 1; h <= 12; h++) for (const r of [300, 150]) assert.ok(fixed.has(roundaboutPhrase(h, r)));
 });
+
+test("a place named with its kind says the kind once", () => {
+  assert.equal(spokenGuide("공릉터널에서 터널 진입"), "공릉터널 진입");
+  assert.equal(spokenGuide("구리남양주졸음쉼터에서 졸음쉼터"), "구리남양주졸음쉼터");
+  assert.equal(spokenGuide("창동 지하차도에서 지하차도"), "창동 지하차도");
+  // Another kind after the place is kept: it is the action.
+  assert.equal(spokenGuide("호법분기점에서 분기도로 진입"), "호법분기점에서 분기도로 진입");
+  assert.equal(spokenGuide("한천교에서 고가차도 진입"), "한천교에서 고가차도 진입");
+});

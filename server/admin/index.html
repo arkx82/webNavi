@@ -291,13 +291,13 @@ function showUsers(users) {
     };
     tr.querySelector(".hint").textContent = `마지막 접속 ${when(u.lastSeen)}`;
     tr.querySelector("[data-pw]").onclick = async () => {
-      const pw = window.prompt(`${u.name} 의 새 비밀번호 (6자 이상)`);
+      const pw = window.prompt(`${u.name} 계정의 새 비밀번호 (6자 이상)`);
       if (!pw) return;
       try { await send("POST", `/admin/api/users/${u.id}/password`, { password: pw }); say("users-msg", `${u.name}: 비밀번호를 바꿨습니다`, "ok"); }
       catch (e) { say("users-msg", e.message, "bad"); }
     };
     tr.querySelector("[data-del]").onclick = async () => {
-      if (!window.confirm(`${u.name} 를 삭제할까요? 저장한 장소와 설정도 지워집니다.`)) return;
+      if (!window.confirm(`${u.name} 계정을 삭제할까요? 저장한 장소와 설정도 지워집니다.`)) return;
       try { showUsers((await send("DELETE", `/admin/api/users/${u.id}`)).users); say("users-msg", `${u.name}: 삭제했습니다`, "ok"); }
       catch (e) { say("users-msg", e.message, "bad"); }
     };

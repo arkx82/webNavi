@@ -29,7 +29,7 @@ import { GUIDE_LINES } from "../../server/src/phrases";
 import { ALERT_KINDS, alertPhrase, type AlertKind } from "../../server/src/phrases";
 import { Nearby } from "./nearby";
 import { autoZoom } from "./autozoom";
-import { EVENTS, facilityOf, straightMatters, turnRungs, turnSay } from "./speech";
+import { EVENTS, facilityOf, straightMatters, turnRungs, turnSay, unrepeated } from "./speech";
 import { repaint, sharedShare } from "./traffic";
 import { junctionKind, junctionOf, laneHint, motorwayAt, motorwaySides, namedTurnPhrase } from "./highway";
 import { CLOSEUP_CAR_AT, CLOSEUP_PITCH, CloseupHold, closeupFrom, isTricky, zoomToSee, type Closeup } from "./closeup";
@@ -2593,7 +2593,7 @@ function prepareHighway(r: Route) {
 }
 
 /** A guide as the panel shows it: without TMAP's "… 후 영동 고속도로를 따라 121m 이동" tail. */
-const shortGuide = (text: string) => text.replace(/\s*후\s+.*?(을|를)?\s*따라\s*\d+\s*m\s*이동\s*$/, "").replace(/\s*(을|를)\s*따라\s*\d+\s*m\s*이동\s*$/, "").trim() || text;
+const shortGuide = (text: string) => unrepeated(text).replace(/\s*후\s+.*?(을|를)?\s*따라\s*\d+\s*m\s*이동\s*$/, "").replace(/\s*(을|를)\s*따라\s*\d+\s*m\s*이동\s*$/, "").trim() || text;
 /** The same, once a guide (it is asked for every frame). */
 const shortGuides = new WeakMap<Guide, string>();
 function shortOf(g: Guide): string {
@@ -3411,7 +3411,7 @@ function openGuide(open: boolean) {
 }
 el("guide-open").addEventListener("click", () => openGuide(el("guide").hidden));
 el("guide-close").addEventListener("click", () => openGuide(false));
-el("account-name").textContent = currentUser() ? `${currentUser()!.name} 로 로그인됨` : "";
+el("account-name").textContent = currentUser() ? `${currentUser()!.name} 계정으로 로그인됨` : "";
 el("logout").addEventListener("click", () => void logout());
 
 // ---- music -----------------------------------------------------------------
@@ -3824,7 +3824,7 @@ const searchService = debounce(async () => {
     if (run !== searchRun) return;
     drawRows(found, hits);
     found.hidden = hits.length === 0;
-    if (hits.length === 0) musicSay(`"${q}" 에 맞는 곡이 없습니다`);
+    if (hits.length === 0) musicSay(`"${q}"에 맞는 곡이 없습니다`);
     else musicSay("");
   } catch (e) {
     if (run === searchRun) musicSay((e as Error).message, true);
