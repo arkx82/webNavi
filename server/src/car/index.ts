@@ -268,7 +268,7 @@ export function registerCar(app: FastifyInstance, settings: Settings, db: Db, ac
     const [host, port] = (settings.get("teslaTelemetryHost") ?? "").split(":");
     const ca = telemetryCa(caFile);
     if (!host) return reply.code(400).send({ error: "텔레메트리 서버 주소(host:port)를 먼저 저장하세요" });
-    if (!ca) return reply.code(400).send({ error: `${caFile} 이 없습니다 (텔레메트리 서버 인증서의 체인)` });
+    if (!ca) return reply.code(400).send({ error: `${caFile} 파일이 없습니다 (텔레메트리 서버 인증서의 체인)` });
     const vins = cars().map((c) => c.vin);
     if (!vins.length) return reply.code(400).send({ error: "연결된 차가 없습니다" });
     try { return { result: await fleet.configure(vins, host, Number(port || 443), ca) }; } catch (e) { return fail(reply, e); }

@@ -378,7 +378,7 @@ export class Nearby {
       if (c.fastTotal) rows.push(["급속", `${c.fastFree}/${c.fastTotal} 사용 가능 · 최대 ${Math.round(c.maxKw)}kW`]);
       if (c.slowTotal) rows.push(["완속", `${c.slowFree}/${c.slowTotal} 사용 가능`]);
       if (c.operator) rows.push(["운영", c.operator]);
-      rows.push(["요금", c.price ? `${c.price.won.toFixed(1)}원/kWh (${c.price.label})` : "정보 없음 — 운영사 회원가는 /admin 에 적어 두면 나옵니다"]);
+      rows.push(["요금", c.price ? `${c.price.won.toFixed(1)}원/kWh (${c.price.label})` : "정보 없음 — 운영사 회원가는 /admin에 적어 두면 나옵니다"]);
       if (c.parkingFree != null) rows.push(["주차", c.parkingFree ? "무료" : "유료"]);
       if (c.useTime) rows.push(["이용", c.useTime]);
     }

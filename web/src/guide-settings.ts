@@ -527,18 +527,18 @@ function voiceList(s: GuideSettings, choose: (voice: string | null) => void): HT
     h.textContent = text;
     box.append(h);
   };
-  row(`기본 (${voices.current})`, "/admin 에서 정한 목소리", null);
+  row(`기본 (${voices.current})`, "/admin에서 정한 목소리", null);
   head("내가 만든 목소리");
   if (voices.mine.length === 0) {
     const none = document.createElement("div");
     none.className = "gs-sub";
-    none.textContent = "Model Studio 에서 만든 목소리가 여기에 나옵니다";
+    none.textContent = "Model Studio에서 만든 목소리가 여기에 나옵니다";
     box.append(none);
   }
   if (voices.mine.length && voices.mineSpent) {
     const note = document.createElement("div");
     note.className = "gs-sub warn";
-    note.textContent = "음성 복제 모델의 무료 한도가 소진되어, 지금은 기본 목소리로 나옵니다 (Model Studio 에서 '무료 한도만 사용'을 끄면 다시 이 목소리로)";
+    note.textContent = "음성 복제 모델의 무료 한도가 소진되어, 지금은 기본 목소리로 나옵니다 (Model Studio에서 '무료 한도만 사용'을 끄면 다시 이 목소리로)";
     box.append(note);
   }
   for (const v of voices.mine) row(v.name, voices.mineSpent ? "직접 만든 목소리 · 지금은 기본 목소리로 나옴" : "직접 만든 목소리", v.id);

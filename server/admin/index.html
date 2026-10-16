@@ -542,7 +542,7 @@ function showCar(st) {
     `<a href="${f.publicKey}" target="_blank" style="color:var(--accent)">공개키</a>`,
   ].join(" · ");
   // Each car with the account it is given to: only that account's car page gets its speed and place.
-  const users = [["", "(계정 없음 — 아무도 안 받음)"], ...st.users.map((u) => [u, `${u} 만 받음`])];
+  const users = [["", "(계정 없음 — 아무도 안 받음)"], ...st.users.map((u) => [u, `${u}만 받음`])];
   $("car-cars").innerHTML = st.cars.map((c) => {
     const s = st.streams[c.vin] || {};
     const opts = users.map(([v, t]) => `<option value="${v}"${(c.user || "") === v ? " selected" : ""}>${t}</option>`).join("");

@@ -16,7 +16,7 @@ async function start() {
   }
   if (answer.status === 401) {
     const j = (await answer.json().catch(() => ({}))) as { users?: boolean };
-    showLogin(j.users === false ? "아직 사용자가 없습니다 — /admin 에서 만드세요" : "");
+    showLogin(j.users === false ? "아직 사용자가 없습니다 — /admin에서 만드세요" : "");
     return;
   }
   let user: Me | undefined;

@@ -1093,7 +1093,7 @@ function setBase(next: Base, remember = true) {
   try {
     if (base === "tmap") ground = new TmapBase(el("ground"), map);
   } catch (e) {
-    log(`${BASE_NAMES[base]} 지도 실패 ${(e as Error).message} — OSM 으로`);
+    log(`${BASE_NAMES[base]} 지도 실패 ${(e as Error).message} — OSM으로`);
     return setBase("osm", false);
   }
   el("base-label").textContent = BASE_NAMES[base];
@@ -3463,7 +3463,7 @@ async function drawSources(): Promise<MusicSource[]> {
   }
   if (connected.length === 0) {
     el("mini-artist").textContent = "설정 페이지에서 계정을 연결하세요";
-    musicSay("연결된 음악 계정이 없습니다. /admin 에서 TIDAL 을 연결하면 여기에 나타납니다.");
+    musicSay("연결된 음악 계정이 없습니다. /admin에서 TIDAL을 연결하면 여기에 나타납니다.");
   }
   // No account connected: no music button either (it is back once one is, on the next load).
   el("music-dock").hidden = connected.length === 0 && !music;
@@ -3867,7 +3867,7 @@ async function showLists() {
   el("music-found").hidden = true;
   const filter = el<HTMLInputElement>("list-filter");
   filter.value = "";
-  filter.placeholder = music.search ? `${music.label} 에서 곡·재생목록 찾기` : "플레이리스트 찾기 (초성도 돼요)";
+  filter.placeholder = music.search ? `${music.label}에서 곡·재생목록 찾기` : "플레이리스트 찾기 (초성도 돼요)";
   filter.hidden = !music.search;
   try {
     const lists = await music.playlists();
