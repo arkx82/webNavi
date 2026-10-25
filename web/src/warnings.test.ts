@@ -164,6 +164,8 @@ test("a camera's sentence ends as a sentence: its limit, or what it is", () => {
   const say = (kind: Feature["kind"], limit?: number) => phraseFor({ feature: { id: "x", kind, lon: 0, lat: 0, limit }, alongM: 0, inM: 0, rungM: 300 });
   assert.equal(say("speed", 80), "삼백미터 앞에 과속 단속 카메라가 있습니다, 제한 속도 팔십입니다");
   assert.equal(say("speed"), "삼백미터 앞에 과속 단속 카메라가 있습니다");
+  assert.equal(say("signal", 50), "삼백미터 앞에 신호 단속 카메라가 있습니다, 제한 속도 오십입니다");
+  assert.equal(say("signal"), "삼백미터 앞에 신호 단속 카메라가 있습니다");
   assert.equal(say("section-start", 100), "삼백미터 앞에서 구간 단속이 시작됩니다, 제한 속도 백입니다");
   assert.equal(say("section-start"), "삼백미터 앞에서 구간 단속이 시작됩니다");
   assert.equal(say("school", 30), "삼백미터 앞부터 어린이 보호구역입니다, 제한 속도 삼십입니다");

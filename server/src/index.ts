@@ -41,7 +41,8 @@ import { registerShare } from "./share.js";
 import { registerCar } from "./car/index.js";
 import fastifyCompress from "@fastify/compress";
 import { Traffic } from "./road/traffic.js";
-import { SpeedLimits, type LonLat as LimitLonLat } from "./road/limits.js";
+import { AHEAD_MAX_M, roadAhead } from "./road/ahead.js";
+import { SpeedLimits, type Fetch, type LonLat as LimitLonLat } from "./road/limits.js";
 import { SeoulLines } from "./road/seoul-lines.js";
 import { HdPoints } from "./safety/hd-points.js";
 
@@ -312,6 +313,22 @@ app.get<{ Querystring: { at?: string; deg?: string } }>("/api/road/limit", async
   if (!at) return reply.code(400).send({ error: "at is lon,lat" });
   const deg = request.query.deg != null && request.query.deg !== "" && Number.isFinite(Number(request.query.deg)) ? Number(request.query.deg) : null;
   return limits.here(request.user?.name ?? request.ip, at, deg);
+});
+
+// 안전운전 모드: the road in front of a car with no route (road/ahead.ts), for its cameras to be warned of as on a route.
+const osrmFetch: Fetch = async (url) => {
+  const a = await fetch(url, { signal: AbortSignal.timeout(5000) });
+  return { status: a.status, json: () => a.json() };
+};
+app.get<{ Querystring: { at?: string; deg?: string; m?: string } }>("/api/road/ahead", async (request, reply) => {
+  const at = lonLat(request.query.at ?? "");
+  const deg = Number(request.query.deg);
+  if (!at || request.query.deg == null || !Number.isFinite(deg)) return reply.code(400).send({ error: "at is lon,lat and deg a heading" });
+  const base = env.KOREA_OSRM_URL;
+  if (!base) return reply.code(503).send({ error: "자체 경로(OSRM)가 없습니다" });
+  const m = Math.min(AHEAD_MAX_M, Math.max(500, Number(request.query.m) || 2000));
+  const road = await roadAhead(base, at, deg, m, osrmFetch).catch((e) => { app.log.warn({ err: (e as Error).message }, "road ahead"); return null; });
+  return road ?? { path: null };
 });
 
 // 노면색깔유도선 at a motorway junction: which colour of line leads to each branch.

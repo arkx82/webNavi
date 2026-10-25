@@ -453,6 +453,13 @@ button.switch.on::after { left: 25px; }
   background: rgba(255,255,255,.08); font-size: 15px; white-space: nowrap;
   border: 2px solid transparent;
 }
+/* 안전운전 모드: a small mark under the speed while the road ahead is watched with no route. */
+#safe-chip { align-self: flex-start; display: flex; align-items: center; gap: 6px; padding: 3px 10px 3px 8px; border-radius: 999px;
+  background: rgba(46, 204, 113, .16); color: #2ecc71; font-size: 13px; font-weight: 700; }
+#safe-chip[hidden] { display: none; }
+body.day #safe-chip { color: #16803c; background: rgba(22, 128, 60, .12); }
+/* Without a route the camera card sits in the narrow panel under the speed: no side margin. */
+#hud > #cam { margin: 0; }
 /* Inline symbols (icons.ts): the size of the text they sit in, in its colour. */
 .gl { width: 1.1em; height: 1.1em; vertical-align: -0.2em; fill: currentColor; }
 button.icon .gl { width: 22px; height: 22px; vertical-align: 0; }
@@ -576,6 +583,8 @@ button.ctl.wx { position: relative; }
   box-shadow: 0 6px 24px rgba(0,0,0,.45); display: flex; flex-direction: column; gap: 10px; overflow: auto;
   animation: drop .18s ease-out;
 }
+/* 목적지 창 위치 "속도 아래": under the speed at the top left, the list down the left side rather than over the map's middle. */
+body.dest-left #dest-panel { left: 16px; top: calc(var(--hud-bottom, 120px) + 10px); max-width: calc(100% - 32px); max-height: calc(100% - var(--hud-bottom, 120px) - 26px); }
 @keyframes drop { from { transform: translateY(-24px); opacity: 0; } to { transform: none; opacity: 1; } }
 #dest-panel > section { display: flex; flex-direction: column; gap: 10px; }
 #dest-panel > section[hidden] { display: none; }

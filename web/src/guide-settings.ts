@@ -42,6 +42,11 @@ export interface GuideSettings {
   colorLines: boolean;
   /** The 진단 log sent to the server, to be read after a drive (users.ts keeps it under WORK_DIR). */
   sendLogs: boolean;
+  /**
+   * 목적지 창 위치: under the speed at the top left (a tester's wish, 2026-10-25: the list in the middle of the screen
+   * stood over the map), or at the top beside it, as before.
+   */
+  destAt: "left" | "top";
   /** 화면 배치: the full panel, or a narrow one with only what a glance needs. */
   layout: "classic" | "mini";
   /** 낮/밤: by the sun where the car is, or always light, or always dark (theme.ts). */
@@ -93,11 +98,16 @@ export interface GuideSettings {
   nextLight: boolean;
   /** 경로 막힘 막대: the whole route's traffic up the map's right edge (traffic-bar.ts). */
   trafficBar: boolean;
-  /** Where the lane card stands on the map: under the car (NAVER's cluster screen, 2026-10-15) or at the top. */
-  lanesAt: "car" | "top";
+  /**
+   * Where the lane card stands on the map: under the car (NAVER's cluster screen, 2026-10-15), over it (a tester's
+   * wish, 2026-10-25), or at the top.
+   */
+  lanesAt: "car" | "above" | "top";
   /** "잠시 후 점멸 신호 교차로입니다" at a light switched to flashing for the night. */
   flashSignals: boolean;
   cameras: boolean;
+  /** 안전운전 모드: with no route, the cameras and the rest on the road the car is on, warned of all the same (safe-drive.ts). */
+  safeDrive: boolean;
   /** Where camera warnings start: 1000, 600 or 300 m ahead. */
   cameraFromM: 1000 | 600 | 300;
   sections: boolean;
@@ -129,8 +139,8 @@ export interface GuideSettings {
 export type Mode = "voice" | "show" | "off";
 
 export const DEFAULTS: GuideSettings = {
-  voice: true, voiceName: null, volume: 1, turns: true, junctionNames: true, laneHints: true, merges: true, closeups: true, junction3d: true, junction3dMode: "still", sendLogs: true, layout: "classic", hdLanes: true, hdLanesWhen: "turns", laneGuide: true, colorLines: true, theme: "auto", nightCity: false, carIcon: "model3d", carPaint: PAINTS[0][0], carSize: "large", trafficBar: true, lanesAt: "car", endOnArrive: true, mapDpr: "auto", followFps: "auto", ducking: "soft", fasterRoute: "ask", avoidSchool: false, carData: "auto", rev: 4, uiScale: 1, lightsOnMap: "route", camerasOnMap: "route", nextLight: true, flashSignals: true,
-  cameras: true, cameraFromM: 600, sections: true, schools: true,
+  voice: true, voiceName: null, volume: 1, turns: true, junctionNames: true, laneHints: true, merges: true, closeups: true, junction3d: true, junction3dMode: "still", sendLogs: true, layout: "classic", destAt: "left", hdLanes: true, hdLanesWhen: "turns", laneGuide: true, colorLines: true, theme: "auto", nightCity: false, carIcon: "model3d", carPaint: PAINTS[0][0], carSize: "large", trafficBar: true, lanesAt: "car", endOnArrive: true, mapDpr: "auto", followFps: "auto", ducking: "soft", fasterRoute: "ask", avoidSchool: false, carData: "auto", rev: 4, uiScale: 1, lightsOnMap: "route", camerasOnMap: "route", nextLight: true, flashSignals: true,
+  cameras: true, safeDrive: true, cameraFromM: 600, sections: true, schools: true,
   bumps: "show", curves: "off", accidents: "show", bikeAccidents: "show",
   overspeed: true, overspeedBy: 0,
   schoolZones: "voice", seniorZones: "show", incidents: "voice", roadworks: "show", restAreas: "show", weatherAlerts: "voice",
@@ -296,7 +306,7 @@ const GROUPS: Group[] = [
     { key: "junctionNames", label: "IC · JC 이름", kind: "toggle", sub: "고속도로에서 \"1킬로미터 앞 신갈JC에서 원주 방면\" (이름마다 처음 한 번 음성 합성)" },
     { key: "laneHints", label: "차로 미리 이동", kind: "toggle", sub: "고속도로 출구 · 분기 1km 앞, 나갈 쪽 차로로 (차로 정보가 아닌 방향 기준)" },
     { key: "laneGuide", label: "차로 안내", kind: "toggle", sub: "회전 800m 앞(고속도로 2km)부터 지날 때까지, 그리고 직진 중 앞 차로가 좌·우회전 전용이 되는 곳에서 탈 차로를 아래쪽에 (정밀도로지도가 있는 곳)" },
-    { key: "lanesAt", label: "차로 안내 위치", kind: "choice", options: [["car", "내 차 아래"], ["top", "지도 위쪽"]], sub: "내 차 아래: 차 바로 밑에 거리와 탈 차로를 작게. 3D 분기점 화면이 뜨면 그 안에" },
+    { key: "lanesAt", label: "차로 안내 위치", kind: "choice", options: [["car", "내 차 아래"], ["above", "내 차 위"], ["top", "지도 위쪽"]], sub: "내 차 아래 · 위: 차 바로 밑이나 앞에 거리와 탈 차로를 작게. 지도 위쪽: 화면 위 가운데에 크게. 3D 분기점 화면이 뜨면 어느 쪽이든 그 안에" },
     { key: "colorLines", label: "색깔 유도선", kind: "toggle", sub: "고속도로 분기점 · 나들목(한국도로공사)과 서울시 도로(서울시 위치 자료, 색은 매뉴얼 기준: 오른쪽 분홍 · 두 갈래 왼쪽 녹색)에서 \"분홍색 유도선을 따라가세요\"" },
     { key: "merges", label: "합류 구간", kind: "toggle", sub: "고속도로 입구 · 분기 뒤 램프에서" },
     { key: "closeups", label: "분기점 확대", kind: "toggle", sub: "IC · JC · 출구 500m 앞(시내 250m)에서 지도가 기울어 분기점까지 보이게" },
@@ -307,8 +317,9 @@ const GROUPS: Group[] = [
     { key: "carData", label: "차량 데이터 (테슬라)", kind: "choice", options: [["auto", "켜기"], ["force", "강제 켜기"], ["off", "끄기"]], sub: "터널 · 주차장에서 차의 속도 · 기어 · 위치로 화면의 차를 잇습니다. 켜기: 차의 위치가 이 기기와 1km 안일 때만 씀 (같은 계정의 폰이 집에 주차된 차를 따라 멈추지 않도록). 강제 켜기: 거리와 상관없이. 이 기기에만 저장되고, 지도 오른쪽 위 T 표시를 길게 눌러도 바꿀 수 있음" },
     { key: "endOnArrive", label: "도착하면 안내 종료", kind: "toggle", sub: "도착 안내 10초 뒤에 자동으로 검색 화면으로. 끄면 종료 버튼을 누를 때까지 그대로" },
   ] },
-  { id: "enforce", title: "단속 · 경고", sub: "단속 카메라 · 구간 단속 · 과속 경고음", rows: [
-    { key: "cameras", label: "과속·신호 단속 카메라", kind: "toggle" },
+  { id: "enforce", title: "단속 · 경고", sub: "안전운전 모드 · 단속 카메라 · 구간 단속 · 과속 경고음", rows: [
+    { key: "safeDrive", label: "안전운전 모드", kind: "toggle", sub: "목적지 없이 달릴 때도 지금 달리는 길 앞의 단속 카메라 · 구간 단속 · 어린이 보호구역을 경로 안내 때처럼 알려줌 (갈림길에서는 가장 곧은 길 기준, 꺾으면 그 길로 다시)" },
+    { key: "cameras", label: "과속·신호 단속 카메라", kind: "toggle", sub: "\"육백미터 앞에 신호 단속 카메라가 있습니다, 제한 속도 오십입니다\"처럼 제한 속도까지" },
     { key: "cameraFromM", label: "카메라 안내 시작", kind: "choice", options: [[1000, "1km 앞"], [600, "600m 앞"], [300, "300m 앞"]] },
     { key: "sections", label: "구간 단속", kind: "toggle" },
     { key: "schools", label: "어린이 보호구역 카메라", kind: "toggle" },
@@ -337,11 +348,12 @@ const GROUPS: Group[] = [
     { key: "hdLanesWhen", label: "주행 중 정밀 차선", kind: "choice", options: [["turns", "회전 근처 · 저속만"], ["always", "항상"]], sub: "회전 400 m 안이거나 30 km/h 아래일 때만 그리고, 그 밖에서는 숨겨 시내 주행을 가볍게. 지도를 손으로 움직이면 다 나옴" },
     { key: "nightCity", label: "야경 건물", kind: "toggle", sub: "밤에 3D 화면이면 티맵·네이버 바탕 위에 건물을 옅은 금빛으로 (OpenStreetMap 건물이라 도심 밖에는 드묾. 도로가 가려 보이면 끄세요)" },
   ] },
-  { id: "display", title: "디스플레이", sub: "테마 · 자차 · 배치 · 크기 · 해상도", rows: [
+  { id: "display", title: "디스플레이", sub: "테마 · 자차 · 목적지 창 · 배치 · 크기 · 해상도", rows: [
     { key: "theme", label: "화면 테마", kind: "choice", options: [["auto", "자동"], ["light", "밝게"], ["dark", "어둡게"]], sub: "자동: 해가 지면 어둡게. 브라우저가 화면 모드(다크 모드) 바뀜을 알려주는 기기에서는 한 번 바뀐 뒤부터 그것을 따름. 밤에는 바탕 지도도 어둡게" },
     { key: "carSize", label: "자차 크기", kind: "choice", options: [["true", "실제 비율"], ["large", "크게"], ["xlarge", "아주 크게"]], sub: "지도를 멀리 볼 때(빠를 때, 축소했을 때)도 내 차가 이보다 작아지지 않게. 실제 비율: 차로 폭에 맞춰서만" },
     { key: "carIcon", label: "자차 모양", kind: "choice", options: [["model3d", "3D"], ["tesla", "Model Y L"], ["arrow", "화살표"], ["photo", "내 사진"]], sub: "지도 위 내 차를 지도와 같은 축척, 차로 폭에 맞춰. 3D: 서버 설정 폴더의 car-model.glb (기울인 지도에서 입체로 서 있음 · 3D 모델: BloxBloger · Sketchfab, CC BY-NC 4.0). 내 사진: 서버 설정 폴더의 car-icon.png (위에서 본 모습, 앞이 위)" },
     { key: "carPaint", label: "차 색", kind: "choice", options: PAINTS, sub: "Model Y L 모양일 때의 색" },
+    { key: "destAt", label: "목적지 창 위치", kind: "choice", options: [["left", "속도 아래"], ["top", "위쪽 가운데"]], sub: "목적지 검색 · 경로 목록이 뜨는 곳. 속도 아래: 왼쪽 위 속도 창 바로 밑에. 위쪽 가운데: 속도 창 오른쪽에" },
     { key: "layout", label: "화면 배치", kind: "choice", options: [["classic", "기본"], ["mini", "미니"]], sub: "미니: 왼쪽 창을 좁게, 시계 · 다음 신호등 · 그다음 안내는 숨김" },
     { key: "uiScale", label: "화면 크기", kind: "choice", options: [[0.85, "작게"], [1, "보통"], [1.15, "크게"], [1.3, "더 크게"]], sub: "패널 · 카드 · 버튼의 크기 (지도는 그대로). 기기마다 화면 픽셀 크기가 달라 글씨가 크거나 작게 보일 때" },
     { key: "mapDpr", label: "지도 해상도", kind: "choice", options: [["auto", "선명하게"], ["balanced", "균형"], ["fast", "빠르게"]], sub: "선명하게: 화면 그대로 · 균형: 1.5배까지 · 빠르게: 1배로 그리고 창 뒤 흐림 효과도 끔. 바꾼 뒤 새로 고침" },

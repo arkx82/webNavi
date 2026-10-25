@@ -36,6 +36,7 @@ import { CLOSEUP_CAR_AT, CLOSEUP_PITCH, CloseupHold, closeupFrom, isTricky, zoom
 import { JunctionView as Junction3dView } from "./junction-view";
 import { RerouteBackoff } from "./reroute-backoff";
 import { Stillness } from "./still";
+import { SafeDrive } from "./safe-drive";
 import { THEN_M, TURN_NEAR_M, fasterPhrase, thenPhrase, turnPhrase, warningPhrase, type Turn } from "../../server/src/phrases";
 import { SectionTracker, type ActiveSectionInfo } from "./section-tracker";
 import { CAR_MIN_PX, drawGuide, loadGuide, saveGuide, shows, wants, type GuideSettings, type VoiceList } from "./guide-settings";
@@ -570,11 +571,28 @@ function speedOf(fix: Fix): number | null {
   return tracker.car?.parked() ? 0 : fix.speed;
 }
 
+/** 안전운전 모드 (safe-drive.ts, safeTick below): made before the first fix, which feeds its trail. */
+const safe = new SafeDrive({
+  ahead: async (at, deg, m) => {
+    const a = await fetch(`/api/road/ahead?at=${at[0].toFixed(6)},${at[1].toFixed(6)}&deg=${Math.round(deg)}&m=${m}`);
+    if (!a.ok) throw new Error((await a.json().catch(() => ({}))).error ?? `${a.status}`);
+    return a.json();
+  },
+  near: async (at) => {
+    const a = await fetch(`/api/safety/near?lon=${at[0]}&lat=${at[1]}&r=1500`);
+    if (!a.ok) throw new Error(`${a.status}`);
+    return a.json();
+  },
+  prefs: () => ({ wants: (k) => wants(guide, k), shows: (k) => shows(guide, k), cameraFromM: guide.cameraFromM }),
+  log,
+});
 function onFix(fix: Fix) {
   tracker.feed(fix);
   const speed = speedOf(fix);
   stillness.feed([fix.lon, fix.lat], speed);
   if (!sim?.running) saveLast([fix.lon, fix.lat]);
+  // The way come, for 안전운전 모드's 구간 단속 begun behind the car (a tunnel's guessed fixes are not the way).
+  if (fix.accM <= 50) safe.trailAt([fix.lon, fix.lat]);
   void watchRoad(fix);
   // Through put(), as the frame loop writes it in a tunnel: the two keep one record of what is shown.
   put("speed", speed == null ? "--" : Math.round(speed * 3.6).toString());
@@ -726,7 +744,7 @@ function followCar(at: LonLat, speedMps = 0) {
   // The lane card at the top of the map: the car kept clear below it.
   if (layout.lanesBottom > 0) want = { x: want.x, y: Math.max(want.y, layout.lanesBottom + CAR_BELOW_CARD_PX) };
   // The lane card under the car: the car kept high enough for it (a close-up puts the car at 84 % of the height).
-  if (layout.lanesUnderH > 0) want = { x: want.x, y: Math.min(want.y, layout.height - LANES_UNDER_FOOT_PX - layout.lanesUnderH - CAR_OVER_LANES_PX) };
+  if (layout.lanesUnderH > 0 && !layout.lanesAbove) want = { x: want.x, y: Math.min(want.y, layout.height - LANES_UNDER_FOOT_PX - layout.lanesUnderH - CAR_OVER_LANES_PX) };
   spot = spot ? { x: approach(spot.x, want.x, k(0.08)), y: approach(spot.y, want.y, k(0.08)) } : want;
   const before = map.getCenter();
   const zoomTo = Math.max(10, Math.min(ZOOM_MAX, (close ? zoomToSee(Math.max(0, closeup!.inM), at[1], layout.height * (CLOSEUP_CAR_AT - 0.12)) : speedZoom()) + zoomBias));
@@ -865,7 +883,7 @@ function showCloseup(_c: Closeup | null) {
  * reading a box mid-frame after the frame's own writes makes the browser lay the page out again there and then.
  */
 let nearbyEl: HTMLElement | null = null, guideEl: HTMLElement | null = null, weatherEl: HTMLElement | null = null, musicDockEl: HTMLElement | null = null;
-const layout = { hudRight: 0, destRight: 0, lanesBottom: 0, width: 0, height: 0, lanesUnderH: 0, lanesUnderW: 0, dock: null as DOMRect | null, ui: 1 };
+const layout = { hudRight: 0, destRight: 0, lanesBottom: 0, width: 0, height: 0, lanesUnderH: 0, lanesUnderW: 0, lanesAbove: false, dock: null as DOMRect | null, ui: 1 };
 function measure() {
   const canvas = map.getCanvas().getBoundingClientRect();
   layout.width = canvas.width;
@@ -883,7 +901,10 @@ function measure() {
   // measure() runs once before the settings are read (the first frame needs the canvas's size): the default till then.
   let at: GuideSettings["lanesAt"] = "car";
   try { at = guide.lanesAt; } catch { /* not yet */ }
-  const under = at === "car" && !el("jv").contains(lanes);
+  // 내 차 위 is the same small card, over the car's nose instead.
+  const under = (at === "car" || at === "above") && !el("jv").contains(lanes);
+  if (layout.lanesAbove !== (at === "above")) lanesPlaced = "";
+  layout.lanesAbove = at === "above";
   if (lanes.classList.contains("under") !== under) {
     lanes.classList.toggle("under", under);
     lanes.style.left = "";
@@ -942,6 +963,11 @@ function placeLanesUnderCar() {
     const canvas = map.getCanvas().getBoundingClientRect();
     const h = layout.lanesUnderH || lanes.offsetHeight * layout.ui, w = layout.lanesUnderW || lanes.offsetWidth * layout.ui;
     let y = Math.max(p.y, tail.y) + LANES_UNDER_GAP_PX;
+    if (layout.lanesAbove) {
+      // 내 차 위: its foot this far over the car's nose, kept under the cards at the top.
+      const nose = map.project(offset(carAt, markerBearing ?? map.getBearing(), 2.49 * scale));
+      y = Math.max(layout.lanesBottom + TOP_STACK_GAP_PX, TOP_STACK_PX, Math.min(p.y, nose.y) - LANES_UNDER_GAP_PX - h);
+    }
     y = Math.min(y, layout.height - LANES_UNDER_FOOT_PX - h);
     const x = Math.max(w / 2 + 8, Math.min(layout.width - w / 2 - 8, p.x));
     const d = layout.dock;
@@ -2794,17 +2820,7 @@ function checkRoad(w: RouteWatch, r: Route, speedMps: number | null | undefined)
       popups.set(due.feature.id, due);
       continue;
     }
-    const phrase = phraseFor(due);
-    // One sentence for things at one place (a school zone and its camera); a second camera further on is its own.
-    const f = due.feature;
-    const same = spokenAt.get(phrase);
-    if (same && metres(same.at[0], same.at[1], f.lon, f.lat) < SAME_PLACE_M && Date.now() - same.t < 20_000) continue;
-    spokenAt.set(phrase, { at: [f.lon, f.lat], t: Date.now() });
-    log(`경고 ${phrase}`);
-    // Said while its distance still holds — until the car is 30 % nearer than it says: "육백미터 앞" said fourteen seconds
-    // late, behind another, was 400 m out (a pretend drive, 2026-10-05).
-    const mps = Math.max(5, speedMps ?? 0);
-    voice.say(phrase, undefined, { key: `warn:${f.id}:${due.rungM}`, withinS: Math.max(3, Math.min(20, (due.inM - due.rungM * 0.7) / mps)) });
+    sayWarning(due, speedMps);
   }
   showSectionHud(tracker.frame());
   showLimit(w.limitAt(along), speedMps);
@@ -2818,12 +2834,81 @@ function checkRoad(w: RouteWatch, r: Route, speedMps: number | null | undefined)
   ], routeLine);
   drawNotes(roadNotes(w, along));
 }
+/** A warning come due, said — once for things at one place. */
+function sayWarning(due: Ahead & { rungM: number }, speedMps: number | null | undefined, how = "경고") {
+  const phrase = phraseFor(due);
+  // One sentence for things at one place (a school zone and its camera); a second camera further on is its own.
+  const f = due.feature;
+  const same = spokenAt.get(phrase);
+  if (same && metres(same.at[0], same.at[1], f.lon, f.lat) < SAME_PLACE_M && Date.now() - same.t < 20_000) return;
+  spokenAt.set(phrase, { at: [f.lon, f.lat], t: Date.now() });
+  log(`${how} ${phrase}`);
+  // Said while its distance still holds — until the car is 30 % nearer than it says: "육백미터 앞" said fourteen seconds
+  // late, behind another, was 400 m out (a pretend drive, 2026-10-05).
+  const mps = Math.max(5, speedMps ?? 0);
+  voice.say(phrase, undefined, { key: `warn:${f.id}:${due.rungM}`, withinS: Math.max(3, Math.min(20, (due.inM - due.rungM * 0.7) / mps)) });
+}
 setInterval(() => {
   const w = watch, r = route;
   if (!w || !r || performance.now() - roadCheckedAt < 600) return;
   holdAhead(w);
   checkRoad(w, r, tracker.frame()?.speedMps ?? null);
 }, 500);
+
+// ---- 안전운전 모드: no route, and the road ahead watched all the same (safe-drive.ts) ----
+
+let safeOn = false;
+/** Whether the road ahead was known at the last check: its coming and going written down once each. */
+let safeRoad = false;
+function safeTick() {
+  const f = tracker.frame();
+  if (!guide.safeDrive || route || sim?.running || demo || !f || f.mode === "waiting") {
+    if (safeOn) endSafe();
+    return;
+  }
+  if (!safeOn) {
+    safeOn = true;
+    log("안전운전 모드");
+    // The camera card into the panel the car has without a route (it is the drive panel's otherwise).
+    el("hud").append(el("cam"));
+  }
+  const along = safe.update(f.at, f.bearing, f.speedMps);
+  const w = safe.watch;
+  const known = !!w && along != null;
+  if (known !== safeRoad) { safeRoad = known; log(known ? `안전운전 앞길 ${km(safe.line!.lengthM - along!)}` : "안전운전 앞길 없음"); }
+  el("safe-chip").hidden = !known;
+  if (!w || along == null) {
+    showLimit(null, f.speedMps);
+    cameraLayer?.setLightsAhead(new Set());
+    zoneLayer.set([], null);
+    return;
+  }
+  // Said as on a route; what would only be a card is let go (the cards are the route's).
+  for (const due of w.due(along)) if (due.voice) sayWarning(due, f.speedMps, "안전운전 경고");
+  showLimit(w.limitAt(along), f.speedMps);
+  const ahead = w.ahead(along, LIGHTS_ON_MAP_M);
+  cameraLayer?.addKnown(ahead.map((a) => a.feature));
+  cameraLayer?.setLightsAhead(new Set(ahead.map((a) => a.feature.id)));
+  zoneLayer.set([
+    ...w.zones().filter((z) => shows(guide, z.feature.kind)).map((z) => ({ id: z.feature.id, kind: z.feature.kind as "school-zone" | "senior-zone", alongM: z.alongM, endM: z.endM })),
+    ...w.sections().map((s) => ({ id: `section:${s.feature.id}`, kind: "section" as const, alongM: s.alongM, endM: s.endM })),
+  ], safe.line);
+}
+function endSafe() {
+  safeOn = false;
+  safeRoad = false;
+  safe.stop();
+  log("안전운전 모드 끝");
+  el("safe-chip").hidden = true;
+  el("eta").after(el("cam"));
+  // A route come in its place draws its own; with none, nothing is left up.
+  if (!route) {
+    showLimit(null, null);
+    cameraLayer?.setLightsAhead(null);
+    zoneLayer.set([], null);
+  }
+}
+setInterval(safeTick, 500);
 
 /** Lights this close along the route are one junction's; the nearest ahead of the car is "the next". */
 const LIGHTS_ONE_JUNCTION_M = 40;
@@ -3342,6 +3427,7 @@ function applyGuide() {
   // 차량 데이터 turned off here: the stream let go and what it had forgotten (a stale "P" would hold the marker).
   if (!carDataOn()) { if (carLink.state !== "off") carLink.stop(); carLink.track.clear(); }
   document.body.classList.toggle("layout-mini", guide.layout === "mini");
+  document.body.classList.toggle("dest-left", guide.destAt !== "top");
   themed(applyTheme(guide.theme, here()));
   hdLayer?.refresh();
   nightCity?.refresh();
@@ -4197,7 +4283,7 @@ document.addEventListener("pointerdown", () => void voice.unlock().then(() => { 
 voice.context.addEventListener("statechange", () => { el("voice").textContent = voice.context.state; showAudioLocked(); });
 /** While driving with the voice on and the sound asleep: a line saying a tap brings it back. */
 function showAudioLocked() {
-  el("audio-locked").hidden = voice.awake || !route || !guide.voice;
+  el("audio-locked").hidden = voice.awake || (!route && !safeRoad) || !guide.voice;
 }
 setInterval(showAudioLocked, 2000);
 

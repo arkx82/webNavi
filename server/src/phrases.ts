@@ -149,7 +149,8 @@ export function warningPhrase(kind: Warning, rungM: number, limit?: number): str
   const schoolLim = limit && SCHOOL_LIMITS.includes(limit) ? `, 제한 속도 ${sino(limit)}입니다` : "";
   switch (kind) {
     case "speed": return `${at} 과속 단속 카메라가 있습니다${lim}`;
-    case "signal": return `${at} 신호 단속 카메라가 있습니다`;
+    // The road's limit at a signal camera too (the police list gives it): 신호 단속 was the camera said most, and bare.
+    case "signal": return `${at} 신호 단속 카메라가 있습니다${lim}`;
     case "speed-signal": return `${at} 신호 과속 단속 카메라가 있습니다${lim}`;
     case "section-start": return `${from} 구간 단속이 시작됩니다${lim}`;
     case "section-end": return `${from} 구간 단속이 끝납니다`;
@@ -266,7 +267,7 @@ export function fixedPhrases(): string[] {
     const rungs = CAMERA_KINDS.includes(kind) ? [...CAMERA_FIRST_M] : base;
     for (const r of rungs) {
       out.add(warningPhrase(kind, r));
-      if (kind === "speed" || kind === "speed-signal" || kind === "section-start") {
+      if (kind === "speed" || kind === "signal" || kind === "speed-signal" || kind === "section-start") {
         for (const l of LIMITS) out.add(warningPhrase(kind, r, l));
       }
       if (kind === "school" || kind === "school-zone") {
