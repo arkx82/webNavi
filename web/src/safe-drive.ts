@@ -48,8 +48,13 @@ const NEAR_EVERY_MS = 60_000;
 const NEAR_AHEAD_M = 700;
 /** Features kept for the next line (a 구간 단속's start camera kilometres back among them); the farthest go past this. */
 const KEPT_FEATURES = 4000;
-/** What was said, forgotten past this many (a long drive with the page open). */
-const SPOKEN_MAX = 3000;
+/**
+ * What was said of a feature is forgotten once the car is this far from it: the same camera passed the other way in the
+ * morning was never said on the way home (hantwo's commute replayed, 2026-10-25) — a route's watch is new each drive.
+ */
+const SPOKEN_FORGET_M = 2000;
+/** …or this long after it was first said: the car parked all day by the camera it passed on the way in (hantwo's work). */
+const SPOKEN_FORGET_MS = 15 * 60_000;
 
 const turnBetween = (a: number, b: number) => Math.abs(((b - a + 540) % 360) - 180);
 
@@ -62,6 +67,8 @@ export class SafeDrive {
   private trailM = 0;
   /** What was said, by feature id: kept from one line to the next, so a camera is said once. */
   private spoken = new Map<string, Set<number>>();
+  /** When each feature was first found said. */
+  private spokenSince = new Map<string, number>();
   private known = new Map<string, Feature>();
   private asking = false;
   private askedAt = -Infinity;
@@ -89,10 +96,11 @@ export class SafeDrive {
   }
 
   /**
-   * The car at [at], heading [deg] at [speedMps]: the road ahead kept up to date. The car's metres along the line, or
+   * The car at [at], heading [deg] at [speedMps]: the road ahead kept up to date. The car's metres along the line, with
+   * the watch they are on (a new road ahead may come in before the next update: its metres are another line's), or
    * null while there is no line under it.
    */
-  update(at: LonLat, deg: number, speedMps: number): number | null {
+  update(at: LonLat, deg: number, speedMps: number): { alongM: number; watch: RouteWatch; line: Line } | null {
     const now = this.now();
     const moving = speedMps >= MOVING_MPS;
     const p = this.line ? this.line.project(at, this.seg, 40) : null;
@@ -100,9 +108,9 @@ export class SafeDrive {
     const left = p && this.line ? this.line.lengthM - p.alongM : 0;
     if ((!onIt || left < LEFT_M) && moving && !this.asking && now - this.askedAt >= ASK_EVERY_MS) void this.ask(at, deg);
     if (moving) this.askNear(onIt && p ? this.line!.place(p.alongM + NEAR_AHEAD_M).at : at, at, now);
-    if (!onIt || !p) return null;
+    if (!onIt || !p || !this.watch || !this.line) return null;
     this.seg = p.segment;
-    return p.alongM;
+    return { alongM: p.alongM, watch: this.watch, line: this.line };
   }
 
   /** Not in 안전운전 any more (a route set, the mode turned off): the line let go; what was said and seen kept. */
@@ -130,7 +138,7 @@ export class SafeDrive {
         provider: "osrm", distanceM: 0, durationS: 0, path, guides: [], segments: [],
         motorways: (got.motorways ?? []).map(([a, b]) => [a + shift, b + shift] as [number, number]),
       };
-      if (this.spoken.size > SPOKEN_MAX) this.spoken.clear();
+      this.forget(at);
       const watch = new RouteWatch(route, () => this.deps.prefs(), this.spoken);
       watch.add([...this.known.values()]);
       this.watch = watch;
@@ -140,6 +148,20 @@ export class SafeDrive {
       this.deps.log(`안전운전 앞길 못 받음 ${(e as Error).message}`);
     } finally {
       this.asking = false;
+    }
+  }
+
+  /** What was said of the features far from [car] let go: passed long ago, or the far end of a loop. */
+  private forget(car: LonLat) {
+    const now = this.now();
+    for (const id of this.spoken.keys()) {
+      const f = this.known.get(id);
+      const since = this.spokenSince.get(id) ?? now;
+      this.spokenSince.set(id, since);
+      if (!f || metres(f.lon, f.lat, car[0], car[1]) > SPOKEN_FORGET_M || now - since > SPOKEN_FORGET_MS) {
+        this.spoken.delete(id);
+        this.spokenSince.delete(id);
+      }
     }
   }
 

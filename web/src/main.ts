@@ -2872,17 +2872,16 @@ function safeTick() {
     // The camera card into the panel the car has without a route (it is the drive panel's otherwise).
     el("hud").append(el("cam"));
   }
-  const along = safe.update(f.at, f.bearing, f.speedMps);
-  const w = safe.watch;
-  const known = !!w && along != null;
-  if (known !== safeRoad) { safeRoad = known; log(known ? `안전운전 앞길 ${km(safe.line!.lengthM - along!)}` : "안전운전 앞길 없음"); }
-  el("safe-chip").hidden = !known;
-  if (!w || along == null) {
+  const on = safe.update(f.at, f.bearing, f.speedMps);
+  if (!!on !== safeRoad) { safeRoad = !!on; log(on ? `안전운전 앞길 ${km(on.line.lengthM - on.alongM)}` : "안전운전 앞길 없음"); }
+  el("safe-chip").hidden = !on;
+  if (!on) {
     showLimit(null, f.speedMps);
     cameraLayer?.setLightsAhead(new Set());
     zoneLayer.set([], null);
     return;
   }
+  const { alongM: along, watch: w, line } = on;
   // Said as on a route; what would only be a card is let go (the cards are the route's).
   for (const due of w.due(along)) if (due.voice) sayWarning(due, f.speedMps, "안전운전 경고");
   showLimit(w.limitAt(along), f.speedMps);
@@ -2892,7 +2891,7 @@ function safeTick() {
   zoneLayer.set([
     ...w.zones().filter((z) => shows(guide, z.feature.kind)).map((z) => ({ id: z.feature.id, kind: z.feature.kind as "school-zone" | "senior-zone", alongM: z.alongM, endM: z.endM })),
     ...w.sections().map((s) => ({ id: `section:${s.feature.id}`, kind: "section" as const, alongM: s.alongM, endM: s.endM })),
-  ], safe.line);
+  ], line);
 }
 function endSafe() {
   safeOn = false;

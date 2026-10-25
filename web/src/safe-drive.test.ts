@@ -31,8 +31,8 @@ test("안전운전: a camera on the road ahead is said at each rung once, with n
   for (let m = 0; m <= 2000; m += 25) {
     const at = offset(start, 0, m);
     safe.trailAt(at);
-    const along = safe.update(at, 0, 15);
-    if (along != null && safe.watch) for (const due of safe.watch.due(along)) said.push(phraseFor(due));
+    const on = safe.update(at, 0, 15);
+    if (on) for (const due of on.watch.due(on.alongM)) said.push(phraseFor(due));
     clock.t += 1700;
     await settle();
   }
@@ -49,8 +49,8 @@ test("안전운전: a 구간 단속 begun behind the car holds on every new road
   for (let m = 0; m <= 6500; m += 25) {
     const at = offset(start, 0, m);
     safe.trailAt(at);
-    const along = safe.update(at, 0, 25);
-    if (along != null && safe.watch?.currentSection(along)) inside.push(m);
+    const on = safe.update(at, 0, 25);
+    if (on?.watch.currentSection(on.alongM)) inside.push(m);
     clock.t += 1000;
     await settle();
   }
@@ -79,10 +79,31 @@ test("안전운전: after a U-turn the camera ahead on the other carriageway is 
   for (let m = 0; m <= 600; m += 25) {
     const at = offset(west, 180, m);
     safe.trailAt(at);
-    const along = safe.update(at, 180, 15);
-    if (along != null && safe.watch) for (const due of safe.watch.due(along)) said.push(phraseFor(due));
+    const on = safe.update(at, 180, 15);
+    if (on) for (const due of on.watch.due(on.alongM)) said.push(phraseFor(due));
     clock.t += 1700;
     await settle();
   }
   assert.deepEqual(said, ["육백미터 앞에 과속 단속 카메라가 있습니다, 제한 속도 육십입니다", "삼백미터 앞에 과속 단속 카메라가 있습니다, 제한 속도 육십입니다"]);
+});
+
+test("안전운전: a camera said on the way out is said again on the way back later", async () => {
+  const clock = { t: 0 };
+  // One road, a camera on it with no carriageway given: out north past it, then home south past it again.
+  const cam: Feature = { id: "cam", kind: "signal", ...lonLat(offset(start, 0, 1500)), limit: 50 };
+  const safe = new SafeDrive(deps([cam], clock));
+  const said: string[] = [];
+  const drive = async (from: LonLat, deg: number, m: number) => {
+    for (let d = 0; d <= m; d += 25) {
+      const at = offset(from, deg, d);
+      safe.trailAt(at);
+      const on = safe.update(at, deg, 15);
+      if (on) for (const due of on.watch.due(on.alongM)) said.push(phraseFor(due));
+      clock.t += 1700;
+      await settle();
+    }
+  };
+  await drive(start, 0, 4500);
+  await drive(offset(start, 0, 4500), 180, 4500);
+  assert.equal(said.length, 4, said.join(" / "));
 });
