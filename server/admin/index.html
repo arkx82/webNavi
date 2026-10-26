@@ -32,6 +32,12 @@
   td:first-child { color: var(--dim); width: 40%; }
   /* 차량: a line an account. */
   #status td { white-space: pre-line; }
+  /* 단속 카메라 출처: a few columns, not the key-value table's two. */
+  #cam-files td, #cam-agencies td { width: auto; padding-right: 10px; }
+  #cam-files td:first-child, #cam-agencies td:first-child { color: var(--ink); width: 40%; }
+  #cam-files .sub { display: block; font-size: 12px; color: var(--dim); }
+  #cam-files a { color: var(--accent); }
+  h3 { font-size: 15px; margin: 10px 0 0; }
   /* Every account's link, a line each: what a 관리자 sees of the others' (their buttons are their own). */
   .lines { margin-top: 14px; padding: 10px 12px; border-radius: 8px; background: #151518; font-size: 13px; color: var(--dim); white-space: pre-line; }
   /* 지금 운행 중: a dot an account, as Plex shows who is playing. */
@@ -211,6 +217,16 @@
 
     <h2 class="admin-only">상태</h2>
     <section class="admin-only"><table id="status"></table></section>
+
+    <h2 class="admin-only">단속 카메라 출처</h2>
+    <section class="admin-only">
+      <p class="hint">전국 목록은 공공데이터포털의 전국무인교통단속카메라표준데이터(경찰청과 각 지자체가 낸 것을 합친 것)입니다. 지자체 · 지방경찰청이 따로 올린 카메라 파일을 매주 찾아서, 그 지역 전국 목록보다 <b>최신인 파일</b>에서 전국 목록 <b>150 m 안에 카메라가 없는 것만</b> 보충합니다. 좌표나 카메라 종류(과속 · 신호)가 없는 파일은 자동으로 반영하지 못하고 여기 표시만 합니다.</p>
+      <h3>더 최신 파일 (공공데이터포털)</h3>
+      <table id="cam-files"></table>
+      <h3 style="margin-top:18px">전국 목록의 기관별 기준일</h3>
+      <p class="hint">오래된 순. 1년이 넘은 곳은 빨간색 — 그 뒤에 설치된 카메라가 빠져 있을 수 있습니다.</p>
+      <table id="cam-agencies"></table>
+    </section>
   </div>
 </main>
 
@@ -363,6 +379,27 @@ function showFields(fields) {
     el.className = "hint" + (f && f.set ? " saved" : "");
   }
 }
+/** 단속 카메라 출처: the newer files and what was taken of each; each agency's part of the national list by date. */
+async function showCameraSources() {
+  let r;
+  try { r = await send("GET", "/admin/api/cameras"); } catch (e) { $("cam-files").innerHTML = `<tr><td class="bad">${e.message}</td></tr>`; return; }
+  const esc = (t) => String(t ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+  const yearAgo = new Date(Date.now() - 365 * 86_400_000).toISOString().slice(0, 10);
+  const files = r.files.filter((f) => f.read || f.cameras || f.why !== "과속·신호 카메라 없음 (주정차 등)");
+  $("cam-files").innerHTML = files.length ? files.map((f) => {
+    // The server's word for the files it reads; for the rest, the portal's date where the file names none.
+    const newer = f.read ? f.newer : !!f.listAsOf && (f.asOf ?? f.modified) > f.listAsOf;
+    const state = !f.read ? `<span class="bad">자동 반영 안 됨</span> · ${esc(f.why)}`
+      : !newer ? `<span class="hint">반영 안 함</span> · ${f.listAsOf ? "전국 목록보다 오래됨 (그 뒤 철거된 카메라가 있을 수 있음)" : "비교할 전국 목록 없음"}`
+      : f.filled ? `<span class="ok">반영 중 · 빠진 ${f.filled}대 보충</span>` : `<span class="ok">반영 중</span> · 빠진 카메라 없음`;
+    const when = `기준일 ${esc(f.asOf ?? f.modified)}${f.listAsOf ? (newer ? ` · <b>전국 목록(${esc(f.listAsOf)})보다 최신</b>` : ` · 전국 목록 ${esc(f.listAsOf)}`) : ""}`;
+    return `<tr><td><a href="${esc(f.url)}" target="_blank" rel="noopener">${esc(f.name)}</a><span class="sub">${esc(f.by)}${f.sido ? ` · ${esc(f.sido)}` : ""}</span></td><td>${when}<span class="sub">${f.cameras ? `과속·신호·구간 ${f.cameras}대 / ${f.rows}행` : `${f.rows}행`}</span></td><td>${state}</td></tr>`;
+  }).join("") : `<tr><td>${r.at ? "찾은 파일 없음" : "아직 찾아보지 않음 (서버가 곧 찾습니다)"}</td></tr>`;
+  $("cam-agencies").innerHTML = r.agencies.map((a) => {
+    const old = a.asOf && a.asOf < yearAgo;
+    return `<tr><td>${esc(a.name)}<span class="sub" style="display:inline;margin-left:6px;color:var(--dim)">${esc(a.sido)}</span></td><td class="${old ? "bad" : ""}">${esc(a.asOf ?? "날짜 없음")}</td><td>카메라 ${a.cameras}대 / ${a.rows}행</td></tr>`;
+  }).join("") || `<tr><td>전국 목록을 아직 받지 않았거나, 기관 정보가 없는 예전 목록입니다 (다음 갱신에 생김)</td></tr>`;
+}
 function showStatus(status) {
   const rows = Object.entries(status).map(([k, v]) => {
     const cls = v === true || v === "ok" ? "ok" : v === false ? "bad" : "";
@@ -377,6 +414,7 @@ async function load() {
     const r = await call("/admin/api/settings");
     showFields(r.fields);
     showStatus(r.status);
+    void showCameraSources();
   }
   void loadCar();
   try { showTidal((await call("/admin/music/state")).tidal); } catch (e) { say("msg", e.message, "bad"); }

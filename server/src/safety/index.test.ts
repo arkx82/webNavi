@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { SafetyIndex, metres, parseStandardData } from "./index.js";
+import { SafetyIndex, cameraKind, metres, parseStandardData } from "./index.js";
 
 test("metres is close to the haversine answer over a kilometre", () => {
   // Gangnam station to Yeoksam station, about 690 m.
@@ -108,4 +108,11 @@ test("a school zone's limit is its cameras': 50 where they say 50, none where th
   assert.equal(limit("none"), undefined, "a camera that is not the zone's says nothing of it");
   assert.equal(limit("lane"), 30);
   assert.equal(limit("c1"), 50, "the cameras keep theirs");
+});
+
+test("a parking or bus-lane camera is none of ours, whatever 구간 position its row carries (고흥군)", () => {
+  assert.equal(cameraKind("4", "99", "1"), null);
+  assert.equal(cameraKind("03", "", "1"), null);
+  assert.equal(cameraKind("99", "", "1"), "section-start");
+  assert.equal(cameraKind("1", "", "2"), "section-end");
 });

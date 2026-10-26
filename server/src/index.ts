@@ -11,9 +11,10 @@ import { Naver } from "./route/naver.js";
 import { Osrm } from "./route/osrm.js";
 import { sayMissedTurns } from "./route/missed.js";
 import { ProviderError, routeAvoiding, type Avoid, type LonLat, type Provider, type Route, type RouteProvider } from "./route/types.js";
-import { SafetyIndex } from "./safety/index.js";
+import { SafetyIndex, type Feature } from "./safety/index.js";
 import { CameraRoads } from "./safety/roads.js";
 import { CAMERAS_MAX_AGE_MS, CAMERAS_VERSION, fetchCameras, keptCameras } from "./safety/cameras.js";
+import { FILES_MAX_AGE_MS, FILES_VERSION, fillGaps, findCameraFiles, keptFiles, newerFeatures, sourcesReport } from "./safety/camera-files.js";
 import { Hotspots } from "./safety/hotspots.js";
 import { BUMPS, DATASET_MAX_AGE_MS, LIGHTS, SCHOOL_ZONES, SENIOR_ZONES, SEOUL_LIGHTS, kept, refresh, type Dataset, type KeptSet } from "./safety/datasets.js";
 import { Incidents } from "./road/incidents.js";
@@ -95,11 +96,15 @@ const dataDir = env.DATA_DIR ?? join(root, "data");
 // and asked again weekly. The index is rebuilt whole when that comes.
 const configDir = env.CONFIG_DIR ?? join(root, "config");
 let cameras = keptCameras(configDir);
+/** The agencies' own camera files on data.go.kr (safety/camera-files.ts), and those of their cameras the national list lacks. */
+let cameraFiles = keptFiles(configDir);
+let filled: Feature[] = [];
+let filesError: string | null = null;
 /** Each camera on its own road (safety/roads.ts), asked of our road graph once a camera. */
 const cameraRoads = new CameraRoads(configDir, () => env.KOREA_OSRM_URL, (m) => app.log.info(m), (at) => (hdLanes?.ready ? hdLanes.laneCount(at) : undefined));
 async function fillCameraRoads() {
   const zones = [...sets.values()].flatMap((k) => k.features.filter((f) => f.kind === "school-zone" || f.kind === "senior-zone"));
-  if (cameras && (await cameraRoads.fill([...cameras.features, ...zones]).catch(() => false))) safety = buildSafety();
+  if (cameras && (await cameraRoads.fill([...cameras.features, ...filled, ...zones]).catch(() => false))) safety = buildSafety();
 }
 // Speed bumps and school zones, the same way: the whole country, kept a week.
 const DATASETS: Dataset[] = [BUMPS, SCHOOL_ZONES, LIGHTS, SEOUL_LIGHTS, SENIOR_ZONES];
@@ -114,7 +119,12 @@ const hdPoints = new HdPoints(join(workDir, "hdmap"), (m) => app.log.info(m));
 let safety = buildSafety();
 function buildSafety(): SafetyIndex {
   const index = SafetyIndex.fromDirectory(dataDir);
-  if (cameras) index.add(cameraRoads.apply(cameras.features));
+  if (cameras) {
+    index.add(cameraRoads.apply(cameras.features));
+    // The gaps in it the agencies' newer files fill: only where it has no camera near, and only from a file newer than it.
+    filled = fillGaps(cameras.features, newerFeatures(cameraFiles, cameras.agencies ?? []));
+    index.add(cameraRoads.apply(filled));
+  }
   index.add(hdPoints.features);
   for (const k of sets.values()) index.add(cameraRoads.apply(hdPoints.without(k.features)));
   index.build();
@@ -172,6 +182,20 @@ async function refreshCameras() {
   } catch (e) {
     camerasError = (e as Error).message;
     app.log.warn({ err: camerasError }, "cameras: not fetched");
+  }
+}
+
+/** The portal's camera files looked over again once a week (after the national list, which they fill the gaps of). */
+async function refreshCameraFiles() {
+  if (cameraFiles && cameraFiles.v === FILES_VERSION && Date.now() - cameraFiles.at < FILES_MAX_AGE_MS) return;
+  try {
+    cameraFiles = await findCameraFiles(configDir, (m) => app.log.warn(m));
+    filesError = null;
+    safety = buildSafety();
+    app.log.info({ files: cameraFiles.files.length, read: cameraFiles.files.filter((f) => f.read).length, filled: filled.length }, "camera files looked over");
+  } catch (e) {
+    filesError = (e as Error).message;
+    app.log.warn({ err: filesError }, "camera files: not looked over");
   }
 }
 
@@ -609,7 +633,7 @@ const admin = registerAdmin(app, settings, {
     시설물: safety.features.length,
     제한속도: (() => { const l = limits.status(); return `TMAP 오늘 ${l.tmapCallsToday}/${l.budget}건 · 노드링크 ${l.nodelink ? "있음" : "없음"} · 정밀도로지도 속도 표지판 ${speedSigns.size}개${l.lastError ? ` · 마지막 오류 ${l.lastError}` : ""}`; })(),
     "색깔 유도선": `${colourGuides.ready ? "도로공사 있음" : "도로공사 없음"} · 서울시 ${seoulLines.count}곳`,
-    "단속 카메라": cameras ? `${cameras.features.length}대 (${new Date(cameras.at).toLocaleDateString("ko-KR")})` : camerasError ?? "아직 없음",
+    "단속 카메라": cameras ? `${cameras.features.length}대 (${new Date(cameras.at).toLocaleDateString("ko-KR")}) · 지자체 파일로 보충 ${filled.length}대${filesError ? ` · 파일 확인 실패 ${filesError}` : ""}` : camerasError ?? "아직 없음",
     ...Object.fromEntries(DATASETS.map((d) => {
       const k = sets.get(d.name);
       return [d.label, k ? `${k.features.length}곳 (${new Date(k.at).toLocaleDateString("ko-KR")})` : setErrors.get(d.name) ?? (refreshingSets ? "받는 중…" : "아직 없음")];
@@ -645,6 +669,8 @@ const admin = registerAdmin(app, settings, {
   },
   prerender: () => prerender(speaker),
 }, join(root, "admin", "index.html"), db);
+// Where the cameras come from: each agency's part of the national list and its date, and the newer files that fill it.
+app.get("/admin/api/cameras", { preHandler: admin.adminGuard }, async () => sourcesReport(cameras?.agencies ?? [], cameraFiles, filled));
 const music = registerMusic(app, settings, db, admin);
 // A deleted account's Tesla and TIDAL links go with it (car is made just below; called only on a 삭제).
 registerUsers(app, db, settings, admin.adminGuard, workDir, admin.selfGuard, (name) => { music.forget(name); car.forget(name); });
@@ -723,8 +749,8 @@ await app.listen({ port, host: "0.0.0.0" });
 // the page's own 고정 멘트 렌더링 button, or the next start.
 // The cameras now, and again each hour: a week-old list is asked again,
 // and a refusal (the 활용신청 not yet through) is retried soon after.
-void refreshCameras().then(() => fillCameraRoads()).then(() => refreshSets());
-setInterval(() => void refreshCameras().then(() => fillCameraRoads()).then(() => refreshSets()), 3_600_000);
+void refreshCameras().then(() => refreshCameraFiles()).then(() => fillCameraRoads()).then(() => refreshSets());
+setInterval(() => void refreshCameras().then(() => refreshCameraFiles()).then(() => fillCameraRoads()).then(() => refreshSets()), 3_600_000);
 
 // Then the kept sentences that end cut off: taken out, and the ones still said made again.
 async function repairVoice() {

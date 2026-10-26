@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { featuresOf, type Feature } from "./index.js";
+import type { Agency } from "./camera-files.js";
 
 /**
  * Every enforcement camera in the country, from 경찰청's standard data
@@ -48,8 +49,10 @@ export interface KeptCameras {
    * with a limit (index.ts featuresOf) and each row's 데이터기준일자; an older list is asked again.
    */
   v?: number;
+  /** Who gave the list's rows, by province: how many, and as of when (/admin, camera-files.ts). */
+  agencies?: Agency[];
 }
-export const CAMERAS_VERSION = 5;
+export const CAMERAS_VERSION = 6;
 
 export function keptCameras(dir: string): KeptCameras | null {
   const file = join(dir, "cameras.json");
@@ -91,7 +94,28 @@ export async function fetchCameras(key: string, dir: string): Promise<KeptCamera
   const features = featuresOf(rows, "police-api");
   // An empty list is a failure to say so, not a week's answer to keep.
   if (features.length === 0) throw new Error("cameras: the API answered no cameras");
-  const kept: KeptCameras = { at: Date.now(), features, v: CAMERAS_VERSION };
+  const kept: KeptCameras = { at: Date.now(), features, v: CAMERAS_VERSION, agencies: agenciesOf(rows, features) };
   writeFileSync(join(dir, "cameras.json"), JSON.stringify(kept));
   return kept;
+}
+
+/** Each agency's rows by province (경찰청 gives every province's), with the cameras of them kept and the newest date. */
+export function agenciesOf(rows: Record<string, string>[], features: Feature[]): Agency[] {
+  const by = new Map<string, Agency>();
+  const of = new Map<string, string>();
+  for (const r of rows) {
+    const code = r.insttCode ?? "", sido = r.ctprvnNm ?? "";
+    const key = `${code}|${sido}`;
+    const a = by.get(key) ?? { code, name: r.insttNm ?? code, sido, rows: 0, cameras: 0 };
+    a.rows++;
+    const d = (r["데이터기준일자"] ?? "").trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(d) && (!a.asOf || d > a.asOf)) a.asOf = d;
+    by.set(key, a);
+    of.set(r["무인교통단속카메라관리번호"] ?? "", key);
+  }
+  for (const f of features) {
+    const a = by.get(of.get(f.id.slice(f.id.indexOf(":") + 1)) ?? "");
+    if (a) a.cameras++;
+  }
+  return [...by.values()];
 }

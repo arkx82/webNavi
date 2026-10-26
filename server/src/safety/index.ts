@@ -217,7 +217,7 @@ export function metres(lon1: number, lat1: number, lon2: number, lat2: number): 
 }
 
 /** data.go.kr ships EUC-KR as often as UTF-8; a BOM or a decode failure tells them apart. */
-function decode(bytes: Buffer): string {
+export function decode(bytes: Buffer): string {
   if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return bytes.subarray(3).toString("utf8");
   try {
     return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
@@ -315,6 +315,10 @@ function withoutSaidTwice(features: Feature[]): Feature[] {
  * moving car is not warned of (99 with a limit is taken in featuresOf).
  */
 export function cameraKind(code: string | undefined, zone: string | undefined, section?: string): Kind | null {
+  // A bus-lane or parking camera (3, 4) is none of ours, whatever 구간 position the row carries: 고흥군's 14 parking
+  // cameras came with 단속구간위치구분 1 and were read as 구간 단속 starts in the town's streets (2026-10-27).
+  const codes = (code ?? "").trim().split(/[+,/\s]+/).map((p) => p.replace(/^0+/, "")).filter(Boolean);
+  if (codes.length > 0 && codes.every((p) => p === "3" || p === "4")) return null;
   const pos = (section ?? "").trim().replace(/^0+/, "");
   if (pos === "1" || /시점/.test(pos)) return "section-start";
   if (pos === "2" || /종점/.test(pos)) return "section-end";
