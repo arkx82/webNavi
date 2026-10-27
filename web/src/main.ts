@@ -37,7 +37,7 @@ import { JunctionView as Junction3dView } from "./junction-view";
 import { RerouteBackoff } from "./reroute-backoff";
 import { Stillness } from "./still";
 import { SafeDrive } from "./safe-drive";
-import { THEN_M, TURN_NEAR_M, fasterPhrase, thenPhrase, turnPhrase, warningPhrase, type Turn } from "../../server/src/phrases";
+import { THEN_M, TURN_NEAR_M, cameraRungs, fasterPhrase, thenPhrase, turnPhrase, warningPhrase, type Turn } from "../../server/src/phrases";
 import { SectionTracker, type ActiveSectionInfo } from "./section-tracker";
 import { CAR_MIN_PX, drawGuide, loadGuide, saveGuide, shows, wants, type GuideSettings, type VoiceList } from "./guide-settings";
 import { currentUser, logout, push as pushUserData } from "./userdata";
@@ -2926,6 +2926,14 @@ const KAKAO_SAME_ZONE_M = 300;
 const KAKAO_CARD_ID = "kakao";
 const KAKAO_CAMERAS = new Set<Kind>(["speed", "signal", "speed-signal", "section-start", "section-end", "school"]);
 let kakaoOn = false;
+let kakaoOffSaid = false;
+/** 카카오's camera and 구간 단속 let go: the feature off, the slot lost, the drive over. */
+function kakaoClear() {
+  kakaoCard = null;
+  kakaoSec = null;
+  kakaoSectionTracker.reset();
+  if (!route && !safeOn) { showLimit(null, tracker.frame()?.speedMps ?? null); showSectionHud(tracker.frame()); }
+}
 let kakaoSending = false;
 let kakaoMovedAt = 0;
 /** What was said of each, by "id:rung": 카카오 tells a camera at its own distances, some our same rung. */
@@ -2936,14 +2944,16 @@ function kakaoTick() {
   const f = tracker.frame();
   if (f && f.speedMps > 1.5) kakaoMovedAt = Date.now();
   if (f && f.mode !== "waiting") kakaoSectionTick(f.at);
-  const want = guide.kakaoSafety && !!health?.kakao && !demo && !sim?.running && !!f && f.mode !== "waiting" && Date.now() - kakaoMovedAt < KAKAO_PARKED_MS;
+  // Not on health.kakao: it is read once at load, and a page opened while the emulators were still booting would
+  // never have asked. The server answers "off" while it has no slot up, and the page asks again a second later.
+  const want = guide.kakaoSafety && !demo && !sim?.running && !!f && f.mode !== "waiting" && Date.now() - kakaoMovedAt < KAKAO_PARKED_MS;
   if (!want || !f) {
     if (kakaoOn) {
       kakaoOn = false;
-      kakaoCard = null;
       void fetch("/api/kakao/done", { method: "POST" }).catch(() => undefined);
       log("카카오 안전운전 끝");
     }
+    if (kakaoCard || kakaoSec) kakaoClear();
     return;
   }
   if (kakaoSending) return;
@@ -2954,8 +2964,16 @@ function kakaoTick() {
     .then((r: { slot: number | null; events?: KakaoSafety[]; why?: string } | null) => {
       if (!r) return;
       const on = r.slot != null;
-      if (on !== kakaoOn) { kakaoOn = on; log(on ? `카카오 안전운전 슬롯 ${r.slot}` : `카카오 안전운전 안 됨 (${r.why ?? ""})`); }
+      if (on !== kakaoOn) {
+        kakaoOn = on;
+        // The server is off, or busy, or the slot was let go for a gap in the fixes (a tunnel): nothing of 카카오's
+        // stays up without it. "off" is said once (a server without emulators would say it every second).
+        if (on) log(`카카오 안전운전 슬롯 ${r.slot}`);
+        else { if (r.why !== "off" || !kakaoOffSaid) log(`카카오 안전운전 안 됨 (${r.why ?? ""})`); kakaoOffSaid = r.why === "off"; kakaoClear(); }
+      }
       for (const e of r.events ?? []) kakaoSay(e, tracker.frame()?.speedMps ?? null);
+      // No watch of ours (no route, 안전운전 off): the camera card is nobody else's to draw.
+      if (!route && !safeOn) showLimit(null, tracker.frame()?.speedMps ?? null);
     })
     .catch(() => undefined)
     .finally(() => { kakaoSending = false; });
@@ -3009,21 +3027,28 @@ function kakaoKnown(e: KakaoSafety): boolean {
 }
 
 function kakaoSay(e: KakaoSafety, speedMps: number | null) {
-  if (kakaoKnown(e)) { log(`카카오 경고 (우리 목록에 있음) ${e.code} ${Math.round(e.dist)} m`); return; }
-  // A 구간 단속 of 카카오's: its start opens one (unless one is being driven), its end tells how far it runs.
-  if (e.kind === "section-start" && e.limit && !kakaoSec?.entered && kakaoSec?.id !== `kakao:${e.id}`) {
-    kakaoSec = { id: `kakao:${e.id}`, limit: e.limit, start: [e.lon, e.lat], entered: false, startOdo: 0, endOdo: null, nearest: Infinity, since: Date.now() };
-  }
+  // A 구간 단속 of 카카오's being driven: its end tells how far it runs — whether or not our list has the end camera
+  // (it may have only the end of a pair, which never opens a section of ours).
   if (e.kind === "section-end" && kakaoSec?.entered && e.dist >= 0) {
     kakaoSec.endOdo = kakaoOdo + e.dist;
     if (e.limit) kakaoSec.limit = e.limit;
   }
+  if (kakaoKnown(e)) { log(`카카오 경고 (우리 목록에 있음) ${e.code} ${Math.round(e.dist)} m`); return; }
+  // The driver's own settings hold for 카카오's cameras as for ours: a kind turned off is neither said nor shown.
+  if (!shows(guide, e.kind)) return;
+  // Its start opens one (unless one is being driven).
+  if (e.kind === "section-start" && e.limit && !kakaoSec?.entered && kakaoSec?.id !== `kakao:${e.id}`) {
+    kakaoSec = { id: `kakao:${e.id}`, limit: e.limit, start: [e.lon, e.lat], entered: false, startOdo: 0, endOdo: null, nearest: Infinity, since: Date.now() };
+  }
   if (KAKAO_CAMERAS.has(e.kind) && e.limit && (!kakaoCard || kakaoCard.s.id !== e.id)) kakaoCard = { s: e, since: Date.now(), nearest: Infinity };
+  if (!wants(guide, e.kind)) return;
   // 카카오's "at the place" telling (~150 m): too near for a rung of ours ("삼백미터 앞" at 145 m) — the card and the
   // sign show it; its far (~1 km) and middle (~500 m) tellings are said.
   if (e.dist < 200) return;
-  // Said at the rung of ours nearest 카카오's distance, once a rung.
-  const rung = [1000, 600, 300].reduce((a, b) => (Math.abs(b - e.dist) < Math.abs(a - e.dist) ? b : a));
+  // Said at the rung of ours nearest 카카오's distance, once a rung; no further out than 카메라 안내 시작 for a camera.
+  const rungs = KAKAO_CAMERAS.has(e.kind) ? cameraRungs(guide.cameraFromM) : [1000, 600, 300];
+  if (e.dist > rungs[0] + 150) return;
+  const rung = rungs.reduce((a, b) => (Math.abs(b - e.dist) < Math.abs(a - e.dist) ? b : a));
   const key = `${e.id}:${rung}`;
   if (kakaoSaid.has(key)) return;
   kakaoSaid.add(key);

@@ -38,8 +38,6 @@ interface Slot {
   seq: number;
   waiters: (() => void)[];
   events: { t: number; safety: KakaoSafety }[];
-  ahead: KakaoSafety[];
-  aheadAt: number;
   appSeenAt: number;
   state: string;
   detail: string;
@@ -49,19 +47,23 @@ interface Slot {
 export class KakaoHub {
   private slots: Slot[];
   constructor(count: number, private appKey: () => string | undefined, private now: () => number = Date.now, private log: (m: string) => void = () => {}) {
+    // The fixes' seq from the clock, not from 0: the app and the feeder keep the last seq they saw across a restart of
+    // nav (a deploy mid-drive), and from 0 again they would wait out as many fixes as the drive had had.
     this.slots = Array.from({ length: Math.max(0, count) }, (_, i) => ({
-      n: i + 1, user: null, lastFixAt: 0, fix: null, seq: 0, waiters: [], events: [], ahead: [], aheadAt: 0, appSeenAt: 0, state: "down", detail: "", said: 0,
+      n: i + 1, user: null, lastFixAt: 0, fix: null, seq: this.now(), waiters: [], events: [], appSeenAt: 0, state: "down", detail: "", said: 0,
     }));
   }
 
   get size() { return this.slots.length; }
   /** On for the cars: slots, a key, and at least one app up and ready. */
-  get ready() { return !!this.appKey() && this.slots.some((s) => this.appUp(s) && (s.state === "ready" || s.state === "guiding")); }
+  get ready() { return !!this.appKey() && this.slots.some((s) => this.serving(s)); }
   private appUp(s: Slot) { return this.now() - s.appSeenAt < APP_SEEN_MS; }
+  /** Up, and through the SDK's initialisation: one stuck "pending" or refused would take a car and give it nothing. */
+  private serving(s: Slot) { return this.appUp(s) && (s.state === "ready" || s.state === "guiding"); }
 
   private release(s: Slot, why: string) {
     if (s.user) this.log(`kakao slot ${s.n}: ${s.user} let go (${why})`);
-    s.user = null; s.fix = null; s.events = []; s.ahead = [];
+    s.user = null; s.fix = null; s.events = [];
     for (const w of s.waiters.splice(0)) w();
   }
   private sweep() {
@@ -72,12 +74,12 @@ export class KakaoHub {
    * A car's fix: onto its slot (a free one given if it has none), and what 카카오 has said for it since, and the cameras
    * it has ahead. No slot free (or none up): nothing, and the car goes on with our own lists alone.
    */
-  carFix(user: string, fix: Fix): { slot: number | null; events: KakaoSafety[]; ahead: KakaoSafety[]; why?: string } {
+  carFix(user: string, fix: Fix): { slot: number | null; events: KakaoSafety[]; why?: string } {
     this.sweep();
     let s = this.slots.find((x) => x.user === user);
     if (!s) {
-      s = this.slots.find((x) => !x.user && this.appUp(x) && x.state !== "error");
-      if (!s) return { slot: null, events: [], ahead: [], why: this.slots.some((x) => this.appUp(x)) ? "busy" : "down" };
+      s = this.slots.find((x) => !x.user && this.serving(x));
+      if (!s) return { slot: null, events: [], why: this.slots.some((x) => this.serving(x)) ? "busy" : "down" };
       s.user = user;
       s.said = 0;
       this.log(`kakao slot ${s.n}: ${user}`);
@@ -88,7 +90,7 @@ export class KakaoHub {
     for (const w of s.waiters.splice(0)) w();
     const fresh = s.events.filter((e) => this.now() - e.t < EVENT_KEEP_MS).map((e) => e.safety);
     s.events = [];
-    return { slot: s.n, events: fresh, ahead: this.now() - s.aheadAt < 5000 ? s.ahead : [] };
+    return { slot: s.n, events: fresh };
   }
 
   /** The car's drive is over (its page let go, a route ended at home …): its slot freed at once. */
@@ -116,21 +118,19 @@ export class KakaoHub {
     return { active: !!s.user, appKey: feeder ? "" : this.appKey() ?? "", fix: s.fix && s.fix.seq > after ? s.fix : null };
   }
 
-  /** What the app tells: its state, a warning the SDK would say now, the cameras it has ahead. */
-  appEvent(n: number, e: { kind?: string; state?: string; detail?: string; safety?: Raw; safeties?: Raw[]; voiceCode?: string }): boolean {
+  /** What the app tells: its state, or a warning the SDK would say now. */
+  appEvent(n: number, e: { kind?: string; state?: string; detail?: string; safety?: Raw; voiceCode?: string }): boolean {
     const s = this.slots[n - 1];
     if (!s) return false;
     s.appSeenAt = this.now();
     if (e.kind === "status") {
       if (e.state && e.state !== s.state) this.log(`kakao slot ${s.n}: ${e.state} ${e.detail ?? ""}`);
       s.state = String(e.state ?? s.state);
-      s.detail = String(e.detail ?? "");
+      // Shown on /admin: cut short, and only what reads as text (the SDK's error message, the app's own words).
+      s.detail = String(e.detail ?? "").replace(/[<>&]/g, " ").slice(0, 200);
     } else if (e.kind === "voice" && s.user && e.safety) {
       const safety = parse(e.safety);
       if (safety) { s.events.push({ t: this.now(), safety }); s.said++; }
-    } else if (e.kind === "ahead" && s.user) {
-      s.ahead = (e.safeties ?? []).map(parse).filter((x): x is KakaoSafety => !!x).sort((a, b) => a.dist - b.dist).slice(0, 8);
-      s.aheadAt = this.now();
     }
     return true;
   }

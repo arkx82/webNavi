@@ -402,12 +402,15 @@ async function showCameraSources() {
   }).join("") || `<tr><td>전국 목록을 아직 받지 않았거나, 기관 정보가 없는 예전 목록입니다 (다음 갱신에 생김)</td></tr>`;
 }
 function showStatus(status) {
-  const rows = Object.entries(status).map(([k, v]) => {
-    const cls = v === true || v === "ok" ? "ok" : v === false ? "bad" : "";
-    const text = v === true ? "준비됨" : v === false ? "키 없음" : String(v);
-    return `<tr><td>${k}</td><td class="${cls}">${text}</td></tr>`;
-  });
-  $("status").innerHTML = rows.join("");
+  // As text, never markup: a status line carries what a service or an emulator's app said of itself.
+  $("status").replaceChildren(...Object.entries(status).map(([k, v]) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = "<td></td><td></td>";
+    tr.cells[0].textContent = k;
+    tr.cells[1].textContent = v === true ? "준비됨" : v === false ? "키 없음" : String(v);
+    tr.cells[1].className = v === true || v === "ok" ? "ok" : v === false ? "bad" : "";
+    return tr;
+  }));
 }
 async function load() {
   if (me.admin) {

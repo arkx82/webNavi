@@ -22,7 +22,6 @@ import com.kakaomobility.knsdk.guidance.knguidance.locationguide.KNGuide_Locatio
 import com.kakaomobility.knsdk.guidance.knguidance.safetyguide.KNGuide_Safety
 import com.kakaomobility.knsdk.guidance.knguidance.safetyguide.objects.KNSafety
 import com.kakaomobility.knsdk.guidance.knguidance.safetyguide.objects.KNSafety_Camera
-import com.kakaomobility.knsdk.guidance.knguidance.safetyguide.objects.KNSafety_Section
 import com.kakaomobility.knsdk.guidance.knguidance.voiceguide.KNGuide_Voice
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -32,7 +31,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -56,7 +54,6 @@ class SafetyService : Service(), KNGuidance_SafetyGuideDelegate, KNGuidance_Loca
     private var activeSince = 0L
     private var inactiveSince = 0L
     private var latest: List<KNSafety> = emptyList()
-    private var aheadSentAt = 0L
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -94,6 +91,8 @@ class SafetyService : Service(), KNGuidance_SafetyGuideDelegate, KNGuidance_Loca
             val j = runCatching { JSONObject(answer) }.getOrNull() ?: continue
             val key = j.optString("appKey")
             // A refusal is asked again after five minutes, not at every answer: a key typed anew is tried at once.
+            // An initialisation whose completion never comes (카카오 unreachable) is given up after a minute.
+            if (initState == "pending" && SystemClock.elapsedRealtime() - failedAt > 60_000) { initState = "error"; status("error", "초기화 응답 없음 (1분)") }
             val retry = initState == "error" && SystemClock.elapsedRealtime() - failedAt > 5 * 60_000
             if (key.isNotEmpty() && (key != appKey || retry) && initState != "pending") initialize(key)
             j.optJSONObject("fix")?.let { fix -> after = fix.optLong("seq", after) }
@@ -109,6 +108,7 @@ class SafetyService : Service(), KNGuidance_SafetyGuideDelegate, KNGuidance_Loca
     private fun initialize(key: String) {
         appKey = key
         initState = "pending"
+        failedAt = SystemClock.elapsedRealtime()
         status("init", "초기화 중")
         try {
             KNSDK.install(application, "${filesDir}/knsdk")
@@ -185,32 +185,8 @@ class SafetyService : Service(), KNGuidance_SafetyGuideDelegate, KNGuidance_Loca
 
     override fun guidanceDidUpdateAroundSafeties(guidance: KNGuidance, safeties: List<KNSafety>?) = Unit
 
-    /** The cameras ahead, a second apart at most: for the server's card. */
-    override fun guidanceDidUpdateLocation(guidance: KNGuidance, locationGuide: KNGuide_Location) {
-        val now = SystemClock.elapsedRealtime()
-        if (now - aheadSentAt < 1000) return
-        aheadSentAt = now
-        val here = locationGuide.location
-        val list = JSONArray()
-        for (s in latest) {
-            if (s.passed) continue
-            val d = here?.let { runCatching { it.distToLocation(s.location) }.getOrNull() } ?: continue
-            if (d < 0 || d > 1500) continue
-            list.put(describe(s, d))
-        }
-        // The 구간 단속 the SDK knows: its limit, its own average, and how far to its end (the car's page measures the
-        // average itself, as for ours, with this end).
-        val sections = JSONArray()
-        for (s in latest) {
-            val sec = s as? KNSafety_Section ?: continue
-            sections.put(describe(sec, here?.let { runCatching { it.distToLocation(sec.location) }.getOrNull() } ?: -1)
-                .put("passed", sec.passed)
-                .put("avg", sec.sectionAvrSpeed)
-                .put("remain", remainOf(sec))
-                .put("type", sec.sectionType?.name ?: ""))
-        }
-        post("ahead", JSONObject().put("safeties", list).put("sections", sections))
-    }
+    /** Only what the SDK would say is sent (shouldPlayVoiceGuide): the cameras ahead are its to time, as our own lists'. */
+    override fun guidanceDidUpdateLocation(guidance: KNGuidance, locationGuide: KNGuide_Location) = Unit
 
     /**
      * The SDK would speak now: what of is told (a camera's, a zone's warning), and its sound let go — the car says it in
@@ -227,11 +203,6 @@ class SafetyService : Service(), KNGuidance_SafetyGuideDelegate, KNGuidance_Loca
 
     override fun willPlayVoiceGuide(guidance: KNGuidance, voiceGuide: KNGuide_Voice) = Unit
     override fun didFinishPlayVoiceGuide(guidance: KNGuidance, voiceGuide: KNGuide_Voice) = Unit
-
-    /** The SDK's metres to a 구간 단속's end: kept internal to it, so read by its compiled name. */
-    private fun remainOf(s: KNSafety_Section): Int = runCatching {
-        s.javaClass.methods.first { it.name.startsWith("getRemainDist") && it.parameterCount == 0 }.invoke(s) as Int
-    }.getOrDefault(-1)
 
     private fun describe(s: KNSafety, dist: Int): JSONObject {
         val pos = s.location.pos

@@ -16,10 +16,16 @@ test("카카오's codes as our kinds: the cameras and the school zone, nothing e
   assert.equal(kindOf("KNSafetyCode_ParkingViolationCamera"), null);
 });
 
-test("cars get a slot while one is free and up; a third car waits; an idle car's slot is let go", () => {
+test("cars get a slot while one is free and ready; a third car waits; an idle car's slot is let go", () => {
   let now = 0;
   const hub = new KakaoHub(2, () => "key", () => now);
   assert.equal(hub.ready, false, "no app up yet");
+  // An app up but not through its initialisation (pending, or refused) serves no car.
+  hub.appEvent(1, { kind: "status", state: "init" });
+  hub.appEvent(2, { kind: "status", state: "error", detail: "C103 <b>x</b>" });
+  assert.equal(hub.ready, false);
+  assert.deepEqual([hub.carFix("a", fix).slot, hub.carFix("a", fix).why], [null, "down"]);
+  assert.ok(!hub.status().includes("<b>"), "the app's words shown as text");
   ready(hub, 1); ready(hub, 2);
   assert.equal(hub.ready, true);
   assert.equal(hub.carFix("a", fix).slot, 1);
@@ -33,10 +39,11 @@ test("cars get a slot while one is free and up; a third car waits; an idle car's
 });
 
 test("the app's long ask wakes at the car's fix, and what the SDK would say reaches that car once", async () => {
-  let now = 0;
+  let now = 1_700_000_000_000;
   const hub = new KakaoHub(1, () => "key", () => now);
   ready(hub, 1);
-  const asked = hub.appAsk(1, 0, 5000);
+  // The app asks with the seq it last saw from an earlier nav (a restart mid-drive): a fresh hub's seq is past it.
+  const asked = hub.appAsk(1, 1_600_000_000_000, 5000);
   hub.carFix("a", fix);
   const got = await asked;
   assert.equal(got?.active, true);

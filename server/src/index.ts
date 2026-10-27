@@ -360,7 +360,8 @@ app.get<{ Querystring: { at?: string; deg?: string; m?: string } }>("/api/road/a
 
 // 카카오 안전운전 (kakao/hub.ts, kakao-safety/): the emulators' apps ask for their car's fixes and tell what 카카오내비 SDK
 // would say; the cars send their fixes and take what was said. The apps' calls carry KAKAO_TOKEN (no login of theirs).
-const kakao = new KakaoHub(Number(env.KAKAO_SLOTS ?? 0) || 0, settings.reader("kakaoNativeKey"), Date.now, (m) => app.log.info(m));
+// KAKAO_SLOTS unset is 3, as compose's kakao service takes it: the two must agree, or the emulators ask for slots there are not.
+const kakao = new KakaoHub(env.KAKAO_SLOTS == null ? 3 : Number(env.KAKAO_SLOTS) || 0, settings.reader("kakaoNativeKey"), Date.now, (m) => app.log.info(m));
 const kakaoApp = (request: FastifyRequest) => {
   const want = Buffer.from(env.KAKAO_TOKEN ?? ""), got = Buffer.from(String(request.headers["x-kakao-token"] ?? ""));
   return want.length >= 16 && got.length === want.length && timingSafeEqual(want, got);
@@ -379,7 +380,7 @@ app.post<{ Body: { lon?: unknown; lat?: unknown; speed?: unknown; bearing?: unkn
   const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
   const lon = num(b.lon), lat = num(b.lat);
   if (lon == null || lat == null || Math.abs(lon) > 180 || Math.abs(lat) > 90) return reply.code(400).send({ error: "lon, lat" });
-  if (!kakao.ready) return { slot: null, events: [], ahead: [], why: "off" };
+  if (!kakao.ready) return { slot: null, events: [], why: "off" };
   return kakao.carFix(request.user?.name ?? request.ip, { lon, lat, speed: num(b.speed), bearing: num(b.bearing), acc: num(b.acc) });
 });
 app.post("/api/kakao/done", async (request) => { kakao.carDone(request.user?.name ?? request.ip); return { ok: true }; });
