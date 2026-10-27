@@ -2982,14 +2982,22 @@ function kakaoSay(e: KakaoSafety, speedMps: number | null) {
   sayWarning({ feature: { id: `kakao:${e.id}`, kind: e.kind, lon: e.lon, lat: e.lat, limit: e.limit }, alongM: 0, inM: e.dist, rungM: rung }, speedMps, "카카오 경고");
 }
 
-/** The camera card for 카카오's camera while the car comes to it; gone once past it, or two minutes on. */
-function kakaoHeld(): ReturnType<RouteWatch["limitAt"]> {
+/** 카카오's camera as the car comes to it and goes by: its distance, and whether it is behind (the nearest was close, and is past). */
+function kakaoWhere(): { d: number; passed: boolean; limit: number } | null {
   const c = kakaoCard, f = tracker.frame();
   if (!c || !f || !c.s.limit) return null;
   const d = metres(f.at[0], f.at[1], c.s.lon, c.s.lat);
   c.nearest = Math.min(c.nearest, d);
-  if (Date.now() - c.since > 120_000 || (c.nearest < 60 && d > c.nearest + 30)) { kakaoCard = null; return null; }
-  return { limit: c.s.limit, why: "camera", inM: d, id: KAKAO_CARD_ID };
+  const passed = c.nearest < 60 && d > c.nearest + 30;
+  // Held as our own cameras hold the sign: to 300 m past it (warnings.ts CAMERA_ON_M); three minutes at most.
+  if (Date.now() - c.since > 180_000 || (passed && d > 300)) { kakaoCard = null; return null; }
+  return { d, passed, limit: c.s.limit };
+}
+
+/** The camera card for 카카오's camera while the car comes to it; gone once past it. */
+function kakaoHeld(): ReturnType<RouteWatch["limitAt"]> {
+  const k = kakaoWhere();
+  return k && !k.passed ? { limit: k.limit, why: "camera", inM: k.d, id: KAKAO_CARD_ID } : null;
 }
 
 /** Lights this close along the route are one junction's; the nearest ahead of the car is "the next". */
@@ -3316,9 +3324,9 @@ async function placeLimits(w: RouteWatch, r: Route) {
   }
 }
 
-const SOURCE_NAMES: Record<string, string> = { tmap: "TMAP", nodelink: "표준노드링크", sign: "표지판", camera: "단속 카메라", zone: "보호구역", section: "구간 단속" };
+const SOURCE_NAMES: Record<string, string> = { kakao: "카카오 단속 카메라", tmap: "TMAP", nodelink: "표준노드링크", sign: "표지판", camera: "단속 카메라", zone: "보호구역", section: "구간 단속" };
 let signShown: { kmh: number; src: string } | null = null;
-function showRoadSign(sign: { kmh: number; src: string } | null, speedMps: number | null | undefined) {
+function showSign(sign: { kmh: number; src: string } | null, speedMps: number | null | undefined) {
   const box = el("road-sign");
   box.hidden = !sign;
   if (sign) {
@@ -3364,13 +3372,18 @@ function askHere(f: Shown) {
 
 function drawSign() {
   // The demo's screen: a sign as the drive would have one.
-  if (demo) return showRoadSign({ kmh: 50, src: "tmap" }, tracker.frame()?.speedMps ?? null);
+  if (demo) return showSign({ kmh: 50, src: "tmap" }, tracker.frame()?.speedMps ?? null);
   const f = tracker.frame();
-  if (!f) return showRoadSign(null, null);
+  if (!f) return showSign(null, null);
+  // 카카오's camera our lists lack (kakaoTick): its limit on the sign from when it is told to 300 m past it, as our own
+  // cameras' — over the road's, not over a 보호구역's or a 구간 단속's.
+  const kakaoLimit = kakaoWhere()?.limit;
+  const show = (sign: { kmh: number; src: string } | null, speedMps: number | null | undefined) =>
+    showSign(kakaoLimit && !(sign && (sign.src === "zone" || sign.src === "section")) ? { kmh: kakaoLimit, src: "kakao" } : sign, speedMps);
   const w = watch;
   if (w && route && !f.offRoute && f.alongM != null && w.hasRoadLimits) {
     const s = w.signLimitAt(f.alongM);
-    if (s) return showRoadSign({ kmh: s.kmh, src: s.src }, f.speedMps);
+    if (s) return show({ kmh: s.kmh, src: s.src }, f.speedMps);
   }
   askHere(f);
   // What the server said, while it is about here (not long ago, not far back).
@@ -3379,7 +3392,7 @@ function drawSign() {
   // since dropped, five seconds before the new answer; 2026-10-14, hantwo).
   const age = hereLimit ? Date.now() - hereLimit.t : Infinity;
   const fresh = hereLimit && hereLimit.kmh != null && ((away < HERE_MOVED_M && age < HERE_KEPT_MS) || (age < 30_000 && away < 300));
-  showRoadSign(fresh ? { kmh: hereLimit!.kmh!, src: hereLimit!.src ?? "" } : null, f.speedMps);
+  show(fresh ? { kmh: hereLimit!.kmh!, src: hereLimit!.src ?? "" } : null, f.speedMps);
 }
 // Between the road checks too, and with no route at all.
 setInterval(() => { if (!watch || !route || performance.now() - roadCheckedAt > 1500) drawSign(); }, 1000);
