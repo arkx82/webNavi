@@ -122,4 +122,9 @@ test("no target is suggested far below the limit, nor at all once the section is
   // Within 80 m of the end: no target.
   const r3 = tracker.update(9950, 100, section, 0, t0 + 358_200);
   assert.equal(r3.current?.targetKmh, null);
+  // Slow so far: the rest could be driven over the limit and still average under it — no "권장 209" (2026-10-27).
+  const slow = new SectionTracker();
+  slow.update(0, 50, section, 0, t0);
+  const r4 = slow.update(5000, 50, section, 0, t0 + 360_000);
+  assert.equal(r4.current?.targetKmh, null);
 });

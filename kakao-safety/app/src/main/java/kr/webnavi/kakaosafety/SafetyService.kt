@@ -22,6 +22,7 @@ import com.kakaomobility.knsdk.guidance.knguidance.locationguide.KNGuide_Locatio
 import com.kakaomobility.knsdk.guidance.knguidance.safetyguide.KNGuide_Safety
 import com.kakaomobility.knsdk.guidance.knguidance.safetyguide.objects.KNSafety
 import com.kakaomobility.knsdk.guidance.knguidance.safetyguide.objects.KNSafety_Camera
+import com.kakaomobility.knsdk.guidance.knguidance.safetyguide.objects.KNSafety_Section
 import com.kakaomobility.knsdk.guidance.knguidance.voiceguide.KNGuide_Voice
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -197,7 +198,18 @@ class SafetyService : Service(), KNGuidance_SafetyGuideDelegate, KNGuidance_Loca
             if (d < 0 || d > 1500) continue
             list.put(describe(s, d))
         }
-        post("ahead", JSONObject().put("safeties", list))
+        // The 구간 단속 the SDK knows: its limit, its own average, and how far to its end (the car's page measures the
+        // average itself, as for ours, with this end).
+        val sections = JSONArray()
+        for (s in latest) {
+            val sec = s as? KNSafety_Section ?: continue
+            sections.put(describe(sec, here?.let { runCatching { it.distToLocation(sec.location) }.getOrNull() } ?: -1)
+                .put("passed", sec.passed)
+                .put("avg", sec.sectionAvrSpeed)
+                .put("remain", remainOf(sec))
+                .put("type", sec.sectionType?.name ?: ""))
+        }
+        post("ahead", JSONObject().put("safeties", list).put("sections", sections))
     }
 
     /**
@@ -215,6 +227,11 @@ class SafetyService : Service(), KNGuidance_SafetyGuideDelegate, KNGuidance_Loca
 
     override fun willPlayVoiceGuide(guidance: KNGuidance, voiceGuide: KNGuide_Voice) = Unit
     override fun didFinishPlayVoiceGuide(guidance: KNGuidance, voiceGuide: KNGuide_Voice) = Unit
+
+    /** The SDK's metres to a 구간 단속's end: kept internal to it, so read by its compiled name. */
+    private fun remainOf(s: KNSafety_Section): Int = runCatching {
+        s.javaClass.methods.first { it.name.startsWith("getRemainDist") && it.parameterCount == 0 }.invoke(s) as Int
+    }.getOrDefault(-1)
 
     private fun describe(s: KNSafety, dist: Int): JSONObject {
         val pos = s.location.pos

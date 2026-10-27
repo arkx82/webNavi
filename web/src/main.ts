@@ -17,7 +17,7 @@ import { lazy, type MusicSource, type NowPlaying, type Playlist } from "./music/
 import { debounce, matches } from "./music/find";
 import { deep, pastel, tintOf } from "./music/tint";
 import { Voice } from "./voice";
-import { RouteWatch, phraseFor, type Ahead, type Feature, type Kind } from "./warnings";
+import { RouteWatch, SECTION_MAX_M, phraseFor, type Ahead, type Feature, type Kind } from "./warnings";
 import { Notes, incidentNote, popupNote, restNote, schoolNote, type Note } from "./notes";
 import { CameraLayer } from "./camera-layer";
 import { loadDrive, loadLast, saveDrive, saveLast, worthResuming } from "./resume";
@@ -2860,6 +2860,8 @@ setInterval(() => {
 let safeOn = false;
 /** Whether the road ahead was known at the last check: its coming and going written down once each. */
 let safeRoad = false;
+/** The car's metres along 안전운전's line at the last check: its 구간 단속 measured as a route's (showSectionHud). */
+let safeAlong: number | null = null;
 function safeTick() {
   const f = tracker.frame();
   if (!guide.safeDrive || route || sim?.running || demo || !f || f.mode === "waiting") {
@@ -2882,6 +2884,7 @@ function safeTick() {
     return;
   }
   const { alongM: along, watch: w, line } = on;
+  safeAlong = along;
   // Said as on a route; what would only be a card is let go (the cards are the route's).
   for (const due of w.due(along)) if (due.voice) sayWarning(due, f.speedMps, "안전운전 경고");
   showLimit(w.limitAt(along), f.speedMps);
@@ -2932,6 +2935,7 @@ let kakaoCard: { s: KakaoSafety; since: number; nearest: number } | null = null;
 function kakaoTick() {
   const f = tracker.frame();
   if (f && f.speedMps > 1.5) kakaoMovedAt = Date.now();
+  if (f && f.mode !== "waiting") kakaoSectionTick(f.at);
   const want = guide.kakaoSafety && !!health?.kakao && !demo && !sim?.running && !!f && f.mode !== "waiting" && Date.now() - kakaoMovedAt < KAKAO_PARKED_MS;
   if (!want || !f) {
     if (kakaoOn) {
@@ -2958,6 +2962,41 @@ function kakaoTick() {
 }
 setInterval(kakaoTick, 1000);
 
+/**
+ * 카카오's 구간 단속 our lists lack: its start camera told (kakaoSay), entered as the car passes it, its end placed by the
+ * distance 카카오 tells to its end camera; measured by our own SectionTracker on the car's odometer (터널: the tracker's
+ * reckoned place), as ours is on the route — the same 구간단속 card, average and chime.
+ */
+let kakaoOdo = 0;
+let kakaoOdoAt: LonLat | null = null;
+let kakaoSec: { id: string; limit: number; start: LonLat; entered: boolean; startOdo: number; endOdo: number | null; nearest: number; since: number } | null = null;
+const kakaoSectionTracker = new SectionTracker();
+function kakaoSectionTick(at: LonLat) {
+  if (kakaoOdoAt) {
+    const d = metres(kakaoOdoAt[0], kakaoOdoAt[1], at[0], at[1]);
+    // A jump (the first fix after a long gap, a pretend drive) is no distance driven.
+    if (d < 500) kakaoOdo += d;
+  }
+  kakaoOdoAt = at;
+  const k = kakaoSec;
+  if (!k) return;
+  if (!k.entered) {
+    const d = metres(at[0], at[1], k.start[0], k.start[1]);
+    k.nearest = Math.min(k.nearest, d);
+    // At the start camera, or past it (the nearest was close and is behind).
+    if (d < 40 || (k.nearest < 150 && d > k.nearest + 20)) { k.entered = true; k.startOdo = kakaoOdo - (d < 40 ? 0 : d); }
+    else if (Date.now() - k.since > 5 * 60_000) kakaoSec = null;
+    return;
+  }
+  // Out past its end, or far longer than any 구간 단속 runs.
+  if ((k.endOdo != null && kakaoOdo > k.endOdo + 30) || kakaoOdo - k.startOdo > SECTION_MAX_M) kakaoSec = null;
+}
+function kakaoSectionBounds() {
+  const k = kakaoSec;
+  if (!k?.entered || !k.limit) return null;
+  return { id: k.id, limit: k.limit, startAlongM: k.startOdo, endAlongM: k.endOdo ?? k.startOdo + SECTION_MAX_M };
+}
+
 /** Whether our own lists have it: a camera of ours near 카카오's camera, a zone near its zone. */
 function kakaoKnown(e: KakaoSafety): boolean {
   const camera = KAKAO_CAMERAS.has(e.kind);
@@ -2971,6 +3010,14 @@ function kakaoKnown(e: KakaoSafety): boolean {
 
 function kakaoSay(e: KakaoSafety, speedMps: number | null) {
   if (kakaoKnown(e)) { log(`카카오 경고 (우리 목록에 있음) ${e.code} ${Math.round(e.dist)} m`); return; }
+  // A 구간 단속 of 카카오's: its start opens one (unless one is being driven), its end tells how far it runs.
+  if (e.kind === "section-start" && e.limit && !kakaoSec?.entered && kakaoSec?.id !== `kakao:${e.id}`) {
+    kakaoSec = { id: `kakao:${e.id}`, limit: e.limit, start: [e.lon, e.lat], entered: false, startOdo: 0, endOdo: null, nearest: Infinity, since: Date.now() };
+  }
+  if (e.kind === "section-end" && kakaoSec?.entered && e.dist >= 0) {
+    kakaoSec.endOdo = kakaoOdo + e.dist;
+    if (e.limit) kakaoSec.limit = e.limit;
+  }
   if (KAKAO_CAMERAS.has(e.kind) && e.limit && (!kakaoCard || kakaoCard.s.id !== e.id)) kakaoCard = { s: e, since: Date.now(), nearest: Infinity };
   // 카카오's "at the place" telling (~150 m): too near for a rung of ours ("삼백미터 앞" at 145 m) — the card and the
   // sign show it; its far (~1 km) and middle (~500 m) tellings are said.
@@ -3192,13 +3239,15 @@ const HUD_STANDING_MS = 2000;
  * not, and an average of the two saws.
  */
 function showSectionHud(shown: Shown | null) {
-  const along = shown?.alongM ?? null;
+  // Our own 구간 단속: along the route's watch, or with no route along 안전운전's (its line, its metres).
+  const ownWatch = route ? watch : safe.watch;
+  const along = route ? shown?.alongM ?? null : safeOn ? safeAlong : null;
   const now = Date.now();
   if (along != null && along === hudAlong && now - hudAt < HUD_STANDING_MS) return;
   hudAlong = along;
   hudAt = now;
   const speedKmh = shown ? shown.speedMps * 3.6 : 0;
-  const sec = watch && along != null ? watch.currentSection(along) : null;
+  const sec = ownWatch && along != null ? ownWatch.currentSection(along) : null;
   const res = sectionTracker.update(
     along ?? 0,
     speedKmh,
@@ -3206,22 +3255,30 @@ function showSectionHud(shown: Shown | null) {
     guide.overspeedBy,
     now,
   );
-  currentSectionInfo = res.current;
   if (res.justExited) log(`구간단속 종료 최종 평균 ${res.justExited.avgKmh}km/h (제한 ${res.justExited.limit})`);
+  // None of ours: 카카오's (kakaoSectionTick), measured by our own tracker on the car's odometer.
+  const k = res.current ? null : kakaoSectionBounds();
+  const kres = kakaoSectionTracker.update(kakaoOdo, speedKmh, k, guide.overspeedBy, now);
+  if (kres.justExited) log(`카카오 구간단속 종료 최종 평균 ${kres.justExited.avgKmh}km/h (제한 ${kres.justExited.limit})`);
+  const current = res.current ?? kres.current;
+  const endKnown = !!res.current || kakaoSec?.endOdo != null;
+  currentSectionInfo = current;
 
   const box = el("section-hud");
-  if (!res.current) {
+  if (!current) {
     box.hidden = true;
     return;
   }
-  const s = res.current;
+  const s = current;
   if (res.justEntered) log(`구간단속 진입 제한 ${s.limit}km/h`);
+  if (kres.justEntered && !res.current) log(`카카오 구간단속 진입 제한 ${s.limit}km/h`);
   box.hidden = false;
   put("sec-limit-num", String(s.limit));
-  put("sec-remain", `남은 거리 ${km(s.remainM)}`);
+  // 카카오's end not told yet: no distance to it, nor a speed to keep.
+  put("sec-remain", endKnown ? `남은 거리 ${km(s.remainM)}` : "남은 거리 --");
   put("sec-avg-num", String(s.avgKmh));
   const targetBox = el("sec-target-box");
-  targetBox.hidden = s.targetKmh == null;
+  targetBox.hidden = s.targetKmh == null || !endKnown;
   if (s.targetKmh != null) put("sec-target-num", String(s.targetKmh));
   box.classList.toggle("over", s.over);
   if (s.over && guide.overspeed && now - chimedAt > CHIME_EVERY_MS) {
@@ -3379,7 +3436,7 @@ function drawSign() {
   if (!f) return showSign(null, null);
   // 카카오's camera our lists lack (kakaoTick): its limit on the sign from when it is told to 300 m past it, as our own
   // cameras' — over the road's, not over a 보호구역's or a 구간 단속's.
-  const kakaoLimit = kakaoWhere()?.limit;
+  const kakaoLimit = kakaoWhere()?.limit ?? kakaoSectionBounds()?.limit;
   const show = (sign: { kmh: number; src: string } | null, speedMps: number | null | undefined) =>
     showSign(kakaoLimit && !(sign && (sign.src === "zone" || sign.src === "section")) ? { kmh: kakaoLimit, src: "kakao" } : sign, speedMps);
   const w = watch;

@@ -124,8 +124,9 @@ export class SectionTracker {
     const remainAllowedS = totalAllowedS - elapsedS;
     if (remainM > 80 && remainAllowedS > 0.5) {
       const neededSpeed = Math.round((remainM / remainAllowedS) * 3.6);
-      // Not below the limit by more than can be driven sensibly where the limit applies, nor above what is possible.
-      if (neededSpeed >= this.limit - TARGET_BELOW_LIMIT_MAX) targetKmh = Math.min(350, neededSpeed);
+      // Only a speed under the limit is advice: above it the average is safe at the limit, and the limit holds anyway
+      // ("권장 209 km/h" near a section's end, 2026-10-27). Nor far below it, where nothing sensible keeps it.
+      if (neededSpeed < this.limit && neededSpeed >= this.limit - TARGET_BELOW_LIMIT_MAX) targetKmh = neededSpeed;
     }
 
     const over = avgKmh > this.limit + overspeedBy;
