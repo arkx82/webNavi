@@ -1,13 +1,15 @@
 # WebNavi
 
 테슬라 순정 브라우저에서 여는 국내용 웹 내비게이션. 경로는 TMAP / 카카오 /
-네이버 중 골라 받고, 단속 카메라·방지턱은 공공데이터로, 음성은 Qwen-TTS로.
+네이버 / 자체(표준노드링크) 중 골라 받고, 단속 카메라·방지턱은 공공데이터로(빠진 카메라는 카카오내비 SDK 로
+주행 중 보완), 음성은 Qwen-TTS로. 목적지 없이 달릴 때도 앞길의 카메라를 알리는 **안전운전 모드**가 있다.
 서버는 집의 NUC(도커)에서 돌고, 차는 HTTPS로 그 서버에 접속한다.
 
 ```
 web/     Vite + TypeScript + MapLibre GL — 차에서 여는 화면 (빌드 결과를 서버가 정적 서빙)
 server/  Fastify + TypeScript — API 키 은닉 프록시, Flatbush 공간 색인, TTS 파일 서빙, 차량 데이터 중계
 tools/   표준노드링크 → OSRM, 정밀도로지도 변환 스크립트
+kakao-safety/  카카오 안전운전 보완 — KVM 위 안드로이드 에뮬레이터와 그 안의 앱 (compose 서비스 `kakao`)
 fleet/   Tesla Fleet Telemetry 서버 설정 (compose 프로필 `fleet`)
 caddy/   TLS 종단 (Let's Encrypt, 지금은 Cloudflare Tunnel 을 씀)
 ```
@@ -21,7 +23,8 @@ npm run dev                 # web :5173 (→ /api 프록시), server :8080
 npm run build && npm start  # 빌드 결과를 server가 :8080 에서 함께 서빙
 npm test                    # server + web 단위 테스트
 DASHSCOPE_API_KEY=… npx tsx server/src/prerender.ts   # 고정 멘트 미리 렌더링 (서버도 켜질 때 없는 것만 만든다)
-docker compose up -d --build   # NUC: nav · osrm (caddy 는 주석 처리, HTTPS 는 Cloudflare Tunnel)
+docker compose up -d --build   # NUC: nav · osrm · kakao (caddy 는 주석 처리, HTTPS 는 Cloudflare Tunnel)
+kakao-safety/build.sh          # 카카오 안전운전 앱(APK)을 컨테이너에서 빌드 — kakao 서비스가 쓰는 /mnt/data/webnavi/kakao-safety 에
 ```
 
 `server/data/` 에 data.go.kr 표준데이터 CSV를 넣으면 시작 시 색인된다
@@ -36,8 +39,9 @@ docker compose up -d --build   # NUC: nav · osrm (caddy 는 주석 처리, HTTP
 |---|---|---|---|
 | TMAP appKey (`TMAP_APP_KEY`) | [SK open API](https://openapi.sk.com) → 앱 만들기 → **TMAP API** 상품 사용 | 티맵 경로(`/tmap/routes`), 바탕 지도(벡터), 좌표→주소 | 셋 중 하나 이상 권장 |
 | 카카오 REST 키 (`KAKAO_REST_KEY`) | [카카오디벨로퍼스](https://developers.kakao.com) 앱의 REST API 키 + [카카오모빌리티 개발자센터](https://developers.kakaomobility.com)에서 같은 앱으로 **길찾기** 사용 | 카카오 경로(`apis-navi.kakaomobility.com`), **장소 검색**, 주변(카테고리), 좌표→행정구역 | 검색에 필요 — 사실상 필수 |
+| 카카오 네이티브 앱 키 (`KAKAO_NATIVE_KEY`) | 같은 카카오 앱 → [앱] → [플랫폼 키] → 네이티브 앱 키. 그 키에 **Android 정보**(패키지명 `kr.webnavi.kakaosafety`, 키 해시 `v73ja+SqDWYBOJw8lVflkue/ZHU=`)를 등록하고 **그 키의 값**을 넣는다 | 카카오 안전운전 보완(아래) — 다른 네이티브 키를 넣으면 C103 INVALID_TOKEN | 선택 |
 | 네이버 Client ID / Secret (`NAVER_CLIENT_ID/SECRET`) | [네이버 클라우드](https://console.ncloud.com) → Maps → Application 등록, **Directions 5** · **Dynamic Map** 선택 | 네이버 경로, 네이버 지도(선택) | 선택 |
-| DashScope 키 (`DASHSCOPE_API_KEY`) | [Alibaba Model Studio](https://modelstudio.console.alibabacloud.com) (국제판) API Key | 음성(Qwen3-TTS). 고정 문장 ~350개는 한 번 만들어 디스크에 두고 다시 부르지 않음 | 음성 안내에 필수 |
+| DashScope 키 (`DASHSCOPE_API_KEY`) | [Alibaba Model Studio](https://modelstudio.console.alibabacloud.com) (국제판) API Key | 음성(Qwen3-TTS). 고정 문장 ~390개는 한 번 만들어 디스크에 두고 다시 부르지 않음 | 음성 안내에 필수 |
 | 공공데이터포털 키 (`DATA_GO_KR_KEY`) | [data.go.kr](https://www.data.go.kr) 일반 인증키 하나 + 아래 표의 **서비스마다 활용신청** | 단속 카메라 · 방지턱 · 보호구역 · 신호등 · 날씨 · 기상특보 · 미세먼지 · 충전소 · 사고다발 | 안전 안내에 필수 |
 | 오피넷 키 (`OPINET_KEY`) | [오피넷](https://www.opinet.co.kr) → 유가정보 API 신청 | 주변 주유소 가격 | 선택 |
 | 한국도로공사 키 (`EX_API_KEY`) | [고속도로 공공데이터 포털](https://data.ex.co.kr) | 휴게소(위치 · 기름값 · 편의시설) | 선택 |
@@ -64,6 +68,9 @@ docker compose up -d --build   # NUC: nav · osrm (caddy 는 주석 처리, HTTP
 | 한국도로공사_고속도로 노면색깔유도선 (15118978, 파일데이터) | 키 없이 파일 내려받기 | 분기점 "분홍색 유도선" 안내 |
 
 `/admin` → 상태 표가 목록마다 받은 개수와 날짜(또는 거절 사유)를 보여 주고, **연결 확인** 이 서비스마다 실제로 한 번씩 불러 본다.
+
+`.env` 에만 두는 값: `KAKAO_TOKEN`(카카오 에뮬레이터 앱 ↔ 서버 공유 비밀, 16자 이상 난수) · `KAKAO_SLOTS`(동시에 카카오 보완을 받는
+차 수, 기본 3 — nav 와 kakao 서비스가 같은 값을 쓴다).
 
 ## 계정과 권한
 
@@ -118,7 +125,7 @@ docker compose up -d --build   # NUC: nav · osrm (caddy 는 주석 처리, HTTP
 네 자만 보이고, 키 자체는 다시 나오지 않는다. **저장하면 재시작 없이 바로
 적용**된다(제공자가 호출 때마다 읽음). 버튼 둘: **연결 확인**은 서비스마다 실제
 호출을 한 번씩 해서 ok/오류를 표로 보여 주고, **고정 멘트 렌더링**은 안내·경고 문장
-(약 330개) 중 없는 것을 만든다.
+(약 390개) 중 없는 것을 만든다.
 
 저장 방식 (`server/src/settings.ts`):
 - `CONFIG_DIR/master.key` — 첫 실행 때 만든 32바이트 난수, 0600.
@@ -155,6 +162,15 @@ open https://nav.example.com/admin   # 비밀번호 정하고 키 입력, 사용
   있다(`/api/*` 전부 잠김 — 키 요금 보호). 세션은 1년, 비밀번호를 바꾸면 그
   사용자의 다른 기기는 다시 로그인. 집·회사·즐겨찾기, 최근 목적지, 안내 설정은
   사용자마다 서버 DB(`/config/webnavi.db`, SQLite)에 저장돼 기기끼리 같다.
+- **카카오 안전운전 보완**을 쓰려면 호스트에 KVM 이 있어야 한다. Proxmox LXC 라면 호스트에서
+  `pct set <id> --dev0 /dev/kvm` 후 컨테이너 재시작. 에뮬레이터 3대에 메모리 약 11 GB, 쉬는 동안 CPU 코어 하나의 약 20 %.
+  설치 · 동작은 [kakao-safety/README.md](kakao-safety/README.md).
+- **부팅 순서 주의(LXC)**: `/mnt/data` 가 fstab `nofail` 로 늦게 붙으면 도커가 먼저 떠서 빈 폴더를 물고 시작한다(2026-10-27:
+  osrm 이 "waiting for /data/korea.osrm" 으로 1시간 넘게 멈추고 nav 가 빈 설정으로 돌았다). 이 LXC 에서는 그 마운트에 systemd 단위가
+  없어 `After=mnt-data.mount` 로는 안 되고, 도커가 마운트를 기다리게 한다 —
+  `/etc/systemd/system/docker.service.d/wait-data-mounts.conf`:
+  `[Service]` `ExecStartPre=/bin/sh -c 'for i in $(seq 1 180); do mountpoint -q /mnt/data && mountpoint -q /mnt/cache && exit 0; sleep 1; done; exit 0'`
+  뒤 `systemctl daemon-reload`. 이미 그렇게 떴다면 `docker compose restart osrm nav`.
 - 차에서는 `https://nav.example.com` 을 브라우저 즐겨찾기로. `/admin` 은 같은 주소
   뒤에 있고 계정의 아이디 · 비밀번호로 들어오니 비밀번호가 곧 방어선이다 — 짧게 짓지 말 것
   (틀린 로그인 5번이면 그 주소 · 아이디가 1분 잠긴다).
@@ -179,7 +195,28 @@ open https://nav.example.com/admin   # 비밀번호 정하고 키 입력, 사용
 닿는 진입로, 옆길 끄트머리)에 붙으면 거리를 바꿔 다시 묻고, 회전(좌 · 우회전, 길 끝)이 들어간 길은 뒤로 미룬다. 곧장 갈 길이 없으면 한쪽으로만
 굽은 길은 따라가고, 양쪽으로 갈리면(T자 교차로) 거기서 멈춘다 — 차가 꺾으면 3초 안에 그 길로 다시 잡는다. 2026-10-25 hantwo · june 의 주행
 346곳에서 60 % 는 예측한 1.5 km 를 끝까지 그대로 달렸고(나머지는 대부분 운전자가 꺾은 곳), 예측이 혼자 꺾은 곳은 19곳(5 %). 앞길 앞에는 지나온 길(최대 25 km, 유턴하면 그 앞까지)을
-붙여, 앞길을 새로 받아도 뒤에서 시작한 구간 단속이 이어진다(`web/src/safe-drive.ts`). TMAP 호출은 쓰지 않는다.
+붙여, 앞길을 새로 받아도 뒤에서 시작한 구간 단속이 이어지고, 구간단속 창(평균 · 남은 거리)도 경로 안내 때처럼 뜬다
+(`web/src/safe-drive.ts`). TMAP 호출은 쓰지 않는다. 같은 카메라를 아침 · 저녁에 두 번 지나도 말하도록, 말한 기록은 2 km 멀어지거나
+15분 지나면 잊는다(hantwo 출퇴근 재생: 경로 안내의 카메라 경고 173개 중 164개를 똑같이 말함).
+
+**카카오 안전운전 보완**(안내 설정 → 단속 · 경고 → "카카오로 빠진 카메라 보완", 기본 켬): 카카오는 단속 카메라를 REST API 로 주지 않고
+카카오내비 SDK(안드로이드 · iOS)의 안전운전 모드로만 준다. 그래서 서버의 `kakao` 서비스가 KVM 위 안드로이드 에뮬레이터를 슬롯 수만큼
+돌리고, 움직이는 차의 위치를 1초마다 그 에뮬레이터 GPS 에 넣어(`adb emu geo fix` — SDK 는 앱이 넣은 mock 위치를 버린다) SDK 가 말하려는
+카메라 안내를 받는다(`server/src/kakao/hub.ts`, 차 화면 `kakaoTick`). 그 카메라가 지금 감시 중인 우리 목록(경로 · 안전운전)의 80 m 안에
+있으면 넘어가고(진단 기록 "카카오 경고 (우리 목록에 있음)"), 없으면:
+- **음성**: 우리 목소리 · 우리 문장으로, 카카오가 알린 거리에 가까운 단계(먼 안내 ~1 km → 1 km, 중간 ~500 m → 600 m). 200 m 안의
+  지점 안내는 말하지 않는다. 운전자의 안내 설정(카메라 종류 끔, 카메라 안내 시작 거리)을 그대로 따른다.
+- **카메라 카드**("40 · 단속 카메라 530 m · 카카오")와 **제한속도 표지판**(알린 때부터 지나서 300 m 까지), 넘으면 경고음.
+- **구간 단속**: 카카오가 알린 시점을 지나면 우리 구간단속 창을 띄우고 평균은 우리가 계산한다(달린 거리 ÷ 시간, 터널 추정 포함).
+  끝은 카카오가 종점까지 알려 준 거리로(알기 전에는 "남은 거리 --").
+- **지도 아이콘은 그리지 않는다** — 카카오 조건이 다른 회사 지도 위에 카카오 카메라 위치를 표시하는 것을 금한다. 카카오 데이터는
+  저장하지 않고 15초 안에 쓰고 버린다(비상업 개인 프로젝트, 무료 쿼터).
+
+슬롯이 다 차면(기본 3대) 그 차는 우리 목록만으로 안내한다. `/admin` → 상태 → "카카오 안전운전" 에 슬롯마다 대기 · 주행 중 · 오류.
+2026-10-27 강남대로 시험: 카카오가 알린 신호 · 과속 카메라 6대는 모두 우리 목록 25 m 안에 있었다(서울 강남은 경찰청 자료가 촘촘함).
+
+**구간 단속 창의 권장 속도**는 제한속도보다 늦춰야 평균을 맞출 수 있을 때만 나온다(평균이 낮을 때 "권장 121 km/h" 처럼 제한을 넘는
+속도를 권하던 것을 2026-10-27 에 막음).
 
 **신호 단속 카메라**도 제한 속도를 말한다("육백미터 앞에 신호 단속 카메라가 있습니다, 제한 속도 오십입니다" — 경찰청 목록의 그 자리 도로 제한).
 주행 기록에서 가장 많이 나온 카메라 안내가 제한 속도 없는 신호 단속이었다.
@@ -239,9 +276,15 @@ unclassified), 연결로 → *_link, 링크마다 oneway·maxspeed·lanes·name�
 | `GET /api/nearby?cat=&at=lon,lat&r=&fuel=` | 주변 한 종류. `cat` = gas·ev·parking·food·cafe·cvs·hospital·pharmacy·bank·rest. 주유소는 오피넷(`fuel` B027 휘발유·D047 경유·B034 고급·K015 LPG의 가격), 충전소는 환경공단(급속/완속 빈 수, 최대 kW, 요금), 나머지는 카카오 카테고리 |
 | `GET /api/nearby/gas/:id` | 오피넷 주유소 하나의 전 유종 가격·주소·전화·세차/편의점 |
 | `GET /api/safety/near?lon&lat&r=1500` | 반경 안 시설물, 가까운 순 |
+| `POST /api/road/limits` (`{path}`) · `GET /api/road/limit?at=lon,lat&deg=` | 경로 전체의 제한속도 구간 · 경로 없이 지금 자리의 제한속도 |
+| `GET /api/road/ahead?at=lon,lat&deg=&m=` | 안전운전 모드의 앞길(자체 OSRM 으로 200 m 씩 이어 붙인 선) |
+| `POST /api/kakao/fix` · `POST /api/kakao/done` | 차의 위치를 카카오 슬롯에 넣고 그 사이 카카오가 말한 카메라를 받음 · 슬롯 놓기 |
 | `GET /api/tts?text=` | 그 문장의 WAV. 디스크 캐시(`server/tts/`, 음성+문장 해시) 우선, 없으면 Qwen3-TTS(DashScope) 호출 후 저장 |
 | `GET /api/stream?url=` | 음악 스트림을 CORS 헤더 붙여 중계 (Web Audio 그래프에 넣으려면 필요) |
 | `GET /api/car/stream` | 로그인한 사용자의 차 샘플(속도·오도미터·기어·차 자체 위치)을 SSE 로. 연결된 차가 없으면 204 |
+
+`/internal/kakao/slot/:n` (긴 대기 GET) · `/internal/kakao/slot/:n/event` (POST) 는 에뮬레이터의 앱 · 위치 공급기 전용이고 로그인 대신
+`X-Kakao-Token` 을 본다.
 
 ## 폰에서 목적지 보내기 (`/share`)
 
@@ -312,8 +355,9 @@ unclassified), 연결로 → *_link, 링크마다 oneway·maxspeed·lanes·name�
    표로, `maneuver.ts`)·남은 거리·도로명. 회전 300 m 전부터(고속도로 1 km) 배너 아래 **남은 거리 막대**가 줄어든다.
    그 다음 회전이 800 m 안(고속도로 2 km)이면 배너에 붙은 **"그 다음" 띠**에 화살표와 거리, 300 m 안(고속도로 500 m)이면
    노란 **"바로 이어서"** 와 옮겨 갈 차로("왼쪽 차로로")가 함께 나온다. 그 아래 도착 시각과 남은 시간·거리,
-   **경로**(주행 중에도 카드를 다시 불러 갈아탐; 닫으면 그대로 계속)·**종료**. 지도 위 가운데에는 회전 800 m 전(고속도로 2 km)부터
-   **차로 카드**(정밀도로지도의 차로와 갈 차로)가 뜨고, 회전이 연달아 있으면 앞 회전을 20 m 지나자마자 다음 회전의 카드로 바뀐다.
+   **경로**(주행 중에도 카드를 다시 불러 갈아탐; 닫으면 그대로 계속)·**종료**. 회전 800 m 전(고속도로 2 km)부터 **차로 카드**
+   (정밀도로지도의 차로와 갈 차로)가 뜨고 — 기본은 내 차 바로 아래, 안내 설정 → 차로 안내 위치로 내 차 위 · 지도 위쪽 — 회전이
+   연달아 있으면 앞 회전을 20 m 지나자마자 다음 회전의 카드로 바뀐다.
 
 **경로 옵션**: 경로 카드 위 **무료도로 우선** 칩, 안내 설정의 **어린이 보호구역 회피**. 카카오는 둘 다 지키고, 티맵은 하나씩은
 지키지만 둘을 같이 고르면 보호구역만 피한다(유료도로는 그대로). 네이버는 무료도로만, 자체 경로(OSRM)는 둘 다 못 지킨다. 지키지 못한 경로는 카드에 주황색으로 "유료도로 포함" · "보호구역 포함" 이 붙고, 지킨 경로가 먼저 오며 그것만 "가장 빠름" 이
@@ -341,6 +385,7 @@ DPR 이다. 같은 사이트만 페이지를 프레임에 넣을 수 있다(`X-F
 - **신호등 · 단속 카메라 아이콘**은 기울인 지도에서도 바닥에 눕지 않고 화면을 향해 서 있다. 과속 카메라는 빨간 테두리
   원 안에 제한속도를 굵게 쓴 표지판(어린이 보호구역은 노란 바탕, 구간 단속 끝은 회색 "해제")에 작은 카메라와 아래 꼭지로
   그 자리를 가리키고, 경로의 다음 카메라는 1.35배로 그린다. 표지판은 처음 필요할 때 캔버스에 그려 지도에 넣는다.
+  우리 목록(공공데이터 + 지자체 파일 보충)의 카메라만 그리고, 카카오가 알린 카메라는 약관상 그리지 않는다(카드 · 표지판 · 음성만).
 - **경로 막힘 막대**(지도 설정, 기본 켬): 지도 오른쪽 끝에 경로 전체를 세로 막대로 — 아래가 출발, 위가 목적지,
   경로선과 같은 교통 색(초록 원활 · 노랑 서행 · 빨강 정체), 지나온 곳은 회색, 흰 점이 내 차. 교통 정보가 있는 경로만.
 
@@ -482,13 +527,14 @@ TMAP 키가 있으면 **티맵의 벡터 지도(Tmapv3)** 를 바닥에 깔고, 
 | 지하차도 · 고가차도 | 그 도로의 마지막 먼 단계(300 m / 600 m) · "잠시 후" | "삼백미터 앞에서 왼쪽 지하차도 진입입니다", "잠시 후 고가차도 왼쪽 옆길입니다" |
 | 고속도로 진입 · 톨게이트 · 도착 | "잠시 후" 한 번 | "잠시 후 고속도로 진입입니다", "잠시 후 톨게이트입니다" |
 | 직진 | 방면·분기가 있는 곳만, "잠시 후" 한 번 | 카카오의 IC 마다 오는 "12시 방향"은 말하지도 띄우지도 않는다 |
-| 경고 | 종류마다 600 m · 300 m 등 | "육백미터 앞에 과속 단속 카메라가 있습니다, 제한 속도 오십입니다" |
+| 경고 | 종류마다 600 m · 300 m 등 (카메라는 안내 설정의 1 km · 600 m · 300 m 부터) | "육백미터 앞에 과속 단속 카메라가 있습니다, 제한 속도 오십입니다", "삼백미터 앞에 신호 단속 카메라가 있습니다, 제한 속도 오십입니다" |
+| 카카오 보완 경고 | 카카오가 알린 거리에 가까운 단계 (200 m 안은 말하지 않음) | 위와 같은 문장 — 우리 목록에 없는 카메라만 |
 
 안내 중에는 지금 속도로 5분 앞(3–10 km)의 안내 · 경고 문장을 브라우저 캐시에 미리 받아 두고(디코딩 없이, `voice.warm`),
 단속 카메라도 경로 앞쪽을 2.5 km 칸마다 미리 묻는다. 터널이나 산간에서 몇 분 끊겨도 음성 안내와 경고는 그대로 나온다.
 
 고속도로 회전의 1 km · 600 m 단계는 분기점 이름과 방면을 붙이고(그때 만든다), 1 km 에서 노면 유도선 색이나
-미리 옮길 차로를 덧붙인다. 정해진 문장은 약 330개이고 **서버가 켜질 때 없는 것만 미리 만들어** `tts/` 에 둔다.
+미리 옮길 차로를 덧붙인다. 정해진 문장은 약 390개이고 **서버가 켜질 때 없는 것만 미리 만들어** `tts/` 에 둔다.
 어휘에 없는 안내만 제공자 문구를 줄여서("…후 …를 따라 15m 이동" 을 떼고) 한 번 만든다. 화면이 말할 수 있는
 문장이 모두 목록에 있는지는 테스트(`web/src/speech.test.ts`)가 확인한다.
 
@@ -539,5 +585,6 @@ HTML5 Audio 기반으로 동작하며, 내비 음성이 나올 때 `setVolume(0.
 
 - [docs/STATUS.md](docs/STATUS.md) — 바뀐 것과 남은 확인 거리, 날짜별
 - [docs/car-telemetry.md](docs/car-telemetry.md) — 차량 데이터로 GPS 음영 보정
+- [kakao-safety/README.md](kakao-safety/README.md) — 카카오 안전운전 보완 (에뮬레이터, 앱, 위치 공급기, 카카오 설정)
 - [fleet/README.md](fleet/README.md) — Fleet Telemetry 서버
 - [server/data/README.md](server/data/README.md) — 표준데이터 CSV
