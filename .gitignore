@@ -28,3 +28,9 @@ nodelink/
 
 # Claude Code agents' working copies (git worktrees), not the project.
 .claude/worktrees/
+
+# The safety app's signing key lives on the server (/mnt/data/webnavi/kakao-safety), not here.
+kakao-safety/signing/
+kakao-safety/app/build/
+kakao-safety/.gradle/
+kakao-safety/build/

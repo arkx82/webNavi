@@ -61,6 +61,8 @@ export interface Health {
   hdmap?: boolean;
   /** The 3D lanes (j3d.db) for the junction view. */
   hdmap3d?: boolean;
+  /** 카카오 안전운전 slots up on the server (server/src/kakao/hub.ts): the cameras our lists lack, said as the car goes. */
+  kakao?: boolean;
 }
 
 // ---- nearby: mirrors server/src/nearby/types.ts ----

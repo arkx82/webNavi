@@ -16,6 +16,8 @@ import { join } from "node:path";
 export interface Secrets {
   tmapAppKey?: string;
   kakaoRestKey?: string;
+  /** 카카오내비 SDK's 안전운전 on the emulators (kakao-safety/): the same Kakao app's 네이티브 앱 키. */
+  kakaoNativeKey?: string;
   naverClientId?: string;
   naverClientSecret?: string;
   dashscopeApiKey?: string;
@@ -63,6 +65,7 @@ export const DEFAULT_TIDAL_CLIENT_SECRET = "1Nn9AfDAjxrgJFJbKNWLeAyKGVGmINuXPPLH
 const ENV: Record<SecretName, string | undefined> = {
   tmapAppKey: "TMAP_APP_KEY",
   kakaoRestKey: "KAKAO_REST_KEY",
+  kakaoNativeKey: "KAKAO_NATIVE_KEY",
   naverClientId: "NAVER_CLIENT_ID",
   naverClientSecret: "NAVER_CLIENT_SECRET",
   dashscopeApiKey: "DASHSCOPE_API_KEY",
@@ -92,7 +95,7 @@ const ENV: Record<SecretName, string | undefined> = {
 
 /** The fields the page edits, in the order it shows them. */
 export const EDITABLE: SecretName[] = [
-  "tmapAppKey", "kakaoRestKey", "naverClientId", "naverClientSecret", "dashscopeApiKey", "ttsVoice",
+  "tmapAppKey", "kakaoRestKey", "kakaoNativeKey", "naverClientId", "naverClientSecret", "dashscopeApiKey", "ttsVoice",
   "opinetKey", "dataGoKrKey", "evTariffs",
   "exKey", "itsKey", "seoulKey",
   "tidalClientId", "tidalClientSecret",

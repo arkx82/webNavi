@@ -617,6 +617,12 @@ export class RouteWatch {
     this.onRoute = this.onRoute.filter((f) => !kinds.includes(f.feature.kind));
   }
 
+  /** The features this watch placed within [m] of [at]: whether our own lists know a camera 카카오 tells of. */
+  near(at: LonLat, m: number): Feature[] {
+    const k = 111_320 * Math.cos((at[1] * Math.PI) / 180);
+    return this.onRoute.map((p) => p.feature).filter((f) => Math.hypot((f.lon - at[0]) * k, (f.lat - at[1]) * 111_320) <= m);
+  }
+
   /** Everything ahead of [alongM] within [horizonM], nearest first; an area stays while the car is in it. */
   ahead(alongM: number, horizonM = 1000): Ahead[] {
     const out: Ahead[] = [];

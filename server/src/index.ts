@@ -1,4 +1,4 @@
-import Fastify from "fastify";
+import Fastify, { type FastifyRequest } from "fastify";
 import { setDefaultAutoSelectFamilyAttemptTimeout } from "node:net";
 import fastifyStatic from "@fastify/static";
 import { existsSync, readdirSync } from "node:fs";
@@ -43,6 +43,8 @@ import { registerCar } from "./car/index.js";
 import fastifyCompress from "@fastify/compress";
 import { Traffic } from "./road/traffic.js";
 import { AHEAD_MAX_M, roadAhead } from "./road/ahead.js";
+import { KakaoHub } from "./kakao/hub.js";
+import { timingSafeEqual } from "node:crypto";
 import { SpeedLimits, type Fetch, type LonLat as LimitLonLat } from "./road/limits.js";
 import { SeoulLines } from "./road/seoul-lines.js";
 import { HdPoints } from "./safety/hd-points.js";
@@ -203,6 +205,7 @@ app.get("/api/health", async () => ({
   ok: true,
   providers: Object.fromEntries(Object.values(providers).map((p) => [p.name, p.ready])),
   safetyFeatures: safety.features.length,
+  kakao: kakao.ready,
   search: search.ready,
   tts: speaker.ready,
   nearby: nearby.sources(),
@@ -354,6 +357,32 @@ app.get<{ Querystring: { at?: string; deg?: string; m?: string } }>("/api/road/a
   const road = await roadAhead(base, at, deg, m, osrmFetch).catch((e) => { app.log.warn({ err: (e as Error).message }, "road ahead"); return null; });
   return road ?? { path: null };
 });
+
+// 카카오 안전운전 (kakao/hub.ts, kakao-safety/): the emulators' apps ask for their car's fixes and tell what 카카오내비 SDK
+// would say; the cars send their fixes and take what was said. The apps' calls carry KAKAO_TOKEN (no login of theirs).
+const kakao = new KakaoHub(Number(env.KAKAO_SLOTS ?? 0) || 0, settings.reader("kakaoNativeKey"), Date.now, (m) => app.log.info(m));
+const kakaoApp = (request: FastifyRequest) => {
+  const want = Buffer.from(env.KAKAO_TOKEN ?? ""), got = Buffer.from(String(request.headers["x-kakao-token"] ?? ""));
+  return want.length >= 16 && got.length === want.length && timingSafeEqual(want, got);
+};
+app.get<{ Params: { n: string }; Querystring: { after?: string; wait?: string } }>("/internal/kakao/slot/:n", async (request, reply) => {
+  if (!kakaoApp(request)) return reply.code(403).send({ error: "token" });
+  const a = await kakao.appAsk(Number(request.params.n), Number(request.query.after) || 0, Math.min(15, Number(request.query.wait) || 0) * 1000);
+  return a ?? reply.code(404).send({ error: "no such slot" });
+});
+app.post<{ Params: { n: string }; Body: Record<string, never> }>("/internal/kakao/slot/:n/event", async (request, reply) => {
+  if (!kakaoApp(request)) return reply.code(403).send({ error: "token" });
+  return kakao.appEvent(Number(request.params.n), request.body ?? {}) ? { ok: true } : reply.code(404).send({ error: "no such slot" });
+});
+app.post<{ Body: { lon?: unknown; lat?: unknown; speed?: unknown; bearing?: unknown; acc?: unknown } }>("/api/kakao/fix", async (request, reply) => {
+  const b = request.body ?? {};
+  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+  const lon = num(b.lon), lat = num(b.lat);
+  if (lon == null || lat == null || Math.abs(lon) > 180 || Math.abs(lat) > 90) return reply.code(400).send({ error: "lon, lat" });
+  if (!kakao.ready) return { slot: null, events: [], ahead: [], why: "off" };
+  return kakao.carFix(request.user?.name ?? request.ip, { lon, lat, speed: num(b.speed), bearing: num(b.bearing), acc: num(b.acc) });
+});
+app.post("/api/kakao/done", async (request) => { kakao.carDone(request.user?.name ?? request.ip); return { ok: true }; });
 
 // 노면색깔유도선 at a motorway junction: which colour of line leads to each branch.
 const colourGuides = new ColourGuides(configDir, (town) => (search.ready ? search.find(town).then((p) => p[0]?.at ?? null) : Promise.resolve(null)));
@@ -633,6 +662,7 @@ const admin = registerAdmin(app, settings, {
     시설물: safety.features.length,
     제한속도: (() => { const l = limits.status(); return `TMAP 오늘 ${l.tmapCallsToday}/${l.budget}건 · 노드링크 ${l.nodelink ? "있음" : "없음"} · 정밀도로지도 속도 표지판 ${speedSigns.size}개${l.lastError ? ` · 마지막 오류 ${l.lastError}` : ""}`; })(),
     "색깔 유도선": `${colourGuides.ready ? "도로공사 있음" : "도로공사 없음"} · 서울시 ${seoulLines.count}곳`,
+    "카카오 안전운전": kakao.status(),
     "단속 카메라": cameras ? `${cameras.features.length}대 (${new Date(cameras.at).toLocaleDateString("ko-KR")}) · 지자체 파일로 보충 ${filled.length}대${filesError ? ` · 파일 확인 실패 ${filesError}` : ""}` : camerasError ?? "아직 없음",
     ...Object.fromEntries(DATASETS.map((d) => {
       const k = sets.get(d.name);

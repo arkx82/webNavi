@@ -108,6 +108,8 @@ export interface GuideSettings {
   cameras: boolean;
   /** 안전운전 모드: with no route, the cameras and the rest on the road the car is on, warned of all the same (safe-drive.ts). */
   safeDrive: boolean;
+  /** 카카오 안전운전 보완: the cameras our lists lack, from 카카오내비 SDK on the server's emulators, said as ours (main.ts kakaoTick). */
+  kakaoSafety: boolean;
   /** Where camera warnings start: 1000, 600 or 300 m ahead. */
   cameraFromM: 1000 | 600 | 300;
   sections: boolean;
@@ -140,7 +142,7 @@ export type Mode = "voice" | "show" | "off";
 
 export const DEFAULTS: GuideSettings = {
   voice: true, voiceName: null, volume: 1, turns: true, junctionNames: true, laneHints: true, merges: true, closeups: true, junction3d: true, junction3dMode: "still", sendLogs: true, layout: "classic", destAt: "left", hdLanes: true, hdLanesWhen: "turns", laneGuide: true, colorLines: true, theme: "auto", nightCity: false, carIcon: "model3d", carPaint: PAINTS[0][0], carSize: "large", trafficBar: true, lanesAt: "car", endOnArrive: true, mapDpr: "auto", followFps: "auto", ducking: "soft", fasterRoute: "ask", avoidSchool: false, carData: "auto", rev: 4, uiScale: 1, lightsOnMap: "route", camerasOnMap: "route", nextLight: true, flashSignals: true,
-  cameras: true, safeDrive: true, cameraFromM: 600, sections: true, schools: true,
+  cameras: true, safeDrive: true, kakaoSafety: true, cameraFromM: 600, sections: true, schools: true,
   bumps: "show", curves: "off", accidents: "show", bikeAccidents: "show",
   overspeed: true, overspeedBy: 0,
   schoolZones: "voice", seniorZones: "show", incidents: "voice", roadworks: "show", restAreas: "show", weatherAlerts: "voice",
@@ -319,6 +321,7 @@ const GROUPS: Group[] = [
   ] },
   { id: "enforce", title: "단속 · 경고", sub: "안전운전 모드 · 단속 카메라 · 구간 단속 · 과속 경고음", rows: [
     { key: "safeDrive", label: "안전운전 모드", kind: "toggle", sub: "목적지 없이 달릴 때도 지금 달리는 길 앞의 단속 카메라 · 구간 단속 · 어린이 보호구역을 경로 안내 때처럼 알려줌 (갈림길에서는 가장 곧은 길 기준, 꺾으면 그 길로 다시)" },
+    { key: "kakaoSafety", label: "카카오로 빠진 카메라 보완", kind: "toggle", sub: "우리 목록(경찰청 · 지자체)에 없는 단속 카메라를 카카오내비 안전운전으로 실시간 보완해 같은 목소리로 안내 (서버에 카카오 슬롯이 있을 때, 동시에 3대까지)" },
     { key: "cameras", label: "과속·신호 단속 카메라", kind: "toggle", sub: "\"육백미터 앞에 신호 단속 카메라가 있습니다, 제한 속도 오십입니다\"처럼 제한 속도까지" },
     { key: "cameraFromM", label: "카메라 안내 시작", kind: "choice", options: [[1000, "1km 앞"], [600, "600m 앞"], [300, "300m 앞"]] },
     { key: "sections", label: "구간 단속", kind: "toggle" },

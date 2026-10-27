@@ -2909,6 +2909,89 @@ function endSafe() {
 }
 setInterval(safeTick, 500);
 
+// ---- 카카오 안전운전 보완 (server/src/kakao/hub.ts, kakao-safety/) ----
+// While the car moves, its fix goes to the server each second; an emulator there runs 카카오내비 SDK's 안전운전 on it, and
+// what the SDK would say of a camera comes back in the answer. One our own lists (the route's watch, 안전운전's) have
+// near is left alone; one they lack is said in our voice and shown on the camera card. Nothing of 카카오's is kept.
+
+interface KakaoSafety { id: number; kind: Kind; code: string; lon: number; lat: number; limit?: number; dist: number }
+/** Parked this long, the car lets its slot go (three cars share the server's). */
+const KAKAO_PARKED_MS = 3 * 60_000;
+/** A camera of ours this near 카카오's is the same camera. A zone's point (its facility, or where it begins) is looser. */
+const KAKAO_SAME_M = 80;
+const KAKAO_SAME_ZONE_M = 300;
+const KAKAO_CARD_ID = "kakao";
+const KAKAO_CAMERAS = new Set<Kind>(["speed", "signal", "speed-signal", "section-start", "section-end", "school"]);
+let kakaoOn = false;
+let kakaoSending = false;
+let kakaoMovedAt = 0;
+/** What was said of each, by "id:rung": 카카오 tells a camera at its own distances, some our same rung. */
+const kakaoSaid = new Set<string>();
+let kakaoCard: { s: KakaoSafety; since: number; nearest: number } | null = null;
+
+function kakaoTick() {
+  const f = tracker.frame();
+  if (f && f.speedMps > 1.5) kakaoMovedAt = Date.now();
+  const want = guide.kakaoSafety && !!health?.kakao && !demo && !sim?.running && !!f && f.mode !== "waiting" && Date.now() - kakaoMovedAt < KAKAO_PARKED_MS;
+  if (!want || !f) {
+    if (kakaoOn) {
+      kakaoOn = false;
+      kakaoCard = null;
+      void fetch("/api/kakao/done", { method: "POST" }).catch(() => undefined);
+      log("카카오 안전운전 끝");
+    }
+    return;
+  }
+  if (kakaoSending) return;
+  kakaoSending = true;
+  const body = { lon: f.at[0], lat: f.at[1], speed: f.speedMps, bearing: f.bearing, acc: gps.last?.accM ?? 10 };
+  fetch("/api/kakao/fix", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+    .then((a) => (a.ok ? a.json() : null))
+    .then((r: { slot: number | null; events?: KakaoSafety[]; why?: string } | null) => {
+      if (!r) return;
+      const on = r.slot != null;
+      if (on !== kakaoOn) { kakaoOn = on; log(on ? `카카오 안전운전 슬롯 ${r.slot}` : `카카오 안전운전 안 됨 (${r.why ?? ""})`); }
+      for (const e of r.events ?? []) kakaoSay(e, tracker.frame()?.speedMps ?? null);
+    })
+    .catch(() => undefined)
+    .finally(() => { kakaoSending = false; });
+}
+setInterval(kakaoTick, 1000);
+
+/** Whether our own lists have it: a camera of ours near 카카오's camera, a zone near its zone. */
+function kakaoKnown(e: KakaoSafety): boolean {
+  const camera = KAKAO_CAMERAS.has(e.kind);
+  for (const w of [watch, safe.watch]) {
+    if (!w) continue;
+    const near = w.near([e.lon, e.lat], camera ? KAKAO_SAME_M : KAKAO_SAME_ZONE_M);
+    if (near.some((f) => (camera ? KAKAO_CAMERAS.has(f.kind) : f.kind === "school-zone" || f.kind === "school"))) return true;
+  }
+  return false;
+}
+
+function kakaoSay(e: KakaoSafety, speedMps: number | null) {
+  if (kakaoKnown(e)) { log(`카카오 경고 (우리 목록에 있음) ${e.code} ${Math.round(e.dist)} m`); return; }
+  if (KAKAO_CAMERAS.has(e.kind) && e.limit && (!kakaoCard || kakaoCard.s.id !== e.id)) kakaoCard = { s: e, since: Date.now(), nearest: Infinity };
+  if (e.dist < 120) return;
+  // Said at the rung of ours nearest 카카오's distance, once a rung.
+  const rung = [1000, 600, 300].reduce((a, b) => (Math.abs(b - e.dist) < Math.abs(a - e.dist) ? b : a));
+  const key = `${e.id}:${rung}`;
+  if (kakaoSaid.has(key)) return;
+  kakaoSaid.add(key);
+  if (kakaoSaid.size > 500) kakaoSaid.clear();
+  sayWarning({ feature: { id: `kakao:${e.id}`, kind: e.kind, lon: e.lon, lat: e.lat, limit: e.limit }, alongM: 0, inM: e.dist, rungM: rung }, speedMps, "카카오 경고");
+}
+
+/** The camera card for 카카오's camera while the car comes to it; gone once past it, or two minutes on. */
+function kakaoHeld(): ReturnType<RouteWatch["limitAt"]> {
+  const c = kakaoCard, f = tracker.frame();
+  if (!c || !f || !c.s.limit) return null;
+  const d = metres(f.at[0], f.at[1], c.s.lon, c.s.lat);
+  c.nearest = Math.min(c.nearest, d);
+  if (Date.now() - c.since > 120_000 || (c.nearest < 60 && d > c.nearest + 30)) { kakaoCard = null; return null; }
+  return { limit: c.s.limit, why: "camera", inM: d, id: KAKAO_CARD_ID };
+}
+
 /** Lights this close along the route are one junction's; the nearest ahead of the car is "the next". */
 const LIGHTS_ONE_JUNCTION_M = 40;
 const LIGHTS_ON_MAP_M = 3000;
@@ -3143,6 +3226,8 @@ function showSectionHud(shown: Shown | null) {
  * camera stretch, as far out as the warning starts.
  */
 function showLimit(held: ReturnType<RouteWatch["limitAt"]>, speedMps: number | null | undefined) {
+  // None of our own: a camera 카카오 told of (kakaoTick), while the car comes to it.
+  held ??= kakaoHeld();
   el("cam").hidden = !held;
   // The camera it is about, marked on the map (camera-layer.ts): the one the warning counts down to.
   cameraLayer?.setNextCamera(held?.why === "camera" && held.id ? held.id : null);
@@ -3157,7 +3242,7 @@ function showLimit(held: ReturnType<RouteWatch["limitAt"]>, speedMps: number | n
   el("cam-limit").textContent = String(held.limit);
   el("cam-what").textContent = held.why === "section"
     ? (currentSectionInfo ? `구간 단속 (평균 ${currentSectionInfo.avgKmh})` : "구간 단속 중")
-    : held.why === "school" ? "보호구역" : `단속 카메라 ${km(held.inM ?? 0)}`;
+    : held.why === "school" ? "보호구역" : `단속 카메라 ${km(held.inM ?? 0)}${held.id === KAKAO_CARD_ID ? " · 카카오" : ""}`;
   if (over && guide.overspeed && Date.now() - chimedAt > CHIME_EVERY_MS) {
     chimedAt = Date.now();
     voice.chime();

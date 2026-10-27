@@ -24,6 +24,23 @@ services:
     # Plain http on the LAN; a Cloudflare Tunnel on this host points here for https.
     ports: ["8088:8080"]
 
+  # 카카오 안전운전 (kakao-safety/README.md): KAKAO_SLOTS Android emulators on KVM, each running 카카오내비 SDK's
+  # 안전운전 for one car at a time, its fixes from nav and what it would say back to nav. Needs /dev/kvm in this host
+  # (an LXC: `pct set <id> --dev0 /dev/kvm`) and the APK built by kakao-safety/build.sh.
+  kakao:
+    build: ./kakao-safety
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NAV_HOST: nav
+      NAV_PORT: "8080"
+      SLOTS: ${KAKAO_SLOTS:-3}
+    devices: ["/dev/kvm:/dev/kvm"]
+    volumes:
+      # The AVDs, the APK and its signing key (the key's hash is registered with the Kakao app).
+      - /mnt/data/webnavi/kakao-safety:/data
+    depends_on: [nav]
+
   # Our own router: OSRM over 표준노드링크, the graph tools/nodelink/build.py
   # makes on the host under /mnt/data/webnavi/nodelink. Reached only by nav.
   osrm:
