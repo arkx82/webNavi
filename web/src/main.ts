@@ -2972,7 +2972,9 @@ function kakaoKnown(e: KakaoSafety): boolean {
 function kakaoSay(e: KakaoSafety, speedMps: number | null) {
   if (kakaoKnown(e)) { log(`카카오 경고 (우리 목록에 있음) ${e.code} ${Math.round(e.dist)} m`); return; }
   if (KAKAO_CAMERAS.has(e.kind) && e.limit && (!kakaoCard || kakaoCard.s.id !== e.id)) kakaoCard = { s: e, since: Date.now(), nearest: Infinity };
-  if (e.dist < 120) return;
+  // 카카오's "at the place" telling (~150 m): too near for a rung of ours ("삼백미터 앞" at 145 m) — the card and the
+  // sign show it; its far (~1 km) and middle (~500 m) tellings are said.
+  if (e.dist < 200) return;
   // Said at the rung of ours nearest 카카오's distance, once a rung.
   const rung = [1000, 600, 300].reduce((a, b) => (Math.abs(b - e.dist) < Math.abs(a - e.dist) ? b : a));
   const key = `${e.id}:${rung}`;

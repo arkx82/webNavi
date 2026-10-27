@@ -36,7 +36,6 @@ boot() {
 start_app() {
   local n=$1 s; s=$(serial "$n")
   adb -s "$s" install -r -g "$APK" >/dev/null 2>&1 || { log "slot $n: install failed"; return 1; }
-  adb -s "$s" shell appops set "$PKG" android:mock_location allow
   adb -s "$s" shell pm grant "$PKG" android.permission.ACCESS_BACKGROUND_LOCATION 2>/dev/null
   adb -s "$s" shell cmd location set-location-enabled true 2>/dev/null
   adb -s "$s" shell dumpsys deviceidle whitelist +"$PKG" >/dev/null 2>&1
@@ -49,6 +48,8 @@ up() { [ "$(adb -s "$(serial "$1")" get-state 2>/dev/null)" = device ]; }
 app_up() { [ -n "$(adb -s "$(serial "$1")" shell pidof "$PKG" 2>/dev/null | tr -d '\r')" ]; }
 
 for n in $(seq 1 "$SLOTS"); do boot "$n" && start_app "$n"; done
+# The cars' fixes into each emulator's own GPS (the SDK takes no mock location).
+python3 /feeder.py &
 
 while true; do
   sleep 30

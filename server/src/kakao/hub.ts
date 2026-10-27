@@ -98,11 +98,12 @@ export class KakaoHub {
   }
 
   /** The app's long ask: its car's next fix (after [after]), whether a car is on it, and the key. */
-  async appAsk(n: number, after: number, waitMs: number): Promise<{ active: boolean; appKey: string; fix: Slot["fix"] } | null> {
+  async appAsk(n: number, after: number, waitMs: number, feeder = false): Promise<{ active: boolean; appKey: string; fix: Slot["fix"] } | null> {
     const s = this.slots[n - 1];
     if (!s) return null;
-    s.appSeenAt = this.now();
-    if (s.state === "down") s.state = "up";
+    // The container's GPS feeder asks too (feeder.py): only the app's own asks say the app is up.
+    if (!feeder) s.appSeenAt = this.now();
+    if (!feeder && s.state === "down") s.state = "up";
     this.sweep();
     if (!(s.fix && s.fix.seq > after) && waitMs > 0) {
       await new Promise<void>((done) => {
@@ -111,8 +112,8 @@ export class KakaoHub {
         s.waiters.push(wake);
       });
     }
-    s.appSeenAt = this.now();
-    return { active: !!s.user, appKey: this.appKey() ?? "", fix: s.fix && s.fix.seq > after ? s.fix : null };
+    if (!feeder) s.appSeenAt = this.now();
+    return { active: !!s.user, appKey: feeder ? "" : this.appKey() ?? "", fix: s.fix && s.fix.seq > after ? s.fix : null };
   }
 
   /** What the app tells: its state, a warning the SDK would say now, the cameras it has ahead. */

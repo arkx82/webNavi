@@ -9,7 +9,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PATH=/opt/android/cmdline-tools/latest/bin:/opt/android/platform-tools:/opt/android/emulator:$PATH
 RUN apt-get update && apt-get install -y --no-install-recommends \
       openjdk-17-jre-headless curl unzip socat ca-certificates libpulse0 libgl1 libnss3 libxcomposite1 libxcursor1 \
-      libxdamage1 libxi6 libxtst6 libasound2t64 libxkbfile1 libxkbcommon0 libdbus-1-3 jq procps \
+      libxdamage1 libxi6 libxtst6 libasound2t64 libxkbfile1 libxkbcommon0 libdbus-1-3 jq procps python3 \
     && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /opt/android/cmdline-tools && cd /opt/android/cmdline-tools \
     && curl -fsSLo t.zip https://dl.google.com/android/repository/${CMDLINE_TOOLS} && unzip -q t.zip && rm t.zip \
@@ -17,7 +17,7 @@ RUN mkdir -p /opt/android/cmdline-tools && cd /opt/android/cmdline-tools \
     && yes | sdkmanager --licenses >/dev/null \
     && sdkmanager --install "platform-tools" "emulator" "${SYSTEM_IMAGE}" >/dev/null
 ENV SYSTEM_IMAGE=${SYSTEM_IMAGE}
-COPY run.sh /run.sh
-RUN chmod +x /run.sh
+COPY run.sh feeder.py /
+RUN chmod +x /run.sh /feeder.py
 VOLUME /data
 CMD ["/run.sh"]

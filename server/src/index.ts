@@ -365,9 +365,9 @@ const kakaoApp = (request: FastifyRequest) => {
   const want = Buffer.from(env.KAKAO_TOKEN ?? ""), got = Buffer.from(String(request.headers["x-kakao-token"] ?? ""));
   return want.length >= 16 && got.length === want.length && timingSafeEqual(want, got);
 };
-app.get<{ Params: { n: string }; Querystring: { after?: string; wait?: string } }>("/internal/kakao/slot/:n", async (request, reply) => {
+app.get<{ Params: { n: string }; Querystring: { after?: string; wait?: string; feeder?: string } }>("/internal/kakao/slot/:n", async (request, reply) => {
   if (!kakaoApp(request)) return reply.code(403).send({ error: "token" });
-  const a = await kakao.appAsk(Number(request.params.n), Number(request.query.after) || 0, Math.min(15, Number(request.query.wait) || 0) * 1000);
+  const a = await kakao.appAsk(Number(request.params.n), Number(request.query.after) || 0, Math.min(15, Number(request.query.wait) || 0) * 1000, request.query.feeder === "1");
   return a ?? reply.code(404).send({ error: "no such slot" });
 });
 app.post<{ Params: { n: string }; Body: Record<string, never> }>("/internal/kakao/slot/:n/event", async (request, reply) => {

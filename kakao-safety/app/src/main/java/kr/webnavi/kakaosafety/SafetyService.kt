@@ -6,8 +6,6 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.location.Criteria
-import android.location.Location
 import android.location.LocationManager
 import android.os.Build
 import android.os.IBinder
@@ -39,8 +37,8 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * One car's 카카오 안전운전, on one emulator (kakao-safety/README.md). The nav server hands this slot a car's fixes; they are
- * put in as this device's GPS, the 내비 SDK runs its no-destination 안전운전 over them, and what it would say of a camera
+ * One car's 카카오 안전운전, on one emulator (kakao-safety/README.md). The nav server hands this slot a car's fixes; the
+ * container's feeder.py puts them in as this device's GPS, the 내비 SDK runs its no-destination 안전운전 over them, and what it would say of a camera
  * — and the cameras it has ahead — go back to the server, to be said in the car if our own lists have not said them.
  * Nothing is kept: each answer is used as it comes (카카오's terms for the SDK's safety data).
  */
@@ -52,13 +50,12 @@ class SafetyService : Service(), KNGuidance_SafetyGuideDelegate, KNGuidance_Loca
 
     private var appKey = ""
     private var initState = "none" // none, pending, ok, error
+    private var failedAt = 0L
     private var guiding = false
     private var activeSince = 0L
     private var inactiveSince = 0L
     private var latest: List<KNSafety> = emptyList()
     private var aheadSentAt = 0L
-    private var lastFixAt = 0L
-    private var lastFix: JSONObject? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -68,8 +65,8 @@ class SafetyService : Service(), KNGuidance_SafetyGuideDelegate, KNGuidance_Loca
         token = intent?.getStringExtra("token") ?: ""
         startAsForeground()
         scope.coroutineContext[kotlinx.coroutines.Job]?.children?.forEach { it.cancel() }
+        clearMockProviders()
         scope.launch { loop() }
-        scope.launch { keepPositionFresh() }
         return START_STICKY
     }
 
@@ -95,29 +92,16 @@ class SafetyService : Service(), KNGuidance_SafetyGuideDelegate, KNGuidance_Loca
             if (answer == null) { delay(2000); continue }
             val j = runCatching { JSONObject(answer) }.getOrNull() ?: continue
             val key = j.optString("appKey")
-            if (key.isNotEmpty() && (key != appKey || initState == "error") && initState != "pending") initialize(key)
-            j.optJSONObject("fix")?.let { fix ->
-                after = fix.optLong("seq", after)
-                lastFix = fix
-                lastFixAt = SystemClock.elapsedRealtime()
-                putPosition(fix)
-            }
+            // A refusal is asked again after five minutes, not at every answer: a key typed anew is tried at once.
+            val retry = initState == "error" && SystemClock.elapsedRealtime() - failedAt > 5 * 60_000
+            if (key.isNotEmpty() && (key != appKey || retry) && initState != "pending") initialize(key)
+            j.optJSONObject("fix")?.let { fix -> after = fix.optLong("seq", after) }
             val active = j.optBoolean("active")
             val now = SystemClock.elapsedRealtime()
             if (active) { inactiveSince = 0; if (activeSince == 0L) activeSince = now } else { activeSince = 0; if (inactiveSince == 0L) inactiveSince = now }
             // 안전운전 runs while a car is on this slot; it is stopped half a minute after (a quota of starts, not of time).
             if (active && initState == "ok" && !guiding) startGuidance()
             if (!active && guiding && now - inactiveSince > 30_000) stopGuidance()
-        }
-    }
-
-    /** The fix put in again each second while the car is on this slot: a position goes stale to the SDK between fixes. */
-    private suspend fun keepPositionFresh() {
-        while (scope.isActive) {
-            delay(1000)
-            val fix = lastFix ?: continue
-            val age = SystemClock.elapsedRealtime() - lastFixAt
-            if (age in 1100..5000) putPosition(fix)
         }
     }
 
@@ -137,12 +121,15 @@ class SafetyService : Service(), KNGuidance_SafetyGuideDelegate, KNGuidance_Loca
                         status("ready", "초기화 완료")
                     } else {
                         initState = "error"
-                        status("error", "초기화 실패 ${error.code} ${error.msg ?: ""} ${error.tagMsg ?: ""}".trim())
+                        failedAt = SystemClock.elapsedRealtime()
+                        // What this app shows 카카오: the package and its signing key's hash, to set beside the 플랫폼 키's.
+                        status("error", "초기화 실패 ${error.code} ${error.msg ?: ""} ${error.tagMsg ?: ""} · 패키지 $packageName · 키 해시 ${keyHash()}".trim())
                     }
                 }
             })
         } catch (t: Throwable) {
             initState = "error"
+            failedAt = SystemClock.elapsedRealtime()
             status("error", "초기화 예외 ${t.javaClass.simpleName}: ${t.message}")
         }
     }
@@ -171,38 +158,22 @@ class SafetyService : Service(), KNGuidance_SafetyGuideDelegate, KNGuidance_Loca
         status("ready", "쉬는 중")
     }
 
-    // ---- the car's position as this device's ----
+    /** The app's signing certificate as Kakao hashes it: SHA-1, Base64. */
+    private fun keyHash(): String = runCatching {
+        @Suppress("DEPRECATION")
+        val signs = if (Build.VERSION.SDK_INT >= 28) packageManager.getPackageInfo(packageName, android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES).signingInfo!!.apkContentsSigners
+        else packageManager.getPackageInfo(packageName, android.content.pm.PackageManager.GET_SIGNATURES).signatures!!
+        android.util.Base64.encodeToString(java.security.MessageDigest.getInstance("SHA-1").digest(signs[0].toByteArray()), android.util.Base64.NO_WRAP)
+    }.getOrDefault("?")
 
-    private var providerReady = false
-    private fun putPosition(fix: JSONObject) {
+    // ---- the car's position ----
+    // Not put in here: the SDK takes no location an app marks as mock (KNGPSManager reads Location.isMock()). The
+    // container's feeder.py puts each fix into the emulator's own GPS instead. A test provider an older build left
+    // would stand in front of that GPS: taken away at start.
+
+    private fun clearMockProviders() {
         val lm = getSystemService(LocationManager::class.java)
-        try {
-            if (!providerReady) {
-                for (p in listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)) {
-                    runCatching { lm.removeTestProvider(p) }
-                    @Suppress("DEPRECATION")
-                    lm.addTestProvider(p, false, p == LocationManager.GPS_PROVIDER, false, false, true, true, true, Criteria.POWER_LOW, Criteria.ACCURACY_FINE)
-                    lm.setTestProviderEnabled(p, true)
-                }
-                providerReady = true
-            }
-            for (p in listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)) {
-                val l = Location(p).apply {
-                    latitude = fix.getDouble("lat")
-                    longitude = fix.getDouble("lon")
-                    accuracy = fix.optDouble("acc", 5.0).toFloat()
-                    if (fix.has("speed") && !fix.isNull("speed")) speed = fix.getDouble("speed").toFloat()
-                    if (fix.has("bearing") && !fix.isNull("bearing")) bearing = fix.getDouble("bearing").toFloat()
-                    altitude = 30.0
-                    time = System.currentTimeMillis()
-                    elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
-                }
-                lm.setTestProviderLocation(p, l)
-            }
-        } catch (t: Throwable) {
-            providerReady = false
-            status("error", "위치 넣기 실패 ${t.javaClass.simpleName}: ${t.message}")
-        }
+        for (p in listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)) runCatching { lm.removeTestProvider(p) }
     }
 
     // ---- what the SDK says ----
