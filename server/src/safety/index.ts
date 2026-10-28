@@ -34,7 +34,7 @@ export interface Feature {
   /** How far before the place its coordinates are the site puts the camera ("양문사거리전400m지점"): not one camera with what stands there. */
   beforeM?: number;
   /** The carriageways the camera stands on: the way each runs and the camera put on it (safety/roads.ts). */
-  ways?: { deg: number; at: [number, number]; far?: boolean; doubt?: boolean }[];
+  ways?: { deg: number; at: [number, number]; far?: boolean }[];
   name?: string;
   /** For an area rather than a point (an accident hotspot, a school zone): how far round the centre it reaches. */
   radiusM?: number;

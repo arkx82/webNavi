@@ -23,8 +23,9 @@ test("the fixed phrases are the car apps' sentences, a closed set", () => {
   assert.ok(phrases.includes("사분 빠른 길이 있습니다"));
   assert.ok(phrases.includes("삼백미터 앞에 신호 단속 카메라가 있습니다, 제한 속도 오십입니다"));
   // The facilities (지하차도·고가차도), toll gates, "그리고" second turns, TMAP's 2 km / 600 m and the roundabouts' hours came 2026-10-02.
-  // A signal camera's limits too, 2026-10-25 (27 more).
-  assert.ok(phrases.length > 90 && phrases.length < 420, `${phrases.length}`);
+  // A signal camera's limits too, 2026-10-25 (27 more); the 후면 cameras' sentences, 2026-10-28 (90 more).
+  assert.ok(phrases.includes("육백미터 앞에 후면 과속 단속 카메라가 있습니다, 제한 속도 오십입니다"));
+  assert.ok(phrases.length > 90 && phrases.length < 520, `${phrases.length}`);
 });
 
 /** 24 kHz samples: [ms of tone, ms of silence, …]. */

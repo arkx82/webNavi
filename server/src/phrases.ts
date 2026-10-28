@@ -138,7 +138,10 @@ export const LIMITS = [30, 40, 50, 60, 70, 80, 90, 100, 110];
 /** A school zone's, as its cameras give it (server/src/safety/index.ts zoneLimits): 30 mostly, 40 or 50 on wide roads, a few 20 or 60. */
 export const SCHOOL_LIMITS = [20, 30, 40, 50, 60];
 
-export function warningPhrase(kind: Warning, rungM: number, limit?: number): string {
+/** Kinds a camera of may face back ("후면"): it reads the plate from behind, so a car past it is not past it. */
+export const REAR_KINDS: Warning[] = ["speed", "signal", "speed-signal"];
+
+export function warningPhrase(kind: Warning, rungM: number, limit?: number, rear = false): string {
   // "600미터 앞에 …가 있습니다", not "600미터 앞 …": the bare 앞 at a phrase's edge is what the voice
   // stretches ("아앞…"); with a particle after it the sentence runs on as speech does.
   const at = `${distance(rungM)} 앞에`;
@@ -147,11 +150,13 @@ export function warningPhrase(kind: Warning, rungM: number, limit?: number): str
   // "…, 제한 속도 80입니다": a sentence that ends, as the car apps say it.
   const lim = limit && LIMITS.includes(limit) ? `, 제한 속도 ${sino(limit)}입니다` : "";
   const schoolLim = limit && SCHOOL_LIMITS.includes(limit) ? `, 제한 속도 ${sino(limit)}입니다` : "";
+  // "후면 과속 단속 카메라", as the car apps say a camera facing back (a tester heard it called a plain one, 2026-10-15/28).
+  const back = rear && REAR_KINDS.includes(kind) ? "후면 " : "";
   switch (kind) {
-    case "speed": return `${at} 과속 단속 카메라가 있습니다${lim}`;
+    case "speed": return `${at} ${back}과속 단속 카메라가 있습니다${lim}`;
     // The road's limit at a signal camera too (the police list gives it): 신호 단속 was the camera said most, and bare.
-    case "signal": return `${at} 신호 단속 카메라가 있습니다${lim}`;
-    case "speed-signal": return `${at} 신호 과속 단속 카메라가 있습니다${lim}`;
+    case "signal": return `${at} ${back}신호 단속 카메라가 있습니다${lim}`;
+    case "speed-signal": return `${at} ${back}신호 과속 단속 카메라가 있습니다${lim}`;
     case "section-start": return `${from} 구간 단속이 시작됩니다${lim}`;
     case "section-end": return `${from} 구간 단속이 끝납니다`;
     case "bump": return `${at} 과속 방지턱이 있습니다`;
@@ -269,6 +274,10 @@ export function fixedPhrases(): string[] {
       out.add(warningPhrase(kind, r));
       if (kind === "speed" || kind === "signal" || kind === "speed-signal" || kind === "section-start") {
         for (const l of LIMITS) out.add(warningPhrase(kind, r, l));
+      }
+      if (REAR_KINDS.includes(kind)) {
+        out.add(warningPhrase(kind, r, undefined, true));
+        for (const l of LIMITS) out.add(warningPhrase(kind, r, l, true));
       }
       if (kind === "school" || kind === "school-zone") {
         for (const l of SCHOOL_LIMITS) out.add(warningPhrase(kind, r, l));

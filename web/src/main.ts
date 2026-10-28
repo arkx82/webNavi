@@ -2,6 +2,7 @@ import maplibregl from "maplibre-gl";
 import { api, setAvoiding, setHeading } from "./api";
 import { Gps, type Fix } from "./gps";
 import { chime, keepAwake } from "./probes";
+import { watchVersion } from "./new-version";
 import { Replay } from "./replay";
 import { Simulator } from "./simulate";
 import { CarLink } from "./car-link";
@@ -17,7 +18,7 @@ import { lazy, type MusicSource, type NowPlaying, type Playlist } from "./music/
 import { debounce, matches } from "./music/find";
 import { deep, pastel, tintOf } from "./music/tint";
 import { Voice } from "./voice";
-import { RouteWatch, SECTION_MAX_M, phraseFor, type Ahead, type Feature, type Kind } from "./warnings";
+import { RouteWatch, SECTION_MAX_M, isRear, phraseFor, type Ahead, type Feature, type Kind } from "./warnings";
 import { Notes, incidentNote, popupNote, restNote, schoolNote, type Note } from "./notes";
 import { CameraLayer } from "./camera-layer";
 import { loadDrive, loadLast, saveDrive, saveLast, worthResuming } from "./resume";
@@ -39,7 +40,7 @@ import { Stillness } from "./still";
 import { SafeDrive } from "./safe-drive";
 import { THEN_M, TURN_NEAR_M, cameraRungs, fasterPhrase, thenPhrase, turnPhrase, warningPhrase, type Turn } from "../../server/src/phrases";
 import { SectionTracker, type ActiveSectionInfo } from "./section-tracker";
-import { CAR_MIN_PX, drawGuide, loadGuide, saveGuide, shows, wants, type GuideSettings, type VoiceList } from "./guide-settings";
+import { CAR_MIN_PX, chimeLevel, drawGuide, loadGuide, saveGuide, shows, wants, type GuideSettings, type VoiceList } from "./guide-settings";
 import { currentUser, logout, push as pushUserData } from "./userdata";
 import { WeatherPanel } from "./weather";
 import { isFavourite, labelOf, loadPlaces, samePlace, savePlaces, toggleFavourite, toward } from "./places";
@@ -2843,9 +2844,10 @@ function checkRoad(w: RouteWatch, r: Route, speedMps: number | null | undefined)
 }
 /** A warning come due, said — once for things at one place. */
 function sayWarning(due: Ahead & { rungM: number }, speedMps: number | null | undefined, how = "경고") {
-  const phrase = phraseFor(due);
-  // One sentence for things at one place (a school zone and its camera); a second camera further on is its own.
   const f = due.feature;
+  // 후면: as the list says, or as 카카오 said of the camera there (kakaoRearAt).
+  const phrase = phraseFor(due, isRear(f) || kakaoRearAt([f.lon, f.lat]));
+  // One sentence for things at one place (a school zone and its camera); a second camera further on is its own.
   const same = spokenAt.get(phrase);
   if (same && metres(same.at[0], same.at[1], f.lon, f.lat) < SAME_PLACE_M && Date.now() - same.t < 20_000) return;
   spokenAt.set(phrase, { at: [f.lon, f.lat], t: Date.now() });
@@ -3033,7 +3035,24 @@ function kakaoKnown(e: KakaoSafety): boolean {
   return false;
 }
 
+/**
+ * Where 카카오 told of a camera facing back (…BackwardCamera), and when: ours this near is that camera, and is said
+ * "후면" — the lists say it of 89 cameras in the country (a tester's 후면 camera was told as a plain one, 2026-10-28).
+ * 카카오 tells a camera first about a kilometre out, before our 600 m.
+ */
+const kakaoRear: { at: LonLat; t: number }[] = [];
+const KAKAO_REAR_KEEP_MS = 10 * 60_000;
+function kakaoRearAt(at: LonLat): boolean {
+  const now = Date.now();
+  return kakaoRear.some((r) => now - r.t < KAKAO_REAR_KEEP_MS && metres(r.at[0], r.at[1], at[0], at[1]) < KAKAO_SAME_M);
+}
+
 function kakaoSay(e: KakaoSafety, speedMps: number | null) {
+  if (KAKAO_CAMERAS.has(e.kind) && /Backward/.test(e.code)) {
+    const now = Date.now();
+    while (kakaoRear.length && (now - kakaoRear[0].t > KAKAO_REAR_KEEP_MS || kakaoRear.length > 50)) kakaoRear.shift();
+    if (!kakaoRearAt([e.lon, e.lat])) kakaoRear.push({ at: [e.lon, e.lat], t: now });
+  }
   // A 구간 단속 of 카카오's being driven: its end tells how far it runs — whether or not our list has the end camera
   // (it may have only the end of a pair, which never opens a section of ours).
   if (e.kind === "section-end" && kakaoSec?.entered && e.dist >= 0) {
@@ -3060,7 +3079,7 @@ function kakaoSay(e: KakaoSafety, speedMps: number | null) {
   if (kakaoSaid.has(key)) return;
   kakaoSaid.add(key);
   if (kakaoSaid.size > 500) kakaoSaid.clear();
-  sayWarning({ feature: { id: `kakao:${e.id}`, kind: e.kind, lon: e.lon, lat: e.lat, limit: e.limit }, alongM: 0, inM: e.dist, rungM: rung }, speedMps, "카카오 경고");
+  sayWarning({ feature: { id: `kakao:${e.id}`, kind: e.kind, lon: e.lon, lat: e.lat, limit: e.limit, rear: /Backward/.test(e.code) }, alongM: 0, inM: e.dist, rungM: rung }, speedMps, "카카오 경고");
 }
 
 /** 카카오's camera as the car comes to it and goes by: its distance, and whether it is behind (the nearest was close, and is past). */
@@ -3603,6 +3622,9 @@ function themed(day: boolean) {
 }
 /** 어린이 보호구역 회피 as last applied: a change asks the route sheet's ways again. */
 let avoidSchoolWas: boolean | null = null;
+/** 경고음 음량 as last applied (undefined: not yet), and when it was last played for the slider. */
+let chimeHeard: number | null | undefined;
+let chimePreviewAt = 0;
 function applyGuide() {
   if (avoidSchoolWas != null && avoidSchoolWas !== guide.avoidSchool) {
     log(`어린이 보호구역 회피 ${guide.avoidSchool ? "켬" : "끔"}`);
@@ -3625,6 +3647,13 @@ function applyGuide() {
   voice.ducking = guide.ducking;
   voice.voiceName = guide.voiceName;
   voice.setVolume(guide.volume);
+  voice.setChimeVolume(chimeLevel(guide));
+  // 경고음 음량 moved: the chime at its new level, as the slider goes (not faster than it can be told apart).
+  if (guide.chimeVolume != null && chimeHeard !== undefined && guide.chimeVolume !== chimeHeard && Date.now() - chimePreviewAt > 700) {
+    chimePreviewAt = Date.now();
+    voice.chime();
+  }
+  chimeHeard = guide.chimeVolume;
   // 차로 안내 위치 may have changed.
   measure();
   cameraLayer?.redraw();
@@ -4490,4 +4519,13 @@ map.on("load", async () => {
     log("서버 응답 없음 (/api/health)");
   }
   void resumeDrive();
+  // Whether a page opened (or reloaded into a new version) has its sound without a tap.
+  log(`오디오 시작 ${voice.context.state}`);
+  watchVersion(() => ({ driving: !!route || !!sim?.running || !!demo, stillMs: Date.now() - movedAt, untouchedMs: Date.now() - touchedAnyAt, speaking: voice.busy }), log);
 });
+/** Slower than this the car is still (for loading a new version, new-version.ts). */
+const STILL_MPS = 0.5;
+let movedAt = Date.now();
+setInterval(() => { const f = tracker.frame(); if (f && f.speedMps > STILL_MPS) movedAt = Date.now(); }, 1000);
+let touchedAnyAt = Date.now();
+document.addEventListener("pointerdown", () => { touchedAnyAt = Date.now(); }, { capture: true, passive: true });

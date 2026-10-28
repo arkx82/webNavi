@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CameraRoads, ROADS_VERSION, doubtCarriageways, pickCarriageways, sameRoad, waysFrom } from "./roads.js";
+import { CameraRoads, ROADS_VERSION, pickCarriageways, sameRoad, waysFrom } from "./roads.js";
 import type { Feature } from "./index.js";
 
 test("a camera's road name and the graph's are one road: spacing, a name inside the other, a renamed motorway", () => {
@@ -44,24 +44,6 @@ test("a camera far off its road is put on the carriageway its agency's nearest c
   assert.deepEqual(pickCarriageways([far, ...neighbours])[0].ways, [{ deg: 180, at: [127.121277, 37.752719], far: true }]);
   // None of its agency, road and code near: both kept.
   assert.equal(pickCarriageways([far, neighbours[1]])[0].ways?.length, 2);
-});
-
-test("a camera on the carriageway its site's way does not run: both ways, where two cameras of its road say so and none against", () => {
-  // 영산로 north from 목포 to 무안: the 목포→무안 carriageway runs 0°, the other 180°.
-  const cam = (no: string, lat: number, deg: number, site: string, direction = ""): Feature =>
-    ({ id: `police-api:1320000-${no}`, kind: "speed", lon: 126.44, lat, direction, name: "영산로", site, ways: [{ deg, at: [126.44, lat] }] });
-  const g4699 = cam("G4699", 34.942, 180, "청수가든앞(목포→무안)", "2");
-  const others = [cam("J4416", 34.93, 0, "지산부대 앞(목포→무안)", "2"), cam("J4480", 34.949, 0, "태봉버스정류장(목포→무안군청)", "2"), cam("G7834", 34.935, 180, "지산부대앞(무안→목포)", "1")];
-  const out = doubtCarriageways([g4699, ...others]);
-  assert.deepEqual(out[0].ways, [{ deg: 180, at: [126.44, 34.942] }, { deg: 0, at: [126.44, 34.942], doubt: true }]);
-  assert.deepEqual(out.slice(1), others, "the others agree with where they are");
-  // One camera saying the other way is not enough (that one may be the one put wrong).
-  assert.equal(doubtCarriageways([g4699, others[1]])[0].ways?.length, 1);
-  // Its agency's codes on that road agreeing with where it is: kept as it is.
-  const sites = others.map((f) => ({ ...f, direction: undefined }));
-  const codes = [cam("A1", 34.95, 180, "어딘가", "2"), cam("A2", 34.955, 180, "저기", "2")];
-  assert.equal(doubtCarriageways([g4699, ...sites])[0].ways?.length, 2);
-  assert.equal(doubtCarriageways([g4699, ...sites, ...codes])[0].ways?.length, 1);
 });
 
 test("an older roads file has its cameras put on no road asked again; the file says its version", () => {

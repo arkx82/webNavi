@@ -1,7 +1,7 @@
 import Fastify, { type FastifyRequest } from "fastify";
 import { setDefaultAutoSelectFamilyAttemptTimeout } from "node:net";
 import fastifyStatic from "@fastify/static";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -751,6 +751,14 @@ app.addHook("onSend", async (_request, reply, payload) => {
 });
 
 const webDir = env.WEB_DIR ?? resolve(root, "..", "web", "dist");
+/**
+ * The page this server hands out, by its main script's hashed name: an open page that was handed another one is an
+ * old version, and loads the new one when nothing is going on (web/src/new-version.ts). Null without a built page.
+ */
+const webVersion = (() => {
+  try { return /\/assets\/(main-[^"]+\.js)/.exec(readFileSync(join(webDir, "index.html"), "utf8"))?.[1] ?? null; } catch { return null; }
+})();
+app.get("/api/version", async () => ({ web: webVersion }));
 if (existsSync(webDir)) {
   await app.register(fastifyStatic, { root: webDir, prefix: "/" });
   // The phone's page for sending a place to a car (web/share.html), and the share sheet's way in.

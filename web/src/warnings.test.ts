@@ -171,6 +171,17 @@ test("a camera's sentence ends as a sentence: its limit, or what it is", () => {
   assert.equal(say("school", 30), "삼백미터 앞부터 어린이 보호구역입니다, 제한 속도 삼십입니다");
 });
 
+test("a camera facing back is said 후면: told so (카카오), or its site says it; not a 구간 단속", async () => {
+  const { fixedPhrases } = await import("../../server/src/phrases");
+  const say = (f: Partial<Feature>) => phraseFor({ feature: { id: "x", kind: "speed", lon: 0, lat: 0, ...f }, alongM: 0, inM: 0, rungM: 600 });
+  assert.equal(say({ rear: true, limit: 60 }), "육백미터 앞에 후면 과속 단속 카메라가 있습니다, 제한 속도 육십입니다");
+  assert.equal(say({ kind: "signal", site: "복합물류삼거리(후면)" }), "육백미터 앞에 후면 신호 단속 카메라가 있습니다");
+  assert.equal(say({ kind: "section-start", rear: true, limit: 80 }), "육백미터 앞에서 구간 단속이 시작됩니다, 제한 속도 팔십입니다");
+  assert.equal(say({ limit: 60 }), "육백미터 앞에 과속 단속 카메라가 있습니다, 제한 속도 육십입니다");
+  // Made ahead with the rest, so the first 후면 camera is not a sentence to wait for.
+  assert.ok(fixedPhrases().includes(say({ kind: "speed-signal", rear: true, limit: 50 })));
+});
+
 test("a traffic light warns only while it flashes, and a pass by day leaves the night's warning", async () => {
   const { flashingNow } = await import("./warnings");
   const at = (hhmm: string) => Date.parse(`2026-09-30T${hhmm}:00+09:00`);

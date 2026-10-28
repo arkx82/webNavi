@@ -123,6 +123,8 @@ export interface GuideSettings {
   overspeed: boolean;
   /** km/h over the limit before the chime: 0, 5 or 10. */
   overspeedBy: 0 | 5 | 10;
+  /** The chime's level, as 안내 음량's (up to MAX_VOLUME); null: the same as 안내 음량, as it was before it had its own. */
+  chimeVolume: number | null;
   /**
    * The kinds that can be only shown — a card at the map's top right, or
    * the limit sign — so the voice need not say everything the road has.
@@ -144,7 +146,7 @@ export const DEFAULTS: GuideSettings = {
   voice: true, voiceName: null, volume: 1, turns: true, junctionNames: true, laneHints: true, merges: true, closeups: true, junction3d: true, junction3dMode: "still", sendLogs: true, layout: "classic", destAt: "left", hdLanes: true, hdLanesWhen: "turns", laneGuide: true, colorLines: true, theme: "auto", nightCity: false, carIcon: "model3d", carPaint: PAINTS[0][0], carSize: "large", trafficBar: true, lanesAt: "car", endOnArrive: true, mapDpr: "auto", followFps: "auto", ducking: "soft", fasterRoute: "ask", avoidSchool: false, carData: "auto", rev: 4, uiScale: 1, lightsOnMap: "route", camerasOnMap: "route", nextLight: true, flashSignals: true,
   cameras: true, safeDrive: true, kakaoSafety: true, cameraFromM: 600, sections: true, schools: true,
   bumps: "show", curves: "off", accidents: "show", bikeAccidents: "show",
-  overspeed: true, overspeedBy: 0,
+  overspeed: true, overspeedBy: 0, chimeVolume: null,
   schoolZones: "voice", seniorZones: "show", incidents: "voice", roadworks: "show", restAreas: "show", weatherAlerts: "voice",
 };
 
@@ -289,9 +291,14 @@ type Row =
   | { key: "voice"; label: string; kind: "listen"; sub?: string }
   | { key: keyof GuideSettings; label: string; kind: "toggle"; sub?: string }
   | { key: keyof GuideSettings; label: string; kind: "choice"; options: [number | string, string][]; sub?: string }
-  | { key: "volume"; label: string; kind: "slider" };
+  | { key: "volume" | "chimeVolume"; label: string; kind: "slider"; sub?: string };
 
 const MODES: [string, string][] = [["voice", "음성"], ["show", "표시만"], ["off", "끔"]];
+
+/** The chime's level: its own, or 안내 음량's until it has one. */
+export function chimeLevel(s: GuideSettings): number {
+  return s.chimeVolume ?? s.volume;
+}
 
 /** The sheet in sections, each folded or open (remembered in the browser): what the voice says, the drive, the warnings, the road, the map, the screen. */
 interface Group { id: string; title: string; sub: string; rows: Row[] }
@@ -328,6 +335,7 @@ const GROUPS: Group[] = [
     { key: "schools", label: "어린이 보호구역 카메라", kind: "toggle" },
     { key: "overspeed", label: "과속 경고음", kind: "toggle", sub: "카메라 앞과 구간 단속 안에서 제한 속도를 넘으면" },
     { key: "overspeedBy", label: "경고음 기준", kind: "choice", options: [[0, "제한 속도"], [5, "+5km/h"], [10, "+10km/h"]] },
+    { key: "chimeVolume", label: "경고음 음량", kind: "slider", sub: "움직이면 지금 크기로 한 번 울림. 처음에는 안내 음량과 같게" },
     { key: "flashSignals", label: "점멸 신호 경고", kind: "toggle", sub: "밤에 점멸로 바뀌는 교차로 앞에서 (전국신호등표준데이터 — 서울은 동작구만)" },
   ] },
   { id: "road", title: "도로 정보", sub: "보호구역 · 방지턱 · 돌발 · 휴게소 · 기상특보", rows: [
@@ -440,7 +448,7 @@ function drawRows(box: HTMLElement, rows: Row[], s: GuideSettings, set: (patch: 
     if ("sub" in row && row.sub) words.querySelector(".gs-sub")!.textContent = row.sub;
     line.append(words);
     // Rows that only mean something with their parent on are dimmed without it.
-    const parentOff = (row.key === "cameraFromM" && !s.cameras) || (row.key === "overspeedBy" && !s.overspeed) || (row.key !== "voice" && !s.voice && !(row.kind === "choice" && row.options === MODES));
+    const parentOff = (row.key === "cameraFromM" && !s.cameras) || ((row.key === "overspeedBy" || row.key === "chimeVolume") && !s.overspeed) || (row.key !== "voice" && !s.voice && !(row.kind === "choice" && row.options === MODES));
     line.classList.toggle("off", parentOff);
     if (row.kind === "listen") {
       const b = document.createElement("button");
@@ -498,15 +506,17 @@ function drawRows(box: HTMLElement, rows: Row[], s: GuideSettings, set: (patch: 
       input.min = "0.2";
       input.max = String(MAX_VOLUME);
       input.step = "0.1";
-      input.value = String(s.volume);
+      const key = row.key;
+      const level = () => (key === "chimeVolume" ? chimeLevel(s) : s.volume);
+      input.value = String(level());
       // Live while sliding; the sheet is not redrawn under the finger.
       const pct = document.createElement("span");
       pct.className = "gs-pct";
-      pct.textContent = `${Math.round(s.volume * 100)}%`;
+      pct.textContent = `${Math.round(level() * 100)}%`;
       input.addEventListener("input", () => {
-        s.volume = Number(input.value);
-        pct.textContent = `${Math.round(s.volume * 100)}%`;
-        mark(s, ["volume"]);
+        s[key] = Number(input.value);
+        pct.textContent = `${Math.round(level() * 100)}%`;
+        mark(s, [key]);
         saveGuide(s);
         changed(s);
       });

@@ -37,6 +37,8 @@ export class Voice {
   /** The music's volume knob; the voice turns it down. */
   readonly music: GainNode;
   private readonly speech: GainNode;
+  /** The chime's own knob (경고음 음량), beside the voice's. */
+  private readonly alert: GainNode;
   private readonly buffers = new Map<string, Promise<AudioBuffer>>();
   /**
    * Each with the sentence to say instead if its own cannot be had (a name
@@ -83,6 +85,8 @@ export class Voice {
     limiter.attack.value = 0.002;
     limiter.release.value = 0.12;
     this.speech.connect(limiter);
+    this.alert = this.context.createGain();
+    this.alert.connect(limiter);
     limiter.connect(this.context.destination);
   }
 
@@ -106,6 +110,11 @@ export class Voice {
     }
   }
   private keepAwake: ConstantSourceNode | null = null;
+
+  /** Whether a sentence is being said (or the next is being fetched). */
+  get busy(): boolean {
+    return this.speaking;
+  }
 
   /** Whether sound can be heard now, or needs a tap first. */
   get awake(): boolean {
@@ -299,33 +308,39 @@ export class Voice {
     void this.next();
   }
 
-  /** The voice's level (and the chime's), up to MAX_VOLUME; the music keeps its own. */
+  /** The voice's level, up to MAX_VOLUME; the music and the chime keep their own. */
   setVolume(level: number) {
     this.speech.gain.setTargetAtTime(Math.max(0, Math.min(MAX_VOLUME, level)), this.context.currentTime, 0.05);
   }
 
+  /** The chime's level (경고음 음량), up to MAX_VOLUME. */
+  setChimeVolume(level: number) {
+    this.alert.gain.setTargetAtTime(Math.max(0, Math.min(MAX_VOLUME, level)), this.context.currentTime, 0.05);
+  }
+
   /**
-   * A soft two-note chime, for over the limit: sine tones that swell in
-   * and fade out rather than beep, quieter than the voice, and never over
-   * a sentence being said.
+   * A two-note chime, for over the limit: sine tones that swell in and fade out rather than beep, never over a
+   * sentence being said. At 100 % about as loud as the voice at 100 % — it was a fifth of it, under the voice's own
+   * knob, and could not be heard over the road (a tester, 2026-10-28) — and held a little longer.
    */
   chime() {
     if (!this.enabled || this.speaking || this.context.state !== "running") return;
     const t = this.context.currentTime;
     const out = this.context.createGain();
-    out.gain.value = 0.22;
-    out.connect(this.speech);
-    for (const [freq, at] of [[880, 0], [660, 0.18]] as const) {
+    out.gain.value = CHIME_PEAK;
+    out.connect(this.alert);
+    for (const [freq, at] of [[880, 0], [660, 0.2]] as const) {
       const osc = this.context.createOscillator();
       const env = this.context.createGain();
       osc.type = "sine";
       osc.frequency.value = freq;
       env.gain.setValueAtTime(0, t + at);
-      env.gain.linearRampToValueAtTime(1, t + at + 0.03);
-      env.gain.exponentialRampToValueAtTime(0.001, t + at + 0.45);
+      env.gain.linearRampToValueAtTime(1, t + at + 0.02);
+      env.gain.setValueAtTime(1, t + at + 0.12);
+      env.gain.exponentialRampToValueAtTime(0.001, t + at + 0.7);
       osc.connect(env).connect(out);
       osc.start(t + at);
-      osc.stop(t + at + 0.5);
+      osc.stop(t + at + 0.75);
     }
   }
 
@@ -346,6 +361,8 @@ export class Voice {
  * (a tester, 2026-10-15). The limiter after the knob holds what this pushes past full scale.
  */
 export const MAX_VOLUME = 3;
+/** The chime's peak at 100 %: its held part's RMS (0.28 / √2) the voice's TARGET_RMS. */
+const CHIME_PEAK = 0.28;
 /**
  * Each sentence brought to one loudness: the service renders them anywhere from -17 to -26 dBFS (measured over the
  * server's 3,225 on 2026-10-14), so one sentence was half as loud as the next. Raised (or lowered) to this RMS over

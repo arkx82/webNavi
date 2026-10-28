@@ -50,6 +50,8 @@ export interface Feature {
   ways?: { deg: number; at: LonLat; lanes?: number | null; name?: string }[];
   /** A camera's 설치장소 ("운천제2교차로 (포천->김화)"). */
   site?: string;
+  /** A camera facing back (후면), as 카카오 tells it (…BackwardCamera); a site saying "후면" says so too (isRear). */
+  rear?: boolean;
   /** How far before the place its coordinates are the site puts it ("양문사거리전400m지점"): never one camera with another kind there. */
   beforeM?: number;
   /**
@@ -823,8 +825,13 @@ function sideOf(roadDeg: number, toDeg: number): number {
 }
 
 /** What the voice says for one due warning: a fixed sentence (server/src/phrases.ts), rendered ahead of time. */
-export function phraseFor(w: Ahead & { rungM: number }): string {
-  return warningPhrase(w.feature.kind, w.rungM, w.feature.limit);
+export function phraseFor(w: Ahead & { rungM: number }, rear = isRear(w.feature)): string {
+  return warningPhrase(w.feature.kind, w.rungM, w.feature.limit, rear);
+}
+
+/** Whether a camera faces back: told so (Feature.rear), or its site says "후면" ("복합물류삼거리(후면)"). */
+export function isRear(f: Feature): boolean {
+  return !!f.rear || /후면/.test(f.site ?? "");
 }
 
 export function keyOf(at: LonLat): string {

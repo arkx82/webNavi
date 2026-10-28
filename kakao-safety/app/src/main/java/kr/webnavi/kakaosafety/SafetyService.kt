@@ -58,9 +58,16 @@ class SafetyService : Service(), KNGuidance_SafetyGuideDelegate, KNGuidance_Loca
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        base = intent?.getStringExtra("base") ?: "http://10.0.2.2:8099"
-        slot = intent?.getIntExtra("slot", 1) ?: 1
-        token = intent?.getStringExtra("token") ?: ""
+        // Restarted by the system after a crash (START_STICKY), the intent is null: the slot, server and token it was
+        // started with are read back. Without them slot 3's app came back as slot 1 with no token, and asked nothing
+        // for nine hours (2026-10-28).
+        val kept = getSharedPreferences("start", 0)
+        if (intent?.hasExtra("slot") == true) {
+            kept.edit().putString("base", intent.getStringExtra("base")).putInt("slot", intent.getIntExtra("slot", 1)).putString("token", intent.getStringExtra("token")).apply()
+        }
+        base = kept.getString("base", null) ?: "http://10.0.2.2:8099"
+        slot = kept.getInt("slot", 1)
+        token = kept.getString("token", null) ?: ""
         startAsForeground()
         scope.coroutineContext[kotlinx.coroutines.Job]?.children?.forEach { it.cancel() }
         clearMockProviders()
