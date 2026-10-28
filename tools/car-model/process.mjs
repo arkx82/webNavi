@@ -19,8 +19,18 @@ import { ALL_EXTENSIONS, EXTMeshoptCompression, KHRMaterialsClearcoat, KHRMateri
 import { dedup, prune, weld, simplifyPrimitive, flatten, join, quantize, reorder } from "@gltf-transform/functions";
 import { MeshoptSimplifier, MeshoptEncoder } from "meshoptimizer";
 const [inFile, outFile, targetArg, paintArg, wheelArg] = process.argv.slice(2);
-const wheelParts = (wheelArg ?? "Rubber_Rough,Iron_Clean_Distorted,black.001,black.002,black222").split(",");
+// Material_2125780326 is the wheel's grey face (its spokes, the cover), black_base and black_refl its dark spokes behind;
+// their triangles elsewhere on the car stay. The red callipers (red_plastic) stand still, as on the car.
+const wheelParts = (wheelArg ?? "Rubber_Rough,Iron_Clean_Distorted,black.001,black.002,black222,Material_2125780326,black_base,black_refl").split(",");
 const paintName = paintArg ?? "Material_2125780493";
+/** A wheel part's triangle is the wheel's this close to its axle across the car (and within its tyre); see splitWheels. */
+const WHEEL_SIDE_M = 0.3;
+/**
+ * Of these parts, shared with the body, only what is within the rim (RIM_M of the axle): black_base is the wheel arch's
+ * lining too, and taken to the tyre's radius a piece of it turned with the wheel and showed below it.
+ */
+const RIM_PARTS = ["Material_2125780326", "black_base", "black_refl"];
+const RIM_M = 0.3;
 const io = new NodeIO().registerExtensions(ALL_EXTENSIONS).registerDependencies({ "meshopt.encoder": MeshoptEncoder });
 await MeshoptSimplifier.ready; await MeshoptEncoder.ready;
 const doc = await io.read(inFile);
@@ -83,6 +93,9 @@ console.log("bounds X(across) Y(up) Z(along, front -):", mn.map((v, k) => k).map
 /**
  * The wheels' parts (one primitive a material after join, all four wheels in each) cut by quadrant into four wheels:
  * each a node at its axle — the middle of its tyre — holding a node a part, the parts' vertices moved to be about it.
+ * Of a part whose material is used elsewhere on the car too, only the triangles within a wheel (WHEEL_SIDE_M of its
+ * axle across, within its tyre) go; the rest stay where they were. The wheel's face was left on the body, and the
+ * tyre turned round a face that stood still (the user, 2026-10-29: "휠커버 쪽은 안돌아가는").
  */
 function splitWheels() {
   const scene = root.getDefaultScene() ?? root.listScenes()[0];
@@ -105,14 +118,19 @@ function splitWheels() {
     scene.addChild(wheels[q]);
     console.log(`wheel${q} axle`, axle[q].map((v) => v.toFixed(3)).join(", "), "tyre radius", ((box[q][1][1] - box[q][0][1]) / 2).toFixed(3));
   }
+  const radius = Object.fromEntries(Object.entries(box).map(([q, b]) => [q, (b[1][1] - b[0][1]) / 2]));
   for (const { m, p } of parts) {
     const pos = p.getAttribute("POSITION"), nor = p.getAttribute("NORMAL"), idx = p.getIndices();
     const tri = idx.getArray();
-    const byQuad = {};
+    const byQuad = {}, stay = [];
     for (let t = 0; t < tri.length; t += 3) {
-      let sx = 0, sz = 0;
-      for (let k = 0; k < 3; k++) { const v = pos.getElement(tri[t + k], []); sx += v[0]; sz += v[2]; }
-      (byQuad[quadOf(sx / 3, sz / 3)] ??= []).push(tri[t], tri[t + 1], tri[t + 2]);
+      const vs = [0, 1, 2].map((k) => pos.getElement(tri[t + k], []));
+      const q = quadOf((vs[0][0] + vs[1][0] + vs[2][0]) / 3, (vs[0][2] + vs[1][2] + vs[2][2]) / 3), at = axle[q];
+      const reach = RIM_PARTS.includes(p.getMaterial().getName()) ? RIM_M : radius[q];
+      // All three corners: a long triangle of the arch's lining with its middle near the hub turned out past the tyre.
+      const inside = p === tyre.p || (at && vs.every((v) => Math.abs(v[0] - at[0]) < WHEEL_SIDE_M && Math.hypot(v[1] - at[1], v[2] - at[2]) < reach));
+      if (inside) (byQuad[q] ??= []).push(tri[t], tri[t + 1], tri[t + 2]);
+      else stay.push(tri[t], tri[t + 1], tri[t + 2]);
     }
     for (const [q, list] of Object.entries(byQuad)) {
       const at = axle[q];
@@ -135,6 +153,11 @@ function splitWheels() {
       if (nor) prim.setAttribute("NORMAL", doc.createAccessor().setType("VEC3").setArray(new Float32Array(N)).setBuffer(buffer));
       const mesh = doc.createMesh(`${p.getMaterial().getName()}-${q}`).addPrimitive(prim);
       wheels[q].addChild(doc.createNode(`${p.getMaterial().getName()}-${q}`).setMesh(mesh));
+    }
+    if (stay.length) {
+      idx.setArray(new Uint32Array(stay));
+      console.log(`${p.getMaterial().getName()}: ${stay.length / 3} triangles not in a wheel, left on the car`);
+      continue;
     }
     m.removePrimitive(p);
     p.dispose();
