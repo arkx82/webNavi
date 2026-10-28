@@ -25,6 +25,8 @@ const REJOIN_FAR_M = 9;
 const REJOIN_PARALLEL_DEG = 15;
 /** A trail rejoins the route this far past the turn's guide at the least: before it, it is still on the way in. */
 const PAST_TURN_M = 5;
+/** The route's way on out of a turn, read this far past its guide. */
+const OUT_WAY_M = 40;
 /**
  * The joins are moved back and on along the route this many metres for
  * every metre the trail sits beside it (a slope of about 14°): a trail
@@ -89,6 +91,11 @@ export function splice(route: Route, trail: LonLat[], at?: LonLat, nextAt?: LonL
   // junction (경복아파트 사거리, 2026-10-13).
   const corner = at ? line.project(at, 0, line.path.length).alongM : null;
   const until = nextAt ? line.project(nextAt, 0, line.path.length).alongM - NEXT_TURN_ROOM_M : Infinity;
+  // And the turn done: the trail running the way the route goes on past it. 종합운동장's left turn crossed the
+  // provider's line (its corner 10 m past the guide) 21 m in, still at 51° of the 85° turn, and was taken as rejoined
+  // there: the line went on straight along the provider's and turned at its corner (the pretend drive of 2026-10-28).
+  const onWay = corner == null ? null : line.place(Math.min(line.lengthM, corner + OUT_WAY_M)).bearing;
+  const turned = (deg: number) => onWay == null || Math.abs(((onWay - deg + 540) % 360) - 180) <= REJOIN_DEG;
   const past = (p: { alongM: number }) => p.alongM > s.alongM + 10 && (corner == null || p.alongM >= corner + PAST_TURN_M);
   let k = -1, e = s, walked = 0;
   for (let i = 1; i < trail.length; i++) {
@@ -98,7 +105,7 @@ export function splice(route: Route, trail: LonLat[], at?: LonLat, nextAt?: LonL
     // Running the route's way there too: a trail bridged round a corner the provider cuts late crossed its line
     // mid-curve, at 63° to it.
     const deg = bearing(trail[i - 1][0], trail[i - 1][1], trail[i][0], trail[i][1]);
-    if (p.offM <= REJOIN_M && past(p) && Math.abs(((p.bearing - deg + 540) % 360) - 180) <= REJOIN_DEG) { k = i; e = p; break; }
+    if (p.offM <= REJOIN_M && past(p) && turned(deg) && Math.abs(((p.bearing - deg + 540) % 360) - 180) <= REJOIN_DEG) { k = i; e = p; break; }
   }
   if (k < 0) {
     walked = 0;
@@ -107,7 +114,7 @@ export function splice(route: Route, trail: LonLat[], at?: LonLat, nextAt?: LonL
       if (walked < 30) continue;
       const p = line.project(trail[i], s.segment, 60);
       const deg = bearing(trail[i - 1][0], trail[i - 1][1], trail[i][0], trail[i][1]);
-      if (p.offM <= REJOIN_FAR_M && past(p) && Math.abs(((p.bearing - deg + 540) % 360) - 180) <= REJOIN_PARALLEL_DEG) { k = i; e = p; break; }
+      if (p.offM <= REJOIN_FAR_M && past(p) && turned(deg) && Math.abs(((p.bearing - deg + 540) % 360) - 180) <= REJOIN_PARALLEL_DEG) { k = i; e = p; break; }
     }
   }
   if (k < 0) return false;
@@ -645,8 +652,41 @@ export async function snapRouteWith(route: Route, snap: Snapper): Promise<Route>
   return route;
 }
 
+/**
+ * A jog of the provider's line on a motorway: a vertex more than JOG_OFF_M off the straight between the line JOG_M before it and
+ * JOG_M after it, where the way there and the way on differ by JOG_NET_DEG at most — not a bend of the road, a step
+ * sideways and back (a ramp's lane taken onto the motorway in 12 m, then back over 16 m). Laid on that straight:
+ * snapped as it was, the vertex out on the step went onto the motorway's outer lane and its neighbours onto the
+ * ramp's, and the line went up and back down (올림픽대로 from 종합운동장, the pretend drive of 2026-10-28). Not within
+ * JOG_GUIDE_M of a guide, where the corners are.
+ */
+const JOG_M = 20;
+const JOG_OFF_M = 2.5;
+const JOG_NET_DEG = 20;
+const JOG_GUIDE_M = 40;
+export function unjog(route: Route) {
+  const p = route.path, n = p.length;
+  if (n < 3) return;
+  const line = new Line(p);
+  const guides = route.guides.map((g) => line.project(g.at, 0, n)).filter((g) => g.offM < 30).map((g) => g.alongM);
+  const moves: [number, LonLat][] = [];
+  for (let k = 1; k < n - 1; k++) {
+    const m = line.along[k];
+    // On a motorway only: in town a step at a junction is the road's own (a pocket opening), and laid straight the line
+    // left the through lanes for 1차로's left-turn pocket at 무안's 남악 junction.
+    if (!route.motorways?.some(([a, b]) => k >= a && k < b)) continue;
+    if (m < JOG_M || m > line.lengthM - JOG_M || guides.some((g) => Math.abs(g - m) < JOG_GUIDE_M)) continue;
+    const a = line.place(m - JOG_M), b = line.place(m + JOG_M);
+    if (Math.abs(((b.bearing - a.bearing + 540) % 360) - 180) > JOG_NET_DEG) continue;
+    const on = new Line([a.at, b.at]).project(p[k], 0, 2);
+    if (on.offM > JOG_OFF_M) moves.push([k, on.at]);
+  }
+  for (const [k, at] of moves) p[k] = at;
+}
+
 /** [route] with every corner the server can thread taken from the painted lanes; the route as it came where it cannot. */
 export async function threadRoute(route: Route): Promise<Route> {
+  try { unjog(route); } catch { /* the line as it came */ }
   try {
     const turns = turnsOf(route);
     if (turns.length === 0) { roundCorners(route); return route; }

@@ -409,13 +409,17 @@ export class LaneIndex {
     for (const seed of ends) {
       for (const s of this.nextOf(db, seed, seed.path)) {
         // Through the junction and on, each hop the link that stays nearest the route.
-        let trail = JSON.parse(s.coords) as LonLat[];
+        const through = JSON.parse(s.coords) as LonLat[];
+        let trail = through;
         let last: Link = s;
         for (let hop = 0; hop < 6 && lengthOf(trail) < THREAD_M; hop++) {
           const on = this.nextOf(db, last);
           if (on.length === 0) break;
           const pick = on.reduce((a, b) => (offLine(along(JSON.parse(a.coords) as LonLat[], 25), after) <= offLine(along(JSON.parse(b.coords) as LonLat[], 25), after) ? a : b));
-          trail = trail.concat((JSON.parse(pick.coords) as LonLat[]).slice(1));
+          const path = JSON.parse(pick.coords) as LonLat[];
+          // The link through the junction drawn as a straight line across it, the turn all at its far end: bent round.
+          if (hop === 0) trail = rounded(through, headingIn(seed.path, 5), bearingOf(path[0], along(path, Math.min(5, lengthOf(path)))));
+          trail = trail.concat(path.slice(1));
           last = pick;
         }
         const total = lengthOf(trail);
@@ -1014,6 +1018,29 @@ export function turnOfTrail(inDeg: number, end: LonLat, trail: LonLat[], stopped
   if (t !== "straight" || !stopped || total > SHORT_TURN_M) return t;
   const bend = diff(inDeg, bearingOf(end, trail[trail.length - 1]));
   return bend >= SHORT_TURN_DEG ? "right" : bend <= -SHORT_TURN_DEG ? "left" : "straight";
+}
+
+/**
+ * A link through a junction drawn as a straight line ([path]: no more than ROUND_STRAIGHT_DEG off its chord) where the
+ * way in ([inDeg]) and the way on ([outDeg]) differ by ROUND_TURN_DEG or more: a curve from its start to its end along
+ * both, as the turn is driven. 종합운동장's left turn onto 올림픽대로's ramp is a 53 m straight at 39° from 78°, then
+ * 350°: the line went straight across the junction and turned at its far side (the pretend drive of 2026-10-28).
+ */
+const ROUND_STRAIGHT_DEG = 8;
+const ROUND_TURN_DEG = 30;
+function rounded(path: LonLat[], inDeg: number, outDeg: number): LonLat[] {
+  if (path.length < 2 || Math.abs(diff(inDeg, outDeg)) < ROUND_TURN_DEG) return path;
+  const a = path[0], b = path[path.length - 1], chordDeg = bearingOf(a, b), chord = dist(a, b);
+  if (chord < 5 || path.some((p) => dist(a, p) > 1 && Math.abs(diff(chordDeg, bearingOf(a, p))) > ROUND_STRAIGHT_DEG)) return path;
+  const kx = M * Math.cos((a[1] * Math.PI) / 180);
+  const reach = (p: LonLat, deg: number, m: number): LonLat => [p[0] + (Math.sin((deg * Math.PI) / 180) * m) / kx, p[1] + (Math.cos((deg * Math.PI) / 180) * m) / M];
+  const c1 = reach(a, inDeg, chord * 0.4), c2 = reach(b, outDeg + 180, chord * 0.4);
+  const out: LonLat[] = [];
+  for (let i = 0; i <= 12; i++) {
+    const t = i / 12, u = 1 - t;
+    out.push([0, 1].map((n) => u * u * u * a[n] + 3 * u * u * t * c1[n] + 3 * u * t * t * c2[n] + t * t * t * b[n]) as LonLat);
+  }
+  return out;
 }
 
 /** The heading of [path]'s last [m] metres (from the point that far back to its end). */
