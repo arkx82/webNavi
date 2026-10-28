@@ -108,6 +108,18 @@ export class CarTrack {
     while (this.ests.length > 2 && this.ests[1].t < before) this.ests.shift();
   }
 
+  /**
+   * The stream let go (the fixes good again): what the car said of its speed and odometer is not held across the
+   * silence into the next stream. Held, the 77 km/h it was let go at ran on from the last fix to the first sample of
+   * the next — the car standing at a light — and put the marker 75–141 m up the road at each red light of hantwo's
+   * 안전운전 commute (2026-10-28). Where it points, its place and whether it is parked are kept.
+   */
+  cut() {
+    this.speeds = [];
+    this.odos = [];
+    this.oddSteps = 0;
+  }
+
   clear() {
     this.speeds = [];
     this.odos = [];

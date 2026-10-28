@@ -384,7 +384,10 @@ function carUsable(): boolean {
 /** Each second: the distance measured again, the tracker given the car or not, the badge told. */
 function checkCarHere() {
   const est = carLink.track.lastEst, fix = gps.last;
-  if (est && fix && fix.accM <= 100 && Date.now() - carLink.track.lastEstAt < 60_000 && Date.now() - fix.t < 30_000) {
+  // Only while the stream is open: after it is let go (the fixes good again) its last place stood still while the car
+  // drove on, and a minute later it was "1.0 km away" — the car's data left unused till the next stream (hantwo,
+  // 2026-10-26..28, seven times, once for 3½ minutes).
+  if (est && fix && carLink.state === "streaming" && fix.accM <= 100 && Date.now() - carLink.track.lastEstAt < 60_000 && Date.now() - fix.t < 30_000) {
     carDistM = metres(est.lon, est.lat, fix.lon, fix.lat);
     const near = carDistM <= CAR_AWAY_M;
     if (near !== carNear) log(near ? `차량 위치가 이 기기와 ${Math.round(carDistM)} m — 차량 데이터를 씁니다` : `차량 위치가 이 기기와 ${(carDistM / 1000).toFixed(1)} km 떨어져 있어 차량 데이터를 쓰지 않습니다`);

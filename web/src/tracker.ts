@@ -26,6 +26,14 @@ export const OFF_M = 35;
 export const OFF_S = 3;
 /** Within this of the route's start the car's heading against the road calls nothing off (feed: aligned). */
 export const START_GRACE_M = 80;
+/**
+ * A route that begins this far from where the car was when it came (the provider put the start on a road the car is
+ * not on: out of an apartment block's car park) is not left until the car has gone START_LEAVE_M from there: on the
+ * block's own driveway, the re-route came from the wrong street again, a U-turn, and only the third, 50 s on, was right
+ * (hantwo, 2026-10-26).
+ */
+export const START_FAR_M = 25;
+export const START_LEAVE_M = 50;
 export const OFF_FAR_M = 60;
 export const OFF_FAR_S = 1;
 /** A fix believed for OFF_FAR_M: GPS between towers can put one 60 m out. */
@@ -208,6 +216,8 @@ export class Tracker {
   /** Since when the car has been well clear of the road, on good fixes. */
   private farSince: number | null = null;
   private declaredOff = false;
+  /** Where the car was when a route that began START_FAR_M or more from it came; null otherwise. */
+  private farStart: LonLat | null = null;
   private declaredAt = 0;
 
   onOffRoute: (at: LonLat) => void = () => {};
@@ -231,9 +241,11 @@ export class Tracker {
       this.guides.sort((a, b) => a.alongM - b.alongM);
       // The reckoning goes on from the last fix's place on this line, not the metres along the old one: a route
       // changed between two of the car browser's sparse fixes had the marker leap 1583 m on (2026-10-03).
+      this.farStart = null;
       if (this.lastFix) {
         this.lastProj = this.line.project([this.lastFix.lon, this.lastFix.lat], 0, this.line.path.length);
         this.reckonAlong = this.lastProj.alongM;
+        if (this.lastProj.offM >= START_FAR_M && this.lastFix.accM <= OFF_FAR_ACC_M) this.farStart = [this.lastFix.lon, this.lastFix.lat];
       }
       // A route changed mid-reckoning: the error the next fix makes is measured on another line, and not told.
       if (this.reckonSince > 0) this.reckonRerouted = true;
@@ -326,7 +338,8 @@ export class Tracker {
         const far = proj.offM > OFF_FAR_M && fix.accM <= OFF_FAR_ACC_M;
         this.farSince = far ? (this.farSince ?? now) : null;
         const off = now - this.offSince >= OFF_S * 1000 || (this.farSince != null && now - this.farSince >= OFF_FAR_S * 1000);
-        if (off && (!this.declaredOff || now - this.declaredAt >= OFF_AGAIN_S * 1000)) {
+        const leaving = this.farStart != null && metres(fix.lon, fix.lat, this.farStart[0], this.farStart[1]) < START_LEAVE_M;
+        if (off && !leaving && (!this.declaredOff || now - this.declaredAt >= OFF_AGAIN_S * 1000)) {
           this.declaredOff = true;
           this.declaredAt = now;
           this.onOffRoute([fix.lon, fix.lat]);

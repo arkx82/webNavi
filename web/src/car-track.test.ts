@@ -156,3 +156,18 @@ test("standing, the way the car points is its own word, lately said; none when t
   assert.equal(car.headingNow(T0 + 4_000), 211, "the last heading said, a sample without one in between");
   assert.equal(car.headingNow(T0 + 3_300 + PARKED_FRESH_MS + 1), null, "the car quiet too long: not known now");
 });
+
+test("a stream let go and opened again: the speed it was let go at is not held across the silence", () => {
+  const car = new CarTrack();
+  // 21 m/s, then the stream stopped (the fixes good); 140 s on, stopped at a light, the fixes silent, it opens again.
+  for (let s = 0; s <= 10; s++) at(car, { t: T0 + s * 1000, speedMps: 21, est: { lon: 127, lat: 37.5, heading: 344 } });
+  car.cut();
+  const open = T0 + 150_000;
+  at(car, { t: open, speedMps: 0, est: { lon: 127, lat: 37.5, heading: 344 } });
+  at(car, { t: open + 3000, speedMps: 0 });
+  // From the last fix (7 s before it opened) to now: standing.
+  const free = car.freePath(open - 7000, open + 3000)!;
+  assert.equal(Math.hypot(free.dE, free.dN), 0);
+  assert.equal(car.lastSpeed(), 0);
+  assert.equal(car.headingNow(open + 3000 + 300), 344, "where it points is kept");
+});

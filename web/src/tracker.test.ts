@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Line, metres, offset } from "./geo";
-import { OFF_AGAIN_S, OFF_FAR_M, OFF_M, OFF_S, LOST_S, Tracker, type ReckonEnd } from "./tracker";
+import { OFF_AGAIN_S, OFF_FAR_M, OFF_M, OFF_S, LOST_S, START_LEAVE_M, Tracker, type ReckonEnd } from "./tracker";
 import { CarTrack } from "./car-track";
 import type { Fix } from "./gps";
 import type { LonLat, Route } from "./types";
@@ -590,4 +590,19 @@ test("out of a car park the other way at the route's start: no off-route call fo
   far.onOffRoute = () => offs.push(2);
   for (let t = 0; t <= 6000; t += 200) { far.feed(fix(at(500), t, { speed: 3, course: 180 }), t); far.frame(t); }
   assert.deepEqual(offs, [2]);
+});
+
+test("a route that begins on a road 40 m from the parked car is not left on the way out of the car park, only once past it", () => {
+  const tracker = new Tracker();
+  const calls: LonLat[] = [];
+  tracker.onOffRoute = (at) => calls.push(at);
+  // Parked 40 m east of the route's road, the route asked there; then out along the block's driveway, east, away from it.
+  const parked = offset(offset(start, 0, 100), 90, 40);
+  tracker.feed(fix(parked, 0, { speed: 0 }), 0);
+  tracker.setRoute(route);
+  let t = 1000;
+  for (let m = 5; m < START_LEAVE_M - 5; m += 5, t += 1000) tracker.feed(fix(offset(parked, 90, m), t, { speed: 5, course: 90 }), t);
+  assert.equal(calls.length, 0, "not on the driveway");
+  for (let m = START_LEAVE_M + 5; m <= START_LEAVE_M + 30; m += 5, t += 1000) tracker.feed(fix(offset(parked, 90, m), t, { speed: 5, course: 90 }), t);
+  assert.equal(calls.length, 1, "once out of it");
 });

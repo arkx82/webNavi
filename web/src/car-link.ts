@@ -78,7 +78,7 @@ export class CarLink {
     };
     es.onerror = () => {
       // Closed for good (a 204, or refused): no car for this user.
-      if (es.readyState === EventSource.CLOSED) { this.source = null; this.quietUntil = Date.now() + 10 * 60_000; this.set("off"); }
+      if (es.readyState === EventSource.CLOSED) { this.source = null; this.quietUntil = Date.now() + 10 * 60_000; this.track.cut(); this.set("off"); }
       else this.set("reconnecting");
     };
   }
@@ -91,6 +91,7 @@ export class CarLink {
     this.watch = null;
     this.source?.close();
     this.source = null;
+    this.track.cut();
     this.set("off");
   }
 
