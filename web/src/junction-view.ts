@@ -212,7 +212,15 @@ export class JunctionView {
     const k = (SIGN_ARROW_H * 2 * half) / (size.y || 1);
     const c = this.canvas.getBoundingClientRect();
     const sign = this.box.querySelector<HTMLElement>(".jv-sign");
-    const top = sign?.textContent ? sign.getBoundingClientRect().bottom - c.top + SIGN_ARROW_GAP_PX : SIGN_ARROW_GAP_PX * 3;
+    // Just above the horizon (the ground 600 m on, ahead), and never over the sign: with no sign it stood at the top of
+    // the sky, well clear of the road it points along (2026-10-28).
+    const ahead = camera.getWorldDirection(new T.Vector3()).setY(0).normalize();
+    const far = camera.position.clone().addScaledVector(ahead, 600);
+    far.y = camera.position.y - STILL_UP_M;
+    far.project(camera);
+    const horizon = ((1 - far.y) / 2) * c.height;
+    let top = horizon - SIGN_ARROW_H * c.height - SIGN_ARROW_GAP_PX;
+    if (sign?.textContent) top = Math.max(top, sign.getBoundingClientRect().bottom - c.top + SIGN_ARROW_GAP_PX);
     const y = (1 - 2 * (top / (c.height || 1) + SIGN_ARROW_H / 2)) * half;
     hud.pivot.scale.setScalar(k);
     hud.pivot.position.set(-mid.x * k, y - mid.y * k, -D - mid.z * k);
