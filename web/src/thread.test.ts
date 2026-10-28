@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { applySnap, densify, headingsOf, roundCorners, snapRouteWith, splice, turnsOf } from "./thread.js";
+import { applySnap, densify, easeSteps, headingsOf, roundCorners, snapRouteWith, splice, turnsOf } from "./thread.js";
 import type { LonLat, Route } from "./types.js";
 
 /** Metres east/north of 강남역 as lon/lat. */
@@ -243,6 +243,43 @@ test("out of a right turn the line is in the rightmost lane for a while, then mo
   const close = sidesAlong(line, [{ alongM: 100, bias: 1, reach: 340 }, { alongM: 170, bias: -1, reach: 340 }]);
   assert.equal(close.biases[11], 1, "10 m out: the exit lane");
   assert.equal(close.biases[12], -1, "20 m out: the next turn's, leaving 40 m to move and 20 to settle");
+});
+
+test("between two right turns 500 m apart the line keeps right, not over to the middle and back; a left turn between, it does move", async () => {
+  const { sidesAlong } = await import("./thread");
+  const { Line, offset } = await import("./geo");
+  const line = new Line(Array.from({ length: 101 }, (_, i) => offset([127.07, 37.65], 0, i * 10)));
+  const two = sidesAlong(line, [{ alongM: 100, bias: 1, reach: 340 }, { alongM: 600, bias: 1, reach: 340 }]);
+  for (let m = 100; m <= 600; m += 10) assert.ok(two.biases[m / 10] > 0, `${m} m: the right side`);
+  assert.ok(two.biases[20] < 1 && two.biases[20] > 0, "kept, not asked for as the turn's own: no pockets taken");
+  const apart = sidesAlong(line, [{ alongM: 100, bias: 1, reach: 340 }, { alongM: 900, bias: 1, reach: 340 }]);
+  assert.equal(apart.biases[30], 0, "800 m apart: a through lane between");
+  const other = sidesAlong(line, [{ alongM: 100, bias: 1, reach: 340 }, { alongM: 600, bias: -1, reach: 340 }]);
+  assert.equal(other.biases[20], 0, "a left turn next: a through lane until its side");
+});
+
+test("a move to the next lane is drawn as a curve along the road, not a straight cut with a corner at each end", () => {
+  // North 400 m, a vertex every 20 m; the line in a lane 1.75 m right of it, over to 5.25 m between 180 and 200 m.
+  const base = Array.from({ length: 21 }, (_, k) => at(0, 20 * k));
+  const laid = base.map((_, k) => at(20 * k <= 180 ? 1.75 : 5.25, 20 * k));
+  const { path, map } = easeSteps(base, laid);
+  const x = (p: LonLat) => (p[0] - 127.0276) * 111_320 * Math.cos((37.4979 * Math.PI) / 180);
+  const y = (p: LonLat) => (p[1] - 37.4979) * 111_320;
+  assert.ok(path.length > laid.length + 10, "points put in along the curve");
+  assert.equal(map.length, laid.length + 1);
+  for (const [k, m] of map.slice(0, -1).entries()) assert.ok(Math.abs(y(path[m]) - 20 * k) < 3, `vertex ${k} at ${y(path[m])}`);
+  // In one lane up to 160 m and in the other from 220 m (over EASE_MIN_M); between, sideways only ever onward, gently.
+  for (const p of path) {
+    if (y(p) <= 160) assert.ok(Math.abs(x(p) - 1.75) < 0.01, `${y(p)}: ${x(p)}`);
+    if (y(p) >= 220) assert.ok(Math.abs(x(p) - 5.25) < 0.01, `${y(p)}: ${x(p)}`);
+  }
+  for (let i = 1; i < path.length; i++) {
+    const dx = x(path[i]) - x(path[i - 1]), dy = y(path[i]) - y(path[i - 1]);
+    assert.ok(dx >= -1e-6 && dx <= 0.15 * dy + 1e-6, `${y(path[i])}: ${dx.toFixed(2)} over ${dy.toFixed(1)}`);
+  }
+  // A slow drift round a bend (8 m over 300 m) is left as it is.
+  const drift = base.map((_, k) => at(0.4 * k, 20 * k));
+  assert.equal(easeSteps(base, drift).path, drift);
 });
 
 test("a slip lane's trail from 70 m before the junction is put in round the corner, not taken as rejoined on the way in", () => {

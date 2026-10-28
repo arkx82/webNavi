@@ -494,6 +494,112 @@ export function applySnap(path: LonLat[], snapped: (LonLat | null)[], fixed: boo
 }
 
 /**
+ * A move from one lane to the next, drawn as it is driven: the snapped line went straight across between the last
+ * vertex in one lane and the first in the other, a corner at each end — a zigzag wherever the line changed lanes (the
+ * user, 2026-10-29: "지그재그로 가는길은 곡선으로"). Each such step (the line EASE_LANE_M or more sideways of the route
+ * as drawn, vertex after vertex the same way, EASE_SLOPE steep at least) is laid again as a curve leaving one lane and arriving in the other along
+ * the road, over EASE_MIN_M at least where the line either side is still, a point every EASE_STEP_M. Not across
+ * [fixed] vertices (a threaded corner) nor where the road bends more than EASE_DEG — a corner's own curve.
+ */
+const EASE_LANE_M = 1.2;
+const EASE_STILL_M = 0.2;
+/** Once moving over, still moving while this much more each vertex (a step's vertices are not evenly spread). */
+const EASE_GOING_M = 0.02;
+const EASE_MIN_M = 60;
+const EASE_STEP_M = 4;
+const EASE_DEG = 20;
+/**
+ * A step is this steep at least, sideways metres per metre along (a lane over 115 m), and no longer than EASE_MAX_M:
+ * the line 8 m off the provider's over 270 m round a bend, its vertices far apart, was no lane change.
+ */
+const EASE_SLOPE = 0.03;
+const EASE_MAX_M = 150;
+/** How far the curve may be from the line it replaces: this share of the step, and this much more. */
+const EASE_ROOM = 0.5;
+const EASE_ROOM_M = 0.5;
+export function easeSteps(base: LonLat[], laid: LonLat[], fixed: boolean[] = []): { path: LonLat[]; map: number[] } {
+  const n = laid.length;
+  const same = { path: laid, map: [...laid.keys(), n] };
+  if (n < 3 || base.length !== n) return same;
+  const kx = 111_320 * Math.cos(((laid[0][1]) * Math.PI) / 180), ky = 111_320;
+  const headings = headingsOf(base);
+  const lat = laid.map((q, i) => {
+    const h = (headings[i] * Math.PI) / 180;
+    return Number.isFinite(h) ? (q[0] - base[i][0]) * kx * Math.cos(h) - (q[1] - base[i][1]) * ky * Math.sin(h) : NaN;
+  });
+  const along: number[] = [0];
+  for (let i = 1; i < n; i++) along.push(along[i - 1] + metres(base[i - 1][0], base[i - 1][1], base[i][0], base[i][1]));
+  const turn = (a: number, b: number) => Math.abs(((b - a + 540) % 360) - 180);
+  const still = (i: number) => i > 0 && i < n && !fixed[i - 1] && !fixed[i] && Math.abs(lat[i] - lat[i - 1]) < EASE_STILL_M;
+  const spans: [number, number][] = [];
+  for (let k = 0, done = 0; k + 1 < n; ) {
+    const d = lat[k + 1] - lat[k];
+    if (!(Math.abs(d) >= EASE_STILL_M) || fixed[k] || fixed[k + 1]) { k++; continue; }
+    let s = k, e = k + 1;
+    while (e + 1 < n && !fixed[e + 1] && Math.sign(d) * (lat[e + 1] - lat[e]) >= EASE_GOING_M) e++;
+    // A slow drift off the route's line along a bend (the provider's line off the lane's) is no lane change.
+    if (along[e] - along[s] > EASE_MAX_M || Math.abs(lat[e] - lat[s]) < EASE_SLOPE * (along[e] - along[s])) { k = e; continue; }
+    const mid = (along[s] + along[e]) / 2;
+    while (along[e] - along[s] < EASE_MIN_M - 1) {
+      const back = s - 1 > done && still(s), on = e + 1 < n && still(e + 1);
+      if (back && (!on || mid - along[s] <= along[e] - mid)) s--;
+      else if (on) e++;
+      else break;
+    }
+    k = e;
+    if (Math.abs(lat[e] - lat[s]) < EASE_LANE_M || s === 0 || e === n - 1) continue;
+    let bends = false;
+    for (let i = s; i <= e && !bends; i++) bends = turn(headings[s], headings[i]) > EASE_DEG;
+    if (bends) continue;
+    spans.push([s, e]);
+    done = e;
+  }
+  if (!spans.length) return same;
+  const path: LonLat[] = [], map: number[] = [];
+  let i = 0;
+  for (const [s, e] of spans) {
+    for (; i <= s; i++) { map.push(path.length); path.push(laid[i]); }
+    // In metres from laid[s]: a cubic from it to laid[e], leaving along the line before and arriving along the line after.
+    const xy = (q: LonLat) => [(q[0] - laid[s][0]) * kx, (q[1] - laid[s][1]) * ky] as const;
+    const unit = (a: LonLat, b: LonLat) => { const [ax, ay] = xy(a), [bx, by] = xy(b), l = Math.hypot(bx - ax, by - ay) || 1; return [(bx - ax) / l, (by - ay) / l] as const; };
+    const [x1, y1] = xy(laid[e]), chord = Math.hypot(x1, y1);
+    const t0 = unit(laid[s - 1], laid[s]), t1 = unit(laid[e], laid[e + 1]);
+    const steps = Math.max(2, Math.ceil(chord / EASE_STEP_M));
+    const curve: LonLat[] = [];
+    for (let j = 1; j < steps; j++) {
+      const t = j / steps, t2 = t * t, t3 = t2 * t;
+      const h10 = t3 - 2 * t2 + t, h01 = -2 * t3 + 3 * t2, h11 = t3 - t2;
+      const x = h10 * chord * t0[0] + h01 * x1 + h11 * chord * t1[0], y = h10 * chord * t0[1] + h01 * y1 + h11 * chord * t1[1];
+      curve.push([laid[s][0] + x / kx, laid[s][1] + y / ky]);
+    }
+    // The curve keeps to the line it replaces, give or take part of the step: one that wandered off (the road bending
+    // where the provider's line ran straight, 25 m off) is not laid, the line stays as it was.
+    const room = EASE_ROOM * Math.abs(lat[e] - lat[s]) + EASE_ROOM_M;
+    const off = (q: LonLat) => {
+      const [qx, qy] = xy(q);
+      let best = Infinity;
+      for (let k = s; k < e; k++) {
+        const [ax, ay] = xy(laid[k]), [bx, by] = xy(laid[k + 1]), dx = bx - ax, dy = by - ay, l = dx * dx + dy * dy;
+        const u = l ? Math.max(0, Math.min(1, ((qx - ax) * dx + (qy - ay) * dy) / l)) : 0;
+        best = Math.min(best, Math.hypot(qx - ax - u * dx, qy - ay - u * dy));
+      }
+      return best;
+    };
+    if (curve.some((q) => off(q) > room)) {
+      for (; i < e; i++) { map.push(path.length); path.push(laid[i]); }
+      continue;
+    }
+    const first = path.length;
+    path.push(...curve);
+    // The vertices laid over (a congestion stretch's ends, a motorway's) go to the point as far along.
+    for (; i < e; i++) map.push(first - 1 + Math.round(((along[i] - along[s]) / (along[e] - along[s])) * steps));
+  }
+  for (; i < n; i++) { map.push(path.length); path.push(laid[i]); }
+  map.push(path.length);
+  return { path, map };
+}
+
+/**
  * The side each vertex's lane is taken on (server lanes.ts snap): -1 the leftmost, +1 the rightmost, 0 a through
  * lane — the lane the next turn wants, from BIAS_TOWN_M before it in town and BIAS_FAST_M on a motorway (where the
  * exit is said from 1 km and the lanes are changed early), as the car apps draw the line in the lane to be in. The
@@ -539,6 +645,14 @@ export const FORK_EXIT_M = 400;
 /** Before the next turn the line is to be over in its lane by at least this, whatever is left between the two. */
 const SETTLE_M = 20;
 /**
+ * Between two turns the same way at most this much further apart than the second one's reach, the line keeps to that
+ * side all the way (KEEP_SIDE, a side the pockets are not taken for): out of a right turn into the middle lane and
+ * back to the right lane for the next right turn 500 m on was a change and its undoing for nothing (the user,
+ * 2026-10-29: "괜히 너무 왔다갔다").
+ */
+const KEEP_SIDE_M = 400;
+const KEEP_SIDE = 0.5;
+/**
  * Each vertex of [line]'s side and road (how many turns are behind it): just out of a turn its exit lane's side
  * (EXIT_M, shorter where the next turn is near, so the move to its lane still fits), then the next turn's within its
  * reach, else 0.
@@ -558,6 +672,10 @@ export function sidesAlong(line: Line, turns: BiasTurn[]): Required<SnapSides> {
       if (along - prev.alongM <= exit + 0.5) { biases[i] = prev.bias; continue; }
     }
     if (t) biases[i] = t.bias;
+    else if (prev) {
+      const next = turns.find((n) => n.alongM - along >= -0.5);
+      if (next && next.bias === prev.bias && next.alongM - prev.alongM <= next.reach + KEEP_SIDE_M) biases[i] = prev.bias * KEEP_SIDE;
+    }
   }
   return { biases, pieces };
 }
@@ -646,8 +764,12 @@ export async function snapRouteWith(route: Route, snap: Snapper): Promise<Route>
     if (!snapped || !snapped.some(Boolean) || route.path.length !== n0) return route;
     for (const seg of route.segments) { seg.from = move(seg.from); seg.to = move(seg.to); }
     if (route.motorways) route.motorways = route.motorways.map(([a, b]) => [move(a), move(b)] as [number, number]);
-    if (route.threaded) route.threaded = threaded;
-    route.path = applySnap(dense.path, snapped, fixed, sides);
+    const eased = easeSteps(dense.path, applySnap(dense.path, snapped, fixed, sides), fixed);
+    const ease = (i: number) => eased.map[Math.min(i, dense.path.length)];
+    for (const seg of route.segments) { seg.from = ease(seg.from); seg.to = ease(seg.to); }
+    if (route.motorways) route.motorways = route.motorways.map(([a, b]) => [ease(a), ease(b)] as [number, number]);
+    if (route.threaded) route.threaded = threaded.map(([a, b]) => [ease(a), ease(b)] as [number, number]);
+    route.path = eased.path;
   } catch { /* the line as the provider drew it */ }
   return route;
 }

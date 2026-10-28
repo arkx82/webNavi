@@ -13,7 +13,9 @@ import android.os.SystemClock
 import android.util.Log
 import com.kakaomobility.knsdk.KNLanguageType
 import com.kakaomobility.knsdk.KNRoutePriority
+import com.kakaomobility.knsdk.KNRGLaneColor
 import com.kakaomobility.knsdk.KNSDK
+import com.kakaomobility.knsdk.common.objects.KNPOI
 import com.kakaomobility.knsdk.guidance.knguidance.KNGuidance
 import com.kakaomobility.knsdk.guidance.knguidance.KNGuidance_LocationGuideDelegate
 import com.kakaomobility.knsdk.guidance.knguidance.KNGuidance_SafetyGuideDelegate
@@ -31,6 +33,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -54,6 +57,8 @@ class SafetyService : Service(), KNGuidance_SafetyGuideDelegate, KNGuidance_Loca
     private var activeSince = 0L
     private var inactiveSince = 0L
     private var latest: List<KNSafety> = emptyList()
+    /** The last trip asked of this slot (its id), so that it is asked of 카카오 once. */
+    private var tripId = ""
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -109,6 +114,7 @@ class SafetyService : Service(), KNGuidance_SafetyGuideDelegate, KNGuidance_Loca
             // 안전운전 runs while a car is on this slot; it is stopped half a minute after (a quota of starts, not of time).
             if (active && initState == "ok" && !guiding) startGuidance()
             if (!active && guiding && now - inactiveSince > 30_000) stopGuidance()
+            j.optJSONObject("trip")?.let { t -> if (initState == "ok" && t.optString("id") != tripId) lines(t) }
         }
     }
 
@@ -182,6 +188,46 @@ class SafetyService : Service(), KNGuidance_SafetyGuideDelegate, KNGuidance_Loca
     private fun clearMockProviders() {
         val lm = getSystemService(LocationManager::class.java)
         for (p in listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)) runCatching { lm.removeTestProvider(p) }
+    }
+
+    // ---- 노면색깔유도선 on the car's route ----
+
+    /**
+     * The car's route asked of 카카오 (from where the car is to its goal), and of the guidance points on its way, the
+     * ones with a coloured line to follow: where, which way, which colour. Asked once a route (the server's id); nothing
+     * kept, the answer goes to the car and is used on that drive.
+     */
+    private fun lines(t: JSONObject) {
+        tripId = t.optString("id")
+        val id = tripId
+        val start = t.optJSONArray("start") ?: return
+        val goal = t.optJSONArray("goal") ?: return
+        val poi = { name: String, a: JSONArray -> KNSDK.convertWGS84ToKATEC(a.getDouble(0), a.getDouble(1)).let { KNPOI(name, it.x.toInt(), it.y.toInt(), name) } }
+        val answer = { error: String?, found: JSONArray, total: Int ->
+            val e = JSONObject().put("id", id).put("lines", found).put("total", total)
+            if (error != null) e.put("error", error)
+            post("lines", e)
+        }
+        try {
+            KNSDK.makeTripWithStart(poi("출발", start), poi("목적지", goal), null, null) { error, trip ->
+                if (trip == null) { answer("경로 만들기 ${error?.code ?: ""} ${error?.msg ?: ""}".trim(), JSONArray(), 0); return@makeTripWithStart }
+                trip.routeWithPriority(KNRoutePriority.KNRoutePriority_Recommand, 0) { e2, routes ->
+                    val dirs = runCatching { routes?.firstOrNull()?.mainDirectionList() }.getOrNull()
+                    if (dirs == null) { answer("경로 ${e2?.code ?: ""} ${e2?.msg ?: ""}".trim(), JSONArray(), 0); return@routeWithPriority }
+                    val found = JSONArray()
+                    for (d in dirs) {
+                        val colour = d.laneColor ?: continue
+                        if (colour == KNRGLaneColor.KNRGLaneColor_None) continue
+                        val pos = d.location.pos
+                        val wgs = KNSDK.convertKATECToWGS84(pos.x.toInt(), pos.y.toInt())
+                        found.put(JSONObject().put("lon", wgs.x).put("lat", wgs.y).put("color", colour.name).put("rg", d.rgCode?.name ?: "").put("name", d.nodeName ?: ""))
+                    }
+                    answer(null, found, dirs.size)
+                }
+            }
+        } catch (x: Throwable) {
+            answer("예외 ${x.javaClass.simpleName}: ${x.message}", JSONArray(), 0)
+        }
     }
 
     // ---- what the SDK says ----

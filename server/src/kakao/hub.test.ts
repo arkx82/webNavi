@@ -60,3 +60,29 @@ test("the app's long ask wakes at the car's fix, and what the SDK would say reac
   ready(hub, 1);
   assert.equal(hub.carFix("a", fix).events.length, 0);
 });
+
+test("a car's route goes to its slot's app once; the app's coloured lines come back to the car once, its own words dropped", async () => {
+  const hub = new KakaoHub(1, () => "key", () => 0);
+  ready(hub, 1);
+  const trip = { id: "r1", goal: [127.1, 37.6] as [number, number] };
+  hub.carFix("a", fix, trip);
+  const asked = await hub.appAsk(1, 0, 0);
+  assert.deepEqual(asked?.trip, { id: "r1", start: [127, 37.5], goal: [127.1, 37.6] }, "from where the car is");
+  assert.equal((await hub.appAsk(1, 0, 0, true))?.trip, undefined, "not the GPS feeder's");
+  hub.appEvent(1, { kind: "lines", id: "old", lines: [{ lon: 127, lat: 37.5, color: "KNRGLaneColor_Pink" }] });
+  hub.appEvent(1, { kind: "lines", id: "r1", total: 12, lines: [
+    { lon: 127.05, lat: 37.55, color: "KNRGLaneColor_Pink", rg: "KNRGCode_RightOutHighway", name: "<b>신갈JC</b>" },
+    { lon: 127.06, lat: 37.56, color: "KNRGLaneColor_None" },
+    { lon: 127.07, lat: 37.57, color: "KNRGLaneColor_LightGreen", rg: "KNRGCode_LeftDirection" },
+  ] });
+  assert.equal((await hub.appAsk(1, 0, 0))?.trip, undefined, "answered: not asked again");
+  const got = hub.carFix("a", fix, trip).lines;
+  assert.equal(got?.total, 12);
+  assert.deepEqual(got?.lines.map((l) => [l.colour, l.rg]), [["pink", "RightOutHighway"], ["lightgreen", "LeftDirection"]]);
+  assert.equal(hub.carFix("a", fix, { ...trip, have: true }).lines, undefined, "the car has them");
+  // A new route is asked anew; none (the drive over, the lines off) lets the old one go.
+  hub.carFix("a", fix, { id: "r2", goal: [127.2, 37.7] });
+  assert.equal((await hub.appAsk(1, 0, 0))?.trip?.id, "r2");
+  hub.carFix("a", fix);
+  assert.equal((await hub.appAsk(1, 0, 0))?.trip, undefined);
+});

@@ -243,6 +243,9 @@ export const FLASHING_PHRASE = "잠시 후 점멸 신호 교차로입니다, 서
 export const GUIDE_LINES = {
   pink: "분홍색 유도선을 따라가세요",
   green: "녹색 유도선을 따라가세요",
+  // 카카오's two more (KNRGLaneColor): the lighter green beside a green, and sky blue.
+  lightgreen: "연두색 유도선을 따라가세요",
+  sky: "하늘색 유도선을 따라가세요",
   blue: "파란색 유도선을 따라가세요",
   orange: "주황색 유도선을 따라가세요",
   line: "노면 유도선을 따라가세요",

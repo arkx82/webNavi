@@ -299,7 +299,11 @@ let follow = true;
 let zoomBias = 0;
 const LEAN_MIN = -4;
 const LEAN_MAX = 2.5;
-const LEAN_STEP = 0.5;
+/**
+ * A tap of ± while following. 0.5 was a jump next to the wheel's tenths, and in the car ± is the only way (the user,
+ * 2026-10-29); held, it goes on (ZOOM_HOLD_*).
+ */
+const LEAN_STEP = 0.2;
 const LEAN_KEY = "nav-zoom-lean";
 function loadLean(v: View): number {
   try {
@@ -1173,11 +1177,28 @@ document.addEventListener("pointerdown", (e) => {
 });
 setBase(base, false);
 el("locate").addEventListener("click", () => setFollow(true));
+/** ± held: after this, a step every ZOOM_HOLD_EVERY_MS for as long as it is held. */
+const ZOOM_HOLD_MS = 400;
+const ZOOM_HOLD_EVERY_MS = 120;
 for (const [id, by] of [["zoom-in", 1], ["zoom-out", -1]] as const) {
-  el(id).addEventListener("click", () => {
+  // Off the car, looking round the map, a tap is a whole level, as before.
+  const step = () => {
     if (follow) setLean(zoomBias + by * LEAN_STEP);
     else { touchedAt = Date.now(); map.easeTo({ zoom: map.getZoom() + by, duration: 300 }); }
+  };
+  let hold = 0;
+  const release = () => { clearTimeout(hold); clearInterval(hold); hold = 0; };
+  const button = el(id);
+  // On the press, not the click: a held button's click would add one more step when let go.
+  button.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    release();
+    step();
+    hold = window.setTimeout(() => { if (follow) hold = window.setInterval(step, ZOOM_HOLD_EVERY_MS); }, ZOOM_HOLD_MS);
   });
+  for (const kind of ["pointerup", "pointercancel", "pointerleave"] as const) button.addEventListener(kind, release);
+  // A keyboard's Enter or Space (no pointer).
+  button.addEventListener("click", (e) => { if (e.detail === 0) step(); });
 }
 el("zoom-lean").addEventListener("click", () => setLean(0));
 
@@ -2512,6 +2533,8 @@ function branchOf(m: Maneuver): "left" | "right" | null {
 const inSeoul = (p: LonLat) => p[0] > 126.76 && p[0] < 127.19 && p[1] > 37.42 && p[1] < 37.71;
 function linesFor(g: Guide, m: Maneuver): LaneCard["lines"] {
   const go = branchOf(m);
+  const kakao = go && guide.colorLines ? kakaoLineAt(g, go) : null;
+  if (kakao) return { [go!]: kakao, go: go! };
   const name = junctionOf(g)?.name;
   if (!go || !guide.colorLines || !route || !routeLine || (!name && !inSeoul(g.at))) return null;
   if (!linesAsked.has(g)) {
@@ -2544,6 +2567,29 @@ function linesFor(g: Guide, m: Maneuver): LaneCard["lines"] {
     return exit ? { [go]: only, go } : null;
   }
   return { left: c.left, right: c.right, go };
+}
+
+/**
+ * 카카오's line at [g], on its way for this route ([go] the branch our route takes): its guidance point within
+ * KAKAO_LINE_M of our guide's, not one turning the other way. Told once a guide in the log.
+ */
+const KAKAO_LINE_M = 120;
+const kakaoLineTold = new WeakSet<Guide>();
+function kakaoLineAt(g: Guide, go: "left" | "right"): GuideColour | null {
+  if (!route || !kakaoLines || kakaoLines.id !== kakaoTripIds.get(route)) return null;
+  let best: { l: KakaoLine; d: number } | null = null;
+  for (const l of kakaoLines.lines) {
+    // 카카오's way there (RightOutHighway, LeftDirection …): another side is another junction's, or another branch.
+    const side = /Left/.test(l.rg) ? "left" : /Right/.test(l.rg) ? "right" : null;
+    if (side && side !== go) continue;
+    const d = metres(g.at[0], g.at[1], l.lon, l.lat);
+    if (d <= KAKAO_LINE_M && (!best || d < best.d)) best = { l, d };
+  }
+  if (best && !kakaoLineTold.has(g)) {
+    kakaoLineTold.add(g);
+    log(`유도선 ${best.l.name || g.text} (카카오, ${Math.round(best.d)} m): ${best.l.colour}`);
+  }
+  return best?.l.colour ?? null;
 }
 
 /** The colour to follow at [g], when its lines are known. */
@@ -2927,6 +2973,18 @@ setInterval(safeTick, 500);
 // near is left alone; one they lack is said in our voice and shown on the camera card. Nothing of 카카오's is kept.
 
 interface KakaoSafety { id: number; kind: Kind; code: string; lon: number; lat: number; limit?: number; dist: number }
+/** 카카오's 노면색깔유도선 on its way for the route being driven (server kakao/hub.ts): where, which colour, which way. */
+interface KakaoLine { lon: number; lat: number; colour: GuideColour; rg: string; name?: string }
+/** Each route's id for 카카오: a new route (a reroute too) is asked anew. */
+const kakaoTripIds = new WeakMap<Route, string>();
+let kakaoTripN = 0;
+function kakaoTripId(r: Route): string {
+  let id = kakaoTripIds.get(r);
+  if (!id) { id = `${Date.now().toString(36)}-${++kakaoTripN}`; kakaoTripIds.set(r, id); }
+  return id;
+}
+/** 카카오's lines for the route of that id; used for that route only, and gone with it. */
+let kakaoLines: { id: string; lines: KakaoLine[] } | null = null;
 /** Parked this long, the car lets its slot go (three cars share the server's). */
 const KAKAO_PARKED_MS = 3 * 60_000;
 /** A camera of ours this near 카카오's is the same camera. A zone's point (its facility, or where it begins) is looser. */
@@ -2967,11 +3025,20 @@ function kakaoTick() {
   }
   if (kakaoSending) return;
   kakaoSending = true;
-  const body = { lon: f.at[0], lat: f.at[1], speed: f.speedMps, bearing: f.bearing, acc: gps.last?.accM ?? 10 };
+  // The route, for 카카오's 노면색깔유도선 on it: its goal (asked from where the car is), once a route.
+  const tripId = route && guide.colorLines ? kakaoTripId(route) : null;
+  const goal = route?.path[route.path.length - 1];
+  const trip = tripId && goal ? { id: tripId, goal, have: kakaoLines?.id === tripId } : undefined;
+  const body = { lon: f.at[0], lat: f.at[1], speed: f.speedMps, bearing: f.bearing, acc: gps.last?.accM ?? 10, trip };
   fetch("/api/kakao/fix", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
     .then((a) => (a.ok ? a.json() : null))
-    .then((r: { slot: number | null; events?: KakaoSafety[]; why?: string } | null) => {
+    .then((r: { slot: number | null; events?: KakaoSafety[]; lines?: { id: string; lines: KakaoLine[]; total: number; error?: string }; why?: string } | null) => {
       if (!r) return;
+      if (r.lines && route && r.lines.id === kakaoTripId(route)) {
+        kakaoLines = { id: r.lines.id, lines: r.lines.lines };
+        const l = r.lines;
+        log(l.error ? `카카오 유도선 안 됨: ${l.error}` : `카카오 유도선 ${l.lines.length}곳 (안내 지점 ${l.total}): ${l.lines.map((x) => `${x.name || x.rg} ${x.colour}`).join(", ") || "없음"}`);
+      }
       const on = r.slot != null;
       if (on !== kakaoOn) {
         kakaoOn = on;

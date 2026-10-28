@@ -12,7 +12,7 @@ import type { LonLat } from "../route/types.js";
  * the route's guide and its direction by where that town lies.
  */
 /** "line": a line is painted (서울시's list says where) but not which colour — said without one. */
-export type GuideColour = "pink" | "green" | "blue" | "orange" | "line";
+export type GuideColour = "pink" | "green" | "lightgreen" | "sky" | "blue" | "orange" | "line";
 export interface ColourGuide {
   /** The line to each branch; one alone is the exit's. */
   left?: GuideColour;

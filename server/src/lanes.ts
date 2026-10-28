@@ -155,6 +155,18 @@ const CARRIAGEWAY_M = 12;
 /** 정밀도로지도's lane numbers for a pocket (91, 92 …): a bay opened left of 1차로 for the left turn and the U-turn. */
 const POCKET_LANE = 90;
 /**
+ * With no turn ahead, the lane the line is in is kept while it goes on (the same number, within STAY_OFF_M sideways of
+ * where it was) and the last snap was within STAY_GAP_M: chosen afresh at each point as the middle of the lanes found
+ * there, the line went over a lane and back wherever a lane's neighbour link was missing or a lane was added for a
+ * stretch — 111 of the 544 lane changes over the traced trips were undone again within 500 m, half within 105 m
+ * (the user, 2026-10-29: "괜히 너무 왔다갔다").
+ */
+const STAY_GAP_M = 100;
+/** …and the route still runs within SNAP_DEG of the way it did there. */
+const STAY_OFF_M = 2;
+/** A side asked for weaker than this (a stretch between two turns the same way, thread.ts) does not take the pockets. */
+const POCKET_BIAS = 0.75;
+/**
  * Before a stop line where some lanes cannot go the route's way (lanesAlong — the lane card's junctions), the line is
  * in one that can for this far: the next turn's side reached back over the junction before it, and the line went
  * straight on in its right-turn-only lane, or in the left-turn pocket (33 of 492 such stop lines over the drives,
@@ -676,6 +688,8 @@ export class LaneIndex {
     const wayLanes = biases ? this.wayLanes(db, points) : [];
     const goingAt = (i: number) => wayLanes.find((w) => w.along - alongOf[i] >= -WAY_LANE_SLACK_M && w.along - alongOf[i] <= WAY_LANE_M) ?? null;
     const inJunction = (i: number) => wayLanes.some((w) => w.way !== "straight" && alongOf[i] - w.along > 1 && alongOf[i] - w.along < IN_JUNCTION_M);
+    // The through lane last taken: its number, how far it was off the route sideways, and where.
+    let stay: { no: number; lateral: number; along: number; heading: number } | null = null;
     return points.map((p, i) => {
       const heading = headings[i];
       if (!Number.isFinite(heading) || inJunction(i)) return null;
@@ -717,6 +731,24 @@ export class LaneIndex {
       const ours = route.filter((f) => f.year === newest);
       const nearest = ours.reduce((a, b) => (b.off < a.off ? b : a));
       const byId = new Map(ours.filter((f) => f.id).map((f) => [f.id!, f]));
+      const bias = biases?.[i] ?? 0;
+      const hRad = (heading * Math.PI) / 180;
+      const cosH = Math.cos(hRad), sinH = Math.sin(hRad);
+      const lateralOf = (at: LonLat) => { const [x, y] = toXY(at, p); return x * cosH - y * sinH; };
+      const going = goingAt(i);
+      const through = Math.abs(bias) < 0.34;
+      // The lane kept: any of this survey's lanes the route's, not only the nearest's row (its neighbour links can be
+      // missing); not at a stop line that wants other lanes.
+      const kept = through && stay && alongOf[i] - stay.along <= STAY_GAP_M && Math.abs(diff(heading, stay.heading)) <= SNAP_DEG
+        ? ours.find((f) => f.link.lane === stay!.no && Math.abs(lateralOf(f.at) - stay!.lateral) <= STAY_OFF_M && (!going || !going.nos.length || going.nos.includes(stay!.no))) ?? null
+        : null;
+      // A link with no lane beside it (a junction's links, all numbered 1) says nothing of the lane the line is in:
+      // taken as 1차로, the line went on in 1차로 out of every junction.
+      const take = (f: { at: LonLat; no: number | null }, lone = false) => {
+        if (!lone) stay = through && f.no != null && f.no < POCKET_LANE ? { no: f.no, lateral: lateralOf(f.at), along: alongOf[i], heading } : null;
+        return f.at;
+      };
+      if (kept) return take({ at: kept.at, no: kept.link.lane }, !kept.l && !kept.r);
       let row = [nearest];
       if (nearest.id && (nearest.l || nearest.r)) {
         for (let at = nearest, guard = 0; at.l && byId.has(at.l) && guard < 12; guard++) { at = byId.get(at.l)!; row.unshift(at); }
@@ -725,15 +757,11 @@ export class LaneIndex {
         const least = nearest.off;
         row = ours.filter((f) => f.off <= least + CARRIAGEWAY_M);
       }
-      if (row.length === 1) return row[0].at;
+      if (row.length === 1) return take({ at: row[0].at, no: row[0].link.lane }, !row[0].l && !row[0].r);
 
       // Left to right across the way the road runs.
-      const hRad = (heading * Math.PI) / 180;
-      const cosH = Math.cos(hRad), sinH = Math.sin(hRad);
-      let withSide = row.map((f) => {
-        const [x, y] = toXY(f.at, p);
-        return { at: f.at, lateral: x * cosH - y * sinH, no: f.link.lane, pocket: (f.link.lane ?? 0) >= POCKET_LANE };
-      }).sort((a, b) => a.lateral - b.lateral);
+      let withSide = row.map((f) => ({ at: f.at, lateral: lateralOf(f.at), no: f.link.lane, pocket: (f.link.lane ?? 0) >= POCKET_LANE }))
+        .sort((a, b) => a.lateral - b.lateral);
 
       // One lane, the one that serves the way on, never between two (a 4-lane road's middle was drawn on the line
       // between 2차로 and 3차로): into a turn, the lane on its side; else a through lane, left of the middle — not
@@ -744,9 +772,7 @@ export class LaneIndex {
       // A turn pocket opened beside 1차로 (lane no. 91 on) is the left turn's and the U-turn's, not a lane of the road
       // through: counted in, the middle moved one over, and on 노원로 the line went 2차로, 1차로, 2차로 at each pocket
       // and slid back over the centre line between (the pretend drive of 2026-10-28).
-      const bias = biases?.[i] ?? 0;
-      if (bias > -0.34 && withSide.some((f) => !f.pocket)) withSide = withSide.filter((f) => !f.pocket);
-      const going = goingAt(i);
+      if (bias > -POCKET_BIAS && withSide.some((f) => !f.pocket)) withSide = withSide.filter((f) => !f.pocket);
       if (going) {
         // By the lane's number where both have one: where 1차로 and 2차로 part from one point, 43 m before the stop line,
         // the right-only 2차로 there was within WAY_LANE_OFF_M of 1차로's line too, and the line went into it (2026-10-28).
@@ -755,7 +781,7 @@ export class LaneIndex {
       }
       const n = withSide.length;
       const index = bias <= -0.34 ? 0 : bias >= 0.34 ? n - 1 : n === 2 ? 1 : Math.floor((n - 1) / 2);
-      return withSide[index].at;
+      return take(withSide[index]);
     });
   }
 

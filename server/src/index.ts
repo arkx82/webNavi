@@ -375,13 +375,17 @@ app.post<{ Params: { n: string }; Body: Record<string, never> }>("/internal/kaka
   if (!kakaoApp(request)) return reply.code(403).send({ error: "token" });
   return kakao.appEvent(Number(request.params.n), request.body ?? {}) ? { ok: true } : reply.code(404).send({ error: "no such slot" });
 });
-app.post<{ Body: { lon?: unknown; lat?: unknown; speed?: unknown; bearing?: unknown; acc?: unknown } }>("/api/kakao/fix", async (request, reply) => {
+app.post<{ Body: { lon?: unknown; lat?: unknown; speed?: unknown; bearing?: unknown; acc?: unknown; trip?: { id?: unknown; goal?: unknown; have?: unknown } } }>("/api/kakao/fix", async (request, reply) => {
   const b = request.body ?? {};
   const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
   const lon = num(b.lon), lat = num(b.lat);
   if (lon == null || lat == null || Math.abs(lon) > 180 || Math.abs(lat) > 90) return reply.code(400).send({ error: "lon, lat" });
   if (!kakao.ready) return { slot: null, events: [], why: "off" };
-  return kakao.carFix(request.user?.name ?? request.ip, { lon, lat, speed: num(b.speed), bearing: num(b.bearing), acc: num(b.acc) });
+  // The route being driven (its id and goal), for 카카오's 노면색깔유도선 on it.
+  const goal = Array.isArray(b.trip?.goal) ? b.trip.goal.map(num) : [];
+  const trip = b.trip && typeof b.trip.id === "string" && b.trip.id.length <= 80 && goal.length === 2 && goal[0] != null && goal[1] != null && Math.abs(goal[1]) <= 90
+    ? { id: b.trip.id, goal: [goal[0], goal[1]] as [number, number], have: b.trip.have === true } : undefined;
+  return kakao.carFix(request.user?.name ?? request.ip, { lon, lat, speed: num(b.speed), bearing: num(b.bearing), acc: num(b.acc) }, trip);
 });
 app.post("/api/kakao/done", async (request) => { kakao.carDone(request.user?.name ?? request.ip); return { ok: true }; });
 

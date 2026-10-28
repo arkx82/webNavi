@@ -141,6 +141,21 @@ test("with no turn ahead the line takes a through lane: 2차로 of two, the midd
   assert.ok(twoLeft && Math.abs(xOf(twoLeft) - 1.75) < 0.05, `two, a left turn ahead → 1차로: ${twoLeft && xOf(twoLeft)}`);
 });
 
+test("with no turn ahead the line stays in its lane where a neighbour link is missing for a stretch, not over to the middle of what is left and back", async () => {
+  // Three lanes north at x = 1.75, 5.25, 8.75; from y = 0 to 60 the map has 1차로 there but not as 2차로's neighbour.
+  const lane = (k: number, part: string, y0: number, y1: number, l: string | null, r: string | null) =>
+    link({ id: `A223S00${part}${k}`, lane: k, a: `S${part}${k}`, b: null, l, r }, [[1.75 + 3.5 * (k - 1), y0], [1.75 + 3.5 * (k - 1), y1]]);
+  const index = await indexOf([
+    lane(1, "1", -100, 0, null, "A223S0012"), lane(2, "1", -100, 0, "A223S0011", "A223S0013"), lane(3, "1", -100, 0, "A223S0012", null),
+    lane(1, "2", 0, 60, null, null), lane(2, "2", 0, 60, null, "A223S0023"), lane(3, "2", 0, 60, "A223S0022", null),
+    lane(1, "3", 60, 200, null, "A223S0032"), lane(2, "3", 60, 200, "A223S0031", "A223S0033"), lane(3, "3", 60, 200, "A223S0032", null),
+  ]);
+  const xOf = (p: LonLat) => (p[0] - O[0]) * M * Math.cos((O[1] * Math.PI) / 180);
+  const ys = Array.from({ length: 13 }, (_, k) => -90 + 20 * k);
+  const got = index.snap(ys.map((y) => at(0, y)), ys.map(() => 0), ys.map(() => 0));
+  for (const [k, y] of ys.entries()) assert.ok(got[k] && Math.abs(xOf(got[k]!) - 5.25) < 0.05, `y = ${y}: 2차로, not 3차로 (the middle of 2 and 3): ${got[k] && xOf(got[k]!)}`);
+});
+
 test("a turn pocket beside 1차로 is not a lane of the road through: the middle of the three, not 1차로; a left turn ahead, the pocket", async () => {
   // Three lanes north at x = 1.75, 5.25, 8.75 to a stop line at y = 0; a pocket (91) opened left of 1차로 from y = -60.
   const lane = (k: number) => link({ id: `A223P00000${k}`, lane: k, a: "P0", b: `P${k}`, l: k > 1 ? `A223P00000${k - 1}` : "A223P000091", r: k < 3 ? `A223P00000${k + 1}` : null },
