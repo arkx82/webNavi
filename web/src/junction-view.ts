@@ -56,7 +56,7 @@ const STILL_LOOK_PAST_M = 50;
  * arrow covered the lanes it was to point between (2026-10-28). Turned by the route's shape past the junction, it
  * pointed straight on at 하남JC's right fork, both branches bending left. Its height a share of the picture's.
  */
-const SIGN_ARROW_TILT_DEG = 68;
+const SIGN_ARROW_TILT_DEG = 58;
 const SIGN_ARROW_H = 0.17;
 const SIGN_ARROW_GAP_PX = 3;
 const SIGN_ARROW_DEG: Partial<Record<Maneuver, number>> = {
