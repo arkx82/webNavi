@@ -517,6 +517,9 @@ const EASE_MAX_M = 150;
 /** How far the curve may be from the line it replaces: this share of the step, and this much more. */
 const EASE_ROOM = 0.5;
 const EASE_ROOM_M = 0.5;
+/** A step's end overshot by at most this share of the step, come back within EASE_OVER_M along. */
+const EASE_OVER = 0.3;
+const EASE_OVER_M = 15;
 export function easeSteps(base: LonLat[], laid: LonLat[], fixed: boolean[] = []): { path: LonLat[]; map: number[] } {
   const n = laid.length;
   const same = { path: laid, map: [...laid.keys(), n] };
@@ -537,6 +540,10 @@ export function easeSteps(base: LonLat[], laid: LonLat[], fixed: boolean[] = [])
     if (!(Math.abs(d) >= EASE_STILL_M) || fixed[k] || fixed[k + 1]) { k++; continue; }
     let s = k, e = k + 1;
     while (e + 1 < n && !fixed[e + 1] && Math.sign(d) * (lat[e + 1] - lat[e]) >= EASE_GOING_M) e++;
+    // A last vertex a little past the lane (a link's end) and back within EASE_OVER_M is the step's: else the curve
+    // aimed back at it, was too far off the line to be laid, and a hook was left at the end (구리, 2026-10-29).
+    if (e + 2 < n && !fixed[e + 1] && along[e + 1] - along[e] <= EASE_OVER_M
+      && Math.abs(lat[e + 1] - lat[e]) <= EASE_OVER * Math.abs(lat[e] - lat[s]) && still(e + 2)) e++;
     // A slow drift off the route's line along a bend (the provider's line off the lane's) is no lane change.
     if (along[e] - along[s] > EASE_MAX_M || Math.abs(lat[e] - lat[s]) < EASE_SLOPE * (along[e] - along[s])) { k = e; continue; }
     const mid = (along[s] + along[e]) / 2;

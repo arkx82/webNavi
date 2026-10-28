@@ -282,6 +282,17 @@ test("a move to the next lane is drawn as a curve along the road, not a straight
   assert.equal(easeSteps(base, drift).path, drift);
 });
 
+test("a lane change whose last vertex is a little past the lane is still drawn as a curve, with no hook at its end", () => {
+  // As above, but the vertex at 200 m is 0.75 m past the lane it arrives in, and back by 210 m (a link's end).
+  const ys = [...Array.from({ length: 11 }, (_, k) => 20 * k), 210, ...Array.from({ length: 10 }, (_, k) => 220 + 20 * k)];
+  const base = ys.map((y) => at(0, y));
+  const laid = ys.map((y) => at(y <= 180 ? 1.75 : y === 200 ? 6 : 5.25, y));
+  const { path } = easeSteps(base, laid);
+  const x = (p: LonLat) => (p[0] - 127.0276) * 111_320 * Math.cos((37.4979 * Math.PI) / 180);
+  assert.ok(path.length > laid.length + 5, "laid as a curve");
+  for (const p of path) assert.ok(x(p) <= 5.26, `never past the lane: ${x(p).toFixed(2)}`);
+});
+
 test("a slip lane's trail from 70 m before the junction is put in round the corner, not taken as rejoined on the way in", () => {
   const r = corner();
   // On the route north from y = 130, then off east through the slip lane, onto the road east 8 m south of the line.

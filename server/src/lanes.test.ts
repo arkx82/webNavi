@@ -304,6 +304,21 @@ test("the line keeps to lanes of the route's road: not a deceleration lane besid
   assert.equal(xOf(380), 7, "the loop ramp, 200 m on, runs with the route: the rightmost");
 });
 
+test("a newer survey's road beside the motorway, over a carriageway's width off, is not the motorway's newer survey: the line stays on the motorway's lanes", async () => {
+  // A motorway north, three lanes of 2020 at x = -3.5, 0, 3.5; a one-lane road of 2022 beside it at x = 17.
+  const main = (n: number, x: number, l: string | null, r: string | null) =>
+    link({ id: `A220Y00000${n}`, lane: n, a: `Y${n}a`, b: `Y${n}b`, l, r }, [[x, -300], [x, 300]]);
+  const index = await indexOf([
+    main(1, -3.5, null, "A220Y000002"), main(2, 0, "A220Y000001", "A220Y000003"), main(3, 3.5, "A220Y000002", null),
+    link({ id: "A222Z000001", lane: 1, a: "Z0", b: "Z1", l: null, r: null }, [[17, -300], [17, 300]]),
+  ]);
+  // The provider's line in the right lane, an exit ahead (the line held to the right).
+  const ys = [-100, -50, 0, 50, 100];
+  const got = index.snap(ys.map((y) => at(3.5, y)), ys.map(() => 0), ys.map(() => 1));
+  const xOf = (p: LonLat) => Math.round(((p[0] - O[0]) * M * Math.cos((O[1] * Math.PI) / 180)) * 10) / 10;
+  for (const [k, y] of ys.entries()) assert.equal(got[k] && xOf(got[k]!), 3.5, `y = ${y}: the motorway's right lane, not the 2022 road 13.5 m over`);
+});
+
 test("a left turn where the map has no links through the junction is bridged: from 1차로's end, straight in, round, into the leftmost lane out", async () => {
   // Three lanes north to a stop line at y = 0, nothing on from them; the road turned into runs west from x = -20 on,
   // its westbound lanes on its north side, 1차로 by the centre line at y = 23.25 and 2차로 at y = 26.75, the eastbound

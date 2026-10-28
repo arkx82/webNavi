@@ -727,7 +727,11 @@ export class LaneIndex {
         const theirs = found.filter((f) => !this.leaves(db, f, points, alongOf, i, ahead, lineOf));
         if (theirs.length) route = theirs;
       }
-      const newest = Math.max(...route.map((f) => f.year));
+      // The newest survey of this carriageway: one whose lanes are all over CARRIAGEWAY_M further off than the nearest
+      // is another road's. A 2022 road beside 서울양양고속도로 14.5 m off took the line off the motorway, lanes of
+      // 2020 right under the route, for 100 m (the pretend drive of 2026-10-29).
+      const closest = route.reduce((a, b) => (b.off < a.off ? b : a));
+      const newest = Math.max(...route.filter((f) => f.off <= closest.off + CARRIAGEWAY_M).map((f) => f.year));
       const ours = route.filter((f) => f.year === newest);
       const nearest = ours.reduce((a, b) => (b.off < a.off ? b : a));
       const byId = new Map(ours.filter((f) => f.id).map((f) => [f.id!, f]));
