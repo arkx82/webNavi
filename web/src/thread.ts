@@ -42,6 +42,12 @@ const TRAIL_STRETCH = 1.6;
 const TRAIL_SLACK_M = 20;
 /** A trail's first leg shorter than this, at an angle to the next, is a survey's step, not the lane's way. */
 const TRAIL_STEP_M = 3;
+/**
+ * A trail is followed on past its turn no nearer the next turn than this: a right turn's trail keeps to the outer lane
+ * for its 150 m, and with a left turn 180 m on, the line kept to it up to that junction and turned left from 3차로
+ * (노원, 2026-10-28). Short of it the line is snapped, and moves over to the next turn's lanes.
+ */
+const NEXT_TURN_ROOM_M = 200;
 
 export interface Turn { at: LonLat; in: number; after: LonLat[]; before?: LonLat[] }
 
@@ -68,7 +74,7 @@ export function turnsOf(route: Route, line = new Line(route.path)): { guide: num
  * put into [route] in place of the cut it replaces: from where the trail
  * starts on the route to where it rejoins it. Returns whether it fitted.
  */
-export function splice(route: Route, trail: LonLat[], at?: LonLat): boolean {
+export function splice(route: Route, trail: LonLat[], at?: LonLat, nextAt?: LonLat): boolean {
   trail = distinct(trail);
   // A lane's end surveyed a step beside the link it joins (a short first leg at an angle to the next): the trail starts past it.
   while (trail.length > 2 && metres(trail[0][0], trail[0][1], trail[1][0], trail[1][1]) < TRAIL_STEP_M
@@ -82,13 +88,17 @@ export function splice(route: Route, trail: LonLat[], at?: LonLat): boolean {
   // was taken as rejoined there: the approach was replaced, the slip lane let go, and the line still cut through the
   // junction (경복아파트 사거리, 2026-10-13).
   const corner = at ? line.project(at, 0, line.path.length).alongM : null;
+  const until = nextAt ? line.project(nextAt, 0, line.path.length).alongM - NEXT_TURN_ROOM_M : Infinity;
   const past = (p: { alongM: number }) => p.alongM > s.alongM + 10 && (corner == null || p.alongM >= corner + PAST_TURN_M);
   let k = -1, e = s, walked = 0;
   for (let i = 1; i < trail.length; i++) {
     walked += metres(trail[i - 1][0], trail[i - 1][1], trail[i][0], trail[i][1]);
     if (walked < 20) continue;
     const p = line.project(trail[i], s.segment, 60);
-    if (p.offM <= REJOIN_M && past(p)) { k = i; e = p; break; }
+    // Running the route's way there too: a trail bridged round a corner the provider cuts late crossed its line
+    // mid-curve, at 63° to it.
+    const deg = bearing(trail[i - 1][0], trail[i - 1][1], trail[i][0], trail[i][1]);
+    if (p.offM <= REJOIN_M && past(p) && Math.abs(((p.bearing - deg + 540) % 360) - 180) <= REJOIN_DEG) { k = i; e = p; break; }
   }
   if (k < 0) {
     walked = 0;
@@ -108,7 +118,7 @@ export function splice(route: Route, trail: LonLat[], at?: LonLat): boolean {
   while (k + 1 < trail.length) {
     const p = line.project(trail[k + 1], e.segment, 60);
     const deg = bearing(trail[k][0], trail[k][1], trail[k + 1][0], trail[k + 1][1]);
-    if (p.offM > REJOIN_FAR_M || p.alongM <= e.alongM || Math.abs(((p.bearing - deg + 540) % 360) - 180) > REJOIN_DEG) break;
+    if (p.offM > REJOIN_FAR_M || p.alongM <= e.alongM || p.alongM > until || Math.abs(((p.bearing - deg + 540) % 360) - 180) > REJOIN_DEG) break;
     k++;
     e = p;
   }
@@ -221,6 +231,13 @@ const SNAP_BATCH = 4000;
 /** A vertex without lanes of its own within this many metres of one with them borrows a fading share of its shift. */
 const BLEND_M = 60;
 /**
+ * — of one running its way within this: a shift is sideways to its own road, and borrowed round a corner it is along
+ * the next road, or across it. Out of a left turn not threaded, the 12 m from the provider's line over to 1차로 at the
+ * stop line was carried round the corner and put the line on the oncoming lanes of the road turned into (노원,
+ * 2026-10-28).
+ */
+const BORROW_DEG = 30;
+/**
  * How fast the line may slide sideways between two snapped vertices, in
  * metres per metre along (about 9°), plus a tolerance for the survey's
  * own noise. A real lane change is 3.5 m over 50 m; a vertex snapped to a
@@ -243,6 +260,13 @@ const KINK_ROUNDS = 3;
  * the way back to the last (into 1차로 before a right turn, 2026-10-11 17:52 and 14:00).
  */
 const DENSE_M = 20;
+/**
+ * Away from the turns the line is snapped at least this often too. A vertex is moved onto its lane, and one without
+ * a lane of its own takes its neighbours' shift only within BLEND_M: between two of the provider's vertices 150 m
+ * apart on a bend, one snap passed over left the line on the provider's — the road's middle, the centre line — for
+ * most of the way (노원로, the pretend drive of 2026-10-28).
+ */
+const SPARSE_M = 40;
 /** Where the turn's lane is first asked for, the line moves over to it over this far, not in one step between two vertices. */
 const RAMP_M = 40;
 /** Before a turn, a vertex without a snap of its own (or with one passed over) takes the shift between the snaps either side up to this far apart, on the same road. */
@@ -423,21 +447,22 @@ export function applySnap(path: LonLat[], snapped: (LonLat | null)[], fixed: boo
       const span = along[after] - along[before], t = span > 0 ? (along[i] - along[before]) / span : 0.5;
       return [shift[before]![0] + (shift[after]![0] - shift[before]![0]) * t, shift[before]![1] + (shift[after]![1] - shift[before]![1]) * t] as const;
     };
+    const alike = (i: number, j: number) => !(Math.abs(((headings[i] - headings[j] + 540) % 360) - 180) > BORROW_DEG);
     const moved = path.map((p, i) => {
       if (shift[i]) return [p[0] + shift[i]![0], p[1] + shift[i]![1]] as LonLat;
       // Before a turn: between the snaps either side on this road, not back onto the provider's line.
       if (bias(i) !== 0) {
         let before = -1, after = -1;
-        for (let j = i - 1; j >= 0 && along[i] - along[j] <= BIAS_GAP_M && piece(j) === piece(i); j--) if (shift[j]) { before = j; break; }
-        for (let j = i + 1; j < n && along[j] - along[i] <= BIAS_GAP_M && piece(j) === piece(i); j++) if (shift[j]) { after = j; break; }
+        for (let j = i - 1; j >= 0 && along[i] - along[j] <= BIAS_GAP_M && piece(j) === piece(i); j--) if (shift[j]) { if (alike(i, j)) before = j; break; }
+        for (let j = i + 1; j < n && along[j] - along[i] <= BIAS_GAP_M && piece(j) === piece(i); j++) if (shift[j]) { if (alike(i, j)) after = j; break; }
         if (before >= 0 && after >= 0 && along[after] - along[before] <= BIAS_GAP_M) {
           const [sx, sy] = between(i, before, after);
           return [p[0] + sx, p[1] + sy] as LonLat;
         }
       }
       let before: number | null = null, after: number | null = null;
-      for (let j = i - 1; j >= 0 && along[i] - along[j] <= BLEND_M; j--) if (shift[j]) { before = j; break; }
-      for (let j = i + 1; j < n && along[j] - along[i] <= BLEND_M; j++) if (shift[j]) { after = j; break; }
+      for (let j = i - 1; j >= 0 && along[i] - along[j] <= BLEND_M; j--) if (shift[j]) { if (alike(i, j)) before = j; break; }
+      for (let j = i + 1; j < n && along[j] - along[i] <= BLEND_M; j++) if (shift[j]) { if (alike(i, j)) after = j; break; }
       if (before === null && after === null) return p;
       let sx: number, sy: number;
       if (before !== null && after !== null) [sx, sy] = between(i, before, after);
@@ -531,11 +556,12 @@ export function sidesAlong(line: Line, turns: BiasTurn[]): Required<SnapSides> {
 }
 
 /**
- * [path] with points put in along [stretches] (from, to along it, in metres) so that none there is further than
- * DENSE_M from the next, and one at each stretch's start; not between two [fixed] vertices (a threaded arc).
- * [map] takes each old index to its new one (map[n] the new length), for the indices into the path.
+ * [path] with points put in along [stretches] (from, to along it, in metres, and the most between two points there —
+ * DENSE_M when not given) so that none there is further than that from the next, and one at each stretch's start;
+ * not between two [fixed] vertices (a threaded arc). [map] takes each old index to its new one (map[n] the new
+ * length), for the indices into the path.
  */
-export function densify(path: LonLat[], stretches: [number, number][], fixed: boolean[] = []): { path: LonLat[]; map: number[] } {
+export function densify(path: LonLat[], stretches: ([number, number] | [number, number, number])[], fixed: boolean[] = []): { path: LonLat[]; map: number[] } {
   const line = new Line(path);
   const out: LonLat[] = [];
   const map: number[] = [];
@@ -545,10 +571,10 @@ export function densify(path: LonLat[], stretches: [number, number][], fixed: bo
     if (i + 1 >= path.length || (fixed[i] && fixed[i + 1])) continue;
     const a = line.along[i], b = line.along[i + 1], len = b - a;
     const cuts: number[] = [];
-    for (const [s, e] of stretches) {
+    for (const [s, e, step = DENSE_M] of stretches) {
       const u = Math.max(a, s), v = Math.min(b, e);
       if (v <= u) continue;
-      const k = Math.ceil((v - u) / DENSE_M);
+      const k = Math.ceil((v - u) / step);
       for (let j = 0; j <= k; j++) cuts.push(u + ((v - u) * j) / k);
     }
     let last = a;
@@ -595,8 +621,12 @@ export async function snapRouteWith(route: Route, snap: Snapper): Promise<Route>
     const turns = biasTurns(route);
     const fixed0: boolean[] = [];
     for (const [a, b] of route.threaded ?? []) for (let i = a; i < b; i++) fixed0[i] = true;
-    // Dense before each turn (its lane's reach) and just after it (the exit lane and the move on to the next one's).
-    const dense = densify(route.path, turns.flatMap((t) => [[t.alongM - t.reach - DENSE_M, t.alongM], [t.alongM, t.alongM + (t.exit ?? EXIT_M) + RAMP_M + DENSE_M]] as [number, number][]), fixed0);
+    // Dense before each turn (its lane's reach) and just after it (the exit lane and the move on to the next one's);
+    // elsewhere a point every SPARSE_M.
+    const dense = densify(route.path, [
+      [0, new Line(route.path).lengthM, SPARSE_M],
+      ...turns.flatMap((t) => [[t.alongM - t.reach - DENSE_M, t.alongM], [t.alongM, t.alongM + (t.exit ?? EXIT_M) + RAMP_M + DENSE_M]] as [number, number][]),
+    ], fixed0);
     const move = (i: number) => dense.map[Math.min(i, n0)];
     const threaded = (route.threaded ?? []).map(([a, b]) => [move(a), move(b)] as [number, number]);
     const fixed: boolean[] = [];
@@ -625,10 +655,10 @@ export async function threadRoute(route: Route): Promise<Route> {
     const { trails, alts } = (await a.json()) as { trails: (LonLat[] | null)[]; alts?: (LonLat[] | null)[] };
     // Each corner's first trail that fits the line: the stop line's, else the one from the lanes before it.
     trails.forEach((trail, i) => {
-      const at = turns[i]?.turn.at;
-      if (trail && splice(route, trail, at)) return;
+      const at = turns[i]?.turn.at, next = turns[i + 1]?.turn.at;
+      if (trail && splice(route, trail, at, next)) return;
       const alt = alts?.[i];
-      if (alt) splice(route, alt, at);
+      if (alt) splice(route, alt, at, next);
     });
   } catch { /* the corners as the provider drew them */ }
   // What the lanes did not thread, rounded.

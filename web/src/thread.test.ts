@@ -258,3 +258,34 @@ test("a slip lane's trail from 70 m before the junction is put in round the corn
   assert.ok(r.path.some((p) => Math.abs(p[0] - at(8, 184)[0]) < 1e-6 && Math.abs(p[1] - at(8, 184)[1]) < 1e-6), "through the slip");
   assert.ok(!r.path.some((p) => Math.abs(p[0] - at(0, 200)[0]) < 1e-9 && Math.abs(p[1] - at(0, 200)[1]) < 1e-9), "the corner's vertex gone");
 });
+
+test("away from the turns the line is asked about every 40 m: a vertex left without a lane does not leave the line on the provider's centre line", async () => {
+  // North 1 km with no turn, the provider's vertices 200 m apart.
+  const r: Route = {
+    provider: "kakao", distanceM: 1000, durationS: 90, path: [0, 200, 400, 600, 800, 1000].map((y) => at(0, y)),
+    guides: [{ at: at(0, 1000), text: "도착", distanceM: 0, turnType: 101 }], segments: [{ from: 0, to: 6, congestion: 1 }],
+  };
+  let asked: LonLat[] = [];
+  await snapRouteWith(r, async (points) => { asked = points; return points.map(() => null); });
+  const y = (p: LonLat) => (p[1] - 37.4979) * 111_320;
+  for (let i = 1; i < asked.length; i++) assert.ok(y(asked[i]) - y(asked[i - 1]) <= 40.5, `${y(asked[i - 1])} → ${y(asked[i])}`);
+});
+
+test("a turn's trail is followed on no nearer the next turn than 200 m: the line is left free to move over to that turn's lane", () => {
+  // North 200 m, right 400 m east, then left (north) at x = 400; the right turn's lane runs on 8 m south of the line.
+  const route = (): Route => ({
+    provider: "kakao", distanceM: 800, durationS: 90,
+    path: [at(0, 0), at(0, 100), at(0, 200), at(200, 200), at(400, 200), at(400, 400)],
+    guides: [{ at: at(0, 200), text: "우회전", distanceM: 200, turnType: 2 }, { at: at(400, 200), text: "좌회전", distanceM: 400, turnType: 1 }, { at: at(400, 400), text: "도착", distanceM: 0, turnType: 101 }],
+    segments: [{ from: 0, to: 5, congestion: 1 }],
+  });
+  const trail: LonLat[] = [at(0, 170), at(2, 182), at(8, 189), at(18, 192), at(40, 192), at(70, 192), at(100, 192), at(150, 192), at(200, 192), at(250, 192), at(300, 192)];
+  const far = route();
+  assert.ok(splice(far, trail, at(0, 200)));
+  assert.ok(far.path.some((p) => Math.abs(p[0] - at(300, 0)[0]) < 1e-7 && Math.abs(p[1] - at(0, 192)[1]) < 1e-7), "with no turn after, on to the trail's end");
+  const near = route();
+  assert.ok(splice(near, trail, at(0, 200), at(400, 200)));
+  const [a, b] = near.threaded![0];
+  const xs = near.path.slice(a, b).map((p) => (p[0] - at(0, 0)[0]) * 111_320 * Math.cos((37.4979 * Math.PI) / 180));
+  assert.ok(Math.max(...xs) <= 200.5, `the trail let go by x = 200, not ${Math.max(...xs).toFixed(0)}`);
+});

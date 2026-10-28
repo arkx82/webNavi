@@ -120,6 +120,23 @@ export function turnsRight(inDeg: number, at: LonLat, after: LonLat[]): boolean 
   const bend = diff(inDeg, bearingOf(at, out));
   return bend > 30 && bend < 150;
 }
+/**
+ * bridge(): the road turned into read this far past the corner (its way, its lanes); the stop line no further than
+ * BRIDGE_STOP_M before the corner; a curve of BRIDGE_STEPS from BRIDGE_MIN_M to BRIDGE_MAX_M across; the trail
+ * starting BRIDGE_IN_M back up the lane in and going BRIDGE_ON_M on along the lane out.
+ */
+const BRIDGE_PROBE_M = 40;
+const BRIDGE_STOP_M = 60;
+const BRIDGE_MIN_M = 10;
+const BRIDGE_MAX_M = 80;
+const BRIDGE_LEFT_R_M = 20;
+const BRIDGE_RIGHT_R_M = 12;
+/** The arc's end this close to the lane out, or this close to its start where it starts further on. */
+const BRIDGE_OFF_M = 1.5;
+const BRIDGE_SHORT_M = 25;
+const BRIDGE_STEPS = 12;
+const BRIDGE_IN_M = 80;
+const BRIDGE_ON_M = 60;
 /** Ways tried at most, a corner (a junction's lanes branch, and a slip lane's again). */
 const ALONG_TRIES = 400;
 /** A lane's end this close to the next link's start is the same point, surveyed twice. */
@@ -135,6 +152,26 @@ const SEAM_DEG = 30;
 const SNAP_M = 15;
 const SNAP_DEG = 25;
 const CARRIAGEWAY_M = 12;
+/** 정밀도로지도's lane numbers for a pocket (91, 92 …): a bay opened left of 1차로 for the left turn and the U-turn. */
+const POCKET_LANE = 90;
+/**
+ * Before a stop line where some lanes cannot go the route's way (lanesAlong — the lane card's junctions), the line is
+ * in one that can for this far: the next turn's side reached back over the junction before it, and the line went
+ * straight on in its right-turn-only lane, or in the left-turn pocket (33 of 492 such stop lines over the drives,
+ * 2026-10-28). A lane counts as one of them this close to its link.
+ */
+const WAY_LANE_M = 80;
+const WAY_LANE_OFF_M = 1.2;
+/** The stop line placed along the points a few metres out (the line's lanes moved since): the lanes held from this far past it too. */
+const WAY_LANE_SLACK_M = 15;
+/** A lane before such a stop line is followed this far past it, not on to the turn the bias is for. */
+const WAY_LANE_PAST_M = 40;
+/**
+ * Past the stop line where the route turns, this far is the junction: no lane of the road in or of the road out, and
+ * none taken. Snapped there (to the corner the provider's line cuts), the line's lane before the stop line was averaged
+ * with the next road's, and it came back over two lanes to 3차로 at the stop line of a left turn (노원, 2026-10-28).
+ */
+const IN_JUNCTION_M = 30;
 /**
  * A lane the line is put on must be the route's road's: followed on (its links after it, the one nearest the route at
  * each end) for FOLLOW_M — or, near a turn, to the end of the stretch held to the turn's side, up to FOLLOW_MAX_M —
@@ -151,6 +188,8 @@ const FOLLOW_BACK_M = 60;
 const FOLLOW_LEAVE_M = 20;
 const FOLLOW_GROW_M = 12;
 const FOLLOW_STEP_M = 20;
+/** A lane followed on that runs more than this across the route there has turned off it (a pocket's left turn, its U-turn): it leaves. */
+const FOLLOW_TURN_DEG = 60;
 /**
  * A lane's arrows: those painted in its last ARROW_BACK_M before the stop line (on the link before it too, where
  * that link leads only into this lane), within ARROW_OFF_M of its middle. The one nearest the stop line is the
@@ -470,6 +509,101 @@ export class LaneIndex {
   }
 
   /**
+   * A left or right turn where the map has no links through the junction (its lanes end at the stop line, nothing on
+   * from them), bridged: the lane at the stop line that may turn that way, the furthest that side, from BRIDGE_IN_M
+   * before its end; a curve from its end into the road turned into's lane on the same side, where that lane starts
+   * past the junction; and on along that lane. Neither trail found at 노원구민체육센터's left turn: the line came to
+   * the stop line in 1차로, and the provider's corner, from 12 m over, took it round onto the oncoming lanes of the
+   * road turned into (2026-10-28).
+   */
+  bridge(at: LonLat, inDeg: number, after: LonLat[]): LonLat[] | null {
+    const db = this.open();
+    if (!db || after.length < 2 || lengthOf(after) < BRIDGE_PROBE_M + 10) return null;
+    const outDeg = bearingOf(along(after, BRIDGE_PROBE_M - 10), along(after, BRIDGE_PROBE_M + 10));
+    const way = turnOf(inDeg, outDeg);
+    if (way !== "left" && way !== "right") return null;
+    const side = way === "left" ? -1 : 1;
+    // In: the lanes ending at the stop line nearest before the corner, nothing on from them.
+    const ends = this.endsNear(db, at, inDeg).filter((e) => e.before > 0 && e.before <= BRIDGE_STOP_M && this.nextOf(db, e, e.path).length === 0);
+    if (ends.length === 0) return null;
+    const first = Math.min(...ends.map((e) => e.before));
+    const row = ends.filter((e) => e.before - first < TRAIL_JOIN_M * 2);
+    const turning = row.filter((e) => this.arrowTurns(db, e, e.path)?.includes(way));
+    const from = (turning.length ? turning : row).reduce((a, b) => (side * b.side > side * a.side ? b : a));
+    // Out: the lanes running the road's way past the junction, the furthest the turn's side (a pocket is not one).
+    const probe = along(after, BRIDGE_PROBE_M);
+    const d = SNAP_M / M, k = d / Math.cos((probe[1] * Math.PI) / 180);
+    const outs = (db.near.all(probe[0] + k, probe[0] - k, probe[1] + d, probe[1] - d) as unknown as Link[]).flatMap((l) => {
+      if ((l.lane ?? 0) >= POCKET_LANE) return [];
+      const path = JSON.parse(l.coords) as LonLat[];
+      const hit = nearestOn(probe, path);
+      if (!hit || hit.off > SNAP_M || Math.abs(diff(outDeg, hit.bearing)) > SNAP_DEG) return [];
+      const [x, y] = toXY(hit.at, probe), h = (outDeg * Math.PI) / 180;
+      return [{ l, path, lateral: x * Math.cos(h) - y * Math.sin(h) }];
+    });
+    if (outs.length === 0) return null;
+    const newest = Math.max(...outs.map((o) => surveyYear(o.l.id)));
+    const to = outs.filter((o) => surveyYear(o.l.id) === newest).reduce((a, b) => (side * b.lateral > side * a.lateral ? b : a));
+    const a = from.end;
+    // The lane out as one line: its link, then each link on that keeps nearest the route.
+    let out = to.path;
+    for (let last = to.l, hop = 0; hop < 4 && lengthOf(out) < BRIDGE_PROBE_M + BRIDGE_ON_M * 2; hop++) {
+      const next = this.nextOf(db, last);
+      if (next.length === 0) break;
+      last = next.reduce((p, q) => (offLine(along(JSON.parse(p.coords) as LonLat[], 25), after) <= offLine(along(JSON.parse(q.coords) as LonLat[], 25), after) ? p : q));
+      const path = JSON.parse(last.coords) as LonLat[];
+      out = out.concat(path.slice(dist(out[out.length - 1], path[0]) < TRAIL_JOIN_M ? 1 : 0));
+    }
+    // The corner as a car takes it: on straight into the junction, then round at BRIDGE_LEFT_R_M (BRIDGE_RIGHT_R_M)
+    // into the lane. The lane out taken as a straight line where the road's way out is read, the way in's ray meets it
+    // at the corner. Swept into the lane in one curve from the stop line, the left turn at 노원구민체육센터 was 55 m
+    // round, and read as straight on 60 m past the stop line (lanesAlong).
+    const turn = diff(inDeg, outDeg);
+    const oM = projectAlong(probe, out), o = along(out, oM);
+    const oDeg = bearingOf(along(out, Math.max(0, oM - 5)), along(out, oM + 5));
+    const [ox, oy] = toXY(o, a);
+    const ui = [Math.sin((inDeg * Math.PI) / 180), Math.cos((inDeg * Math.PI) / 180)];
+    const uo = [Math.sin((oDeg * Math.PI) / 180), Math.cos((oDeg * Math.PI) / 180)];
+    const cross = ui[0] * uo[1] - ui[1] * uo[0];
+    if (Math.abs(cross) < 0.3) return null;
+    // a + t·ui = o + v·uo
+    const t = (ox * uo[1] - oy * uo[0]) / cross;
+    if (t < BRIDGE_MIN_M / 2 || t > BRIDGE_MAX_M) return null;
+    const half = Math.tan((Math.abs(turn) * Math.PI) / 360);
+    const tangent = Math.min(t, (side < 0 ? BRIDGE_LEFT_R_M : BRIDGE_RIGHT_R_M) * half);
+    const radius = tangent / half;
+    const kx = M * Math.cos((a[1] * Math.PI) / 180);
+    const at2 = (m: number, u: number[], from: LonLat): LonLat => [from[0] + (u[0] * m) / kx, from[1] + (u[1] * m) / M];
+    const enter = at2(t - tangent, ui, a);
+    const corner = at2(t, ui, a);
+    // Out of the arc on the lane's line: on the lane, or short of where it starts (the junction's far edge).
+    const b = at2(tangent, uo, corner);
+    const bM = projectAlong(b, out);
+    if (bM > 0 ? offLine(b, out) > BRIDGE_OFF_M : dist(b, out[0]) > BRIDGE_SHORT_M) return null;
+    // A cubic for the arc: its handles (4/3)·tan(θ/4)·r.
+    const handle = (4 / 3) * Math.tan((Math.abs(turn) * Math.PI) / 720) * radius;
+    const c1 = at2(handle, ui, enter), c2 = at2(-handle, uo, b);
+    const curve: LonLat[] = t - tangent > 1 ? [enter] : [];
+    for (let s = 1; s < BRIDGE_STEPS; s++) {
+      const f = s / BRIDGE_STEPS, g = 1 - f;
+      curve.push([0, 1].map((n) => g * g * g * enter[n] + 3 * g * g * f * c1[n] + 3 * g * f * f * c2[n] + f * f * f * b[n]) as LonLat);
+    }
+    // On along the lane BRIDGE_ON_M, its vertices and the point that far (a lane's link can be one straight 200 m).
+    const onM = Math.min(lengthOf(out), Math.max(0, bM) + BRIDGE_ON_M);
+    const on = [b, ...out.filter((p) => { const m = projectAlong(p, out); return m > bM + 0.5 && m < onM - 0.5; }), along(out, onM)];
+    // Back up the lane in: its link, and the one before where it is the only one (the provider's line can be 12 m off
+    // 1차로 at the stop line, and nearer further back).
+    let lane = from.path;
+    if (lengthOf(lane) < BRIDGE_IN_M) {
+      const lead = this.before(db, from, from.path);
+      if (lead) lane = lead.concat(lane.slice(dist(lead[lead.length - 1], lane[0]) < TRAIL_JOIN_M ? 1 : 0));
+    }
+    const total = lengthOf(lane);
+    const back = [along(lane, Math.max(0, total - BRIDGE_IN_M)), ...lane.filter((p) => projectAlong(p, lane) > total - BRIDGE_IN_M)];
+    return [...back, ...curve, ...on];
+  }
+
+  /**
    * Where the travel-direction lanes are at each of [points] (a route's
    * vertices, each with the route's heading there): the middle of the
    * lanes running the same way within SNAP_M, as a point — null where
@@ -498,6 +632,34 @@ export class LaneIndex {
     return n;
   }
 
+  /**
+   * The stop lines along [points] where some lanes cannot go the route's way (lanesAlong), each with how far along
+   * the points it is and the lanes there that can — their links and lane numbers, as the map's neighbours line them
+   * up at the stop line (the lane card's row, readRow).
+   */
+  private wayLanes(db: Statements, points: LonLat[]): { along: number; way: Turn; paths: LonLat[][]; nos: number[] }[] {
+    const out: { along: number; way: Turn; paths: LonLat[][]; nos: number[] }[] = [];
+    for (const j of lanesAlong(this, points)) {
+      const d = 3 / M, k = d / Math.cos((j.stop[1] * Math.PI) / 180);
+      const seed = (db.near.all(j.stop[0] + k, j.stop[0] - k, j.stop[1] + d, j.stop[1] - d) as unknown as Link[])
+        .map((l) => ({ l, path: JSON.parse(l.coords) as LonLat[] })).find((x) => dist(x.path[x.path.length - 1], j.stop) < 0.5);
+      if (!seed) continue;
+      const withEnd = (id: string | null) => {
+        const l = this.byId(db, id);
+        if (!l) return null;
+        const path = JSON.parse(l.coords) as LonLat[];
+        return dist(path[path.length - 1], j.stop) < 40 ? { l, path } : null;
+      };
+      const row = [seed];
+      for (let x = withEnd(seed.l.l), guard = 0; x && guard < 12; x = withEnd(x.l.l), guard++) row.unshift(x);
+      for (let x = withEnd(seed.l.r), guard = 0; x && guard < 12; x = withEnd(x.l.r), guard++) row.push(x);
+      if (row.length !== j.lanes.length) continue;
+      const can = row.filter((_, n) => j.lanes[n].turns.includes(j.way));
+      out.push({ along: projectAlong(j.stop, points), way: j.way, paths: can.map((x) => x.path), nos: can.map((x) => x.l.lane).filter((n): n is number => n != null) });
+    }
+    return out;
+  }
+
   snap(points: LonLat[], headings: number[], biases?: number[]): (LonLat | null)[] {
     const db = this.open();
     if (!db) return points.map(() => null);
@@ -506,9 +668,13 @@ export class LaneIndex {
     const lineOf = (l: Link) => { let v = lines.get(l.rowid); if (!v) { v = JSON.parse(l.coords) as LonLat[]; lines.set(l.rowid, v); } return v; };
     const alongOf: number[] = [0];
     for (let i = 1; i < points.length; i++) alongOf.push(alongOf[i - 1] + dist(points[i - 1], points[i]));
+    // The stop lines where the lane matters, and the lanes there that go the route's way.
+    const wayLanes = biases ? this.wayLanes(db, points) : [];
+    const goingAt = (i: number) => wayLanes.find((w) => w.along - alongOf[i] >= -WAY_LANE_SLACK_M && w.along - alongOf[i] <= WAY_LANE_M) ?? null;
+    const inJunction = (i: number) => wayLanes.some((w) => w.way !== "straight" && alongOf[i] - w.along > 1 && alongOf[i] - w.along < IN_JUNCTION_M);
     return points.map((p, i) => {
       const heading = headings[i];
-      if (!Number.isFinite(heading)) return null;
+      if (!Number.isFinite(heading) || inJunction(i)) return null;
       const d = SNAP_M / M, k = d / Math.cos((p[1] * Math.PI) / 180);
       const near = db.near.all(p[0] + k, p[0] - k, p[1] + d, p[1] - d) as unknown as Link[];
       const found: Found[] = [];
@@ -534,6 +700,11 @@ export class LaneIndex {
           let j = i;
           while (j + 1 < points.length && Math.sign(biases[j + 1] ?? 0) === Math.sign(bias0) && alongOf[j + 1] - alongOf[i] <= FOLLOW_MAX_M) j++;
           ahead = Math.min(FOLLOW_MAX_M, Math.max(FOLLOW_M, alongOf[j] - alongOf[i] + FOLLOW_STEP_M));
+          // A stop line on the way to the turn where the lane matters: followed only through it. Followed on to the
+          // turn, the lanes going straight there (the only ones that may) all left the route at the turn, and the
+          // line kept to the left-turn-only lane (노원로, 2026-10-28).
+          const stop = goingAt(i);
+          if (stop) ahead = Math.min(ahead, Math.max(FOLLOW_STEP_M, stop.along - alongOf[i] + WAY_LANE_PAST_M));
         }
         const theirs = found.filter((f) => !this.leaves(db, f, points, alongOf, i, ahead, lineOf));
         if (theirs.length) route = theirs;
@@ -555,9 +726,9 @@ export class LaneIndex {
       // Left to right across the way the road runs.
       const hRad = (heading * Math.PI) / 180;
       const cosH = Math.cos(hRad), sinH = Math.sin(hRad);
-      const withSide = row.map((f) => {
+      let withSide = row.map((f) => {
         const [x, y] = toXY(f.at, p);
-        return { at: f.at, lateral: x * cosH - y * sinH };
+        return { at: f.at, lateral: x * cosH - y * sinH, no: f.link.lane, pocket: (f.link.lane ?? 0) >= POCKET_LANE };
       }).sort((a, b) => a.lateral - b.lateral);
 
       // One lane, the one that serves the way on, never between two (a 4-lane road's middle was drawn on the line
@@ -566,7 +737,18 @@ export class LaneIndex {
       // Two lanes have no middle, and left of it was 1차로: the left-turn pocket in town, the overtaking lane on a
       // motorway (지정차로: 편도 2차로 고속도로, 1차로 앞지르기), and a right turn drawn from there crossed both
       // lanes once the bias began. With no turn ahead the line keeps right: 2차로.
+      // A turn pocket opened beside 1차로 (lane no. 91 on) is the left turn's and the U-turn's, not a lane of the road
+      // through: counted in, the middle moved one over, and on 노원로 the line went 2차로, 1차로, 2차로 at each pocket
+      // and slid back over the centre line between (the pretend drive of 2026-10-28).
       const bias = biases?.[i] ?? 0;
+      if (bias > -0.34 && withSide.some((f) => !f.pocket)) withSide = withSide.filter((f) => !f.pocket);
+      const going = goingAt(i);
+      if (going) {
+        // By the lane's number where both have one: where 1차로 and 2차로 part from one point, 43 m before the stop line,
+        // the right-only 2차로 there was within WAY_LANE_OFF_M of 1차로's line too, and the line went into it (2026-10-28).
+        const can = withSide.filter((f) => (f.no != null && going.nos.length ? going.nos.includes(f.no) : going.paths.some((g) => offLine(f.at, g) <= WAY_LANE_OFF_M)));
+        if (can.length) withSide = can;
+      }
       const n = withSide.length;
       const index = bias <= -0.34 ? 0 : bias >= 0.34 ? n - 1 : n === 2 ? 1 : Math.floor((n - 1) / 2);
       return withSide[index].at;
@@ -612,7 +794,13 @@ export class LaneIndex {
     // Only as far as the route goes (its end, or the end of the points asked): past it every lane is "off".
     const routeAhead = alongOf[points.length - 1] - alongOf[i], routeBack = alongOf[i];
     for (let s = FOLLOW_STEP_M; s <= Math.min(aheadM, walked, routeAhead); s += FOLLOW_STEP_M) {
-      if (offLine(along(trail, s), route) > limit) return true;
+      const q = along(trail, s), hit = nearestOn(q, route);
+      if (!hit || hit.off > limit) return true;
+      // Turned off it while still near: a pocket's left turn whose survey stops 24 m into the junction, its U-turn
+      // coming round onto the far lanes, never 20 m off the route — the line was drawn into the pocket at each stop
+      // line on 노원로 (the pretend drive of 2026-10-28).
+      const on = along(trail, s + 5);
+      if (dist(q, on) > 1 && Math.abs(diff(hit.bearing, bearingOf(q, on))) > FOLLOW_TURN_DEG) return true;
     }
     // Back: its own link before here (where it came from, as far as the link goes).
     const back: LonLat[] = [f.at, ...line.slice(0, f.seg + 1).reverse()];

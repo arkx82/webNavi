@@ -1,6 +1,7 @@
 import type * as THREE_NS from "three";
 import type { Guide, LonLat } from "./types";
 import type { Line } from "./geo";
+import type { Maneuver } from "./maneuver";
 import { findWheels, rollWheels, type Wheels } from "./car-wheels";
 
 /**
@@ -43,12 +44,25 @@ const EASE_S = 0.1;
 const FPS = 30;
 /**
  * 그림 (still): the junction drawn once, as a picture, from this far before it and this high, looking at the road
- * this far past it — both branches in view, the route's lane blue, no car. The live view (따라가기) drew the panel
+ * this far past it — both branches in view, the route's lane blue, the way to go an arrow under the sign, no car. The live view (따라가기) drew the panel
  * thirty times a second beside the map for twenty seconds and more, and the car computer stuttered (2026-10-15).
  */
 const STILL_BACK_M = 120;
 const STILL_UP_M = 38;
 const STILL_LOOK_PAST_M = 50;
+/**
+ * The picture's arrow: in the sky under the sign, a thick arrow lying back, turned the way the guide says (as the
+ * sign's ↖ ↑ ↗); the road left to the route's own line. Laid on the road, 7 m wide from 50 m before the junction, an
+ * arrow covered the lanes it was to point between (2026-10-28). Turned by the route's shape past the junction, it
+ * pointed straight on at 하남JC's right fork, both branches bending left. Its height a share of the picture's.
+ */
+const SIGN_ARROW_TILT_DEG = 68;
+const SIGN_ARROW_H = 0.17;
+const SIGN_ARROW_GAP_PX = 3;
+const SIGN_ARROW_DEG: Partial<Record<Maneuver, number>> = {
+  "slight-left": -35, "ramp-left": -35, "slight-right": 35, "ramp-right": 35, left: -80, right: 80,
+  "sharp-left": -120, "sharp-right": 120, "loop-left": -120, "loop-right": 120, uturn: -160,
+};
 /** The picture goes once the junction is this far behind: past it, it shows a road no longer the car's. */
 const STILL_PAST_M = 15;
 
@@ -74,6 +88,10 @@ export class JunctionView {
   /** Whether the server has the model (main.ts asks once); the plain box stands in where it has not. */
   modelUrl: string | null = null;
   private loaded: Loaded | null = null;
+  /** The way the guide turns at the junction shown: the picture's arrow points it. */
+  private turn: Maneuver = "straight";
+  /** The picture's arrow (drawSignArrow), made once. */
+  private hud: { scene: THREE_NS.Scene; camera: THREE_NS.PerspectiveCamera; pivot: THREE_NS.Group; spin: THREE_NS.Group } | null = null;
   private asked = new Map<Guide, Promise<void>>();
   private closed = new WeakSet<Guide>();
   private failed = new WeakSet<Guide>();
@@ -141,8 +159,9 @@ export class JunctionView {
    * distance to the junction itself, not the car's metres along the line, which a re-drawn route line (the lanes
    * threaded after the junction was fetched) shifted, and the car stood off its place in the picture.
    */
-  frame(g: Guide | null, show: boolean, inM: () => number | null, sign: string, distText: string) {
+  frame(g: Guide | null, show: boolean, inM: () => number | null, sign: string, distText: string, turn: Maneuver = "straight") {
     this.inM = inM;
+    this.turn = turn;
     const now = inM();
     if (!g || !show || this.closed.has(g) || this.loaded?.guide !== g || (this.mode === "still" && now != null && now < -STILL_PAST_M)) { this.hide(); return; }
     this.box.querySelector(".jv-sign")!.textContent = sign;
@@ -172,7 +191,56 @@ export class JunctionView {
     this.camera.lookAt(q[0], q[1], q[2]);
     if (this.car) this.car.visible = false;
     this.renderer.render(this.world, this.camera);
+    this.drawSignArrow();
     this.drawnStill = true;
+  }
+
+  /** The picture's arrow (SIGN_ARROW_*), over what is drawn: under the sign, pointing the way on from the junction. */
+  private drawSignArrow() {
+    const T = this.three, camera = this.camera, renderer = this.renderer;
+    if (!T || !camera || !renderer) return;
+    const hud = this.hud ??= this.signArrow(T);
+    hud.spin.rotation.z = (-(SIGN_ARROW_DEG[this.turn] ?? 0) * Math.PI) / 180;
+    // Sized to its share of the picture's height, its top just under the sign.
+    hud.camera.aspect = camera.aspect;
+    hud.camera.updateProjectionMatrix();
+    hud.pivot.position.set(0, 0, 0);
+    hud.pivot.scale.setScalar(1);
+    hud.pivot.updateMatrixWorld(true);
+    const box = new T.Box3().setFromObject(hud.pivot), size = box.getSize(new T.Vector3()), mid = box.getCenter(new T.Vector3());
+    const D = 8, half = D * Math.tan((hud.camera.fov * Math.PI) / 360);
+    const k = (SIGN_ARROW_H * 2 * half) / (size.y || 1);
+    const c = this.canvas.getBoundingClientRect();
+    const sign = this.box.querySelector<HTMLElement>(".jv-sign");
+    const top = sign?.textContent ? sign.getBoundingClientRect().bottom - c.top + SIGN_ARROW_GAP_PX : SIGN_ARROW_GAP_PX * 3;
+    const y = (1 - 2 * (top / (c.height || 1) + SIGN_ARROW_H / 2)) * half;
+    hud.pivot.scale.setScalar(k);
+    hud.pivot.position.set(-mid.x * k, y - mid.y * k, -D - mid.z * k);
+    const auto = renderer.autoClear;
+    renderer.autoClear = false;
+    renderer.clearDepth();
+    renderer.render(hud.scene, hud.camera);
+    renderer.autoClear = auto;
+  }
+
+  /** The arrow's own small scene: a blue slab with darker sides on a white rim, lying back, to be turned in its plane. */
+  private signArrow(T: Three) {
+    const outline = (bodyW: number, headW: number, len: number, headL: number) => {
+      const s = new T.Shape(), b = bodyW / 2, h = headW / 2, tail = -len / 2, neck = len / 2 - headL;
+      s.moveTo(-b, tail); s.lineTo(b, tail); s.lineTo(b, neck); s.lineTo(h, neck); s.lineTo(0, len / 2); s.lineTo(-h, neck); s.lineTo(-b, neck); s.closePath();
+      return s;
+    };
+    const slab = new T.Mesh(new T.ExtrudeGeometry(outline(0.42, 1, 1.5, 0.6), { depth: 0.22, bevelEnabled: false }),
+      [new T.MeshBasicMaterial({ color: 0x2f8cff }), new T.MeshBasicMaterial({ color: 0x1846a8 })]);
+    const rim = new T.Mesh(new T.ShapeGeometry(outline(0.58, 1.24, 1.7, 0.7)), new T.MeshBasicMaterial({ color: 0xffffff, side: T.DoubleSide }));
+    rim.position.z = -0.01;
+    const spin = new T.Group(), pivot = new T.Group(), scene = new T.Scene();
+    spin.add(rim, slab);
+    pivot.add(spin);
+    // Lying back from facing the viewer: its point away into the picture, its face up towards the eye.
+    pivot.rotation.x = (-SIGN_ARROW_TILT_DEG * Math.PI) / 180;
+    scene.add(pivot);
+    return { scene, camera: new T.PerspectiveCamera(30, 16 / 9, 0.1, 100), pivot, spin };
   }
 
   get open() {

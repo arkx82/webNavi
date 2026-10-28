@@ -141,6 +141,53 @@ test("with no turn ahead the line takes a through lane: 2차로 of two, the midd
   assert.ok(twoLeft && Math.abs(xOf(twoLeft) - 1.75) < 0.05, `two, a left turn ahead → 1차로: ${twoLeft && xOf(twoLeft)}`);
 });
 
+test("a turn pocket beside 1차로 is not a lane of the road through: the middle of the three, not 1차로; a left turn ahead, the pocket", async () => {
+  // Three lanes north at x = 1.75, 5.25, 8.75 to a stop line at y = 0; a pocket (91) opened left of 1차로 from y = -60.
+  const lane = (k: number) => link({ id: `A223P00000${k}`, lane: k, a: "P0", b: `P${k}`, l: k > 1 ? `A223P00000${k - 1}` : "A223P000091", r: k < 3 ? `A223P00000${k + 1}` : null },
+    [[1.75 + 3.5 * (k - 1), -100], [1.75 + 3.5 * (k - 1), 0]]);
+  const index = await indexOf([
+    lane(1), lane(2), lane(3),
+    link({ id: "A223P000091", lane: 91, a: "Q0", b: "Q1", l: null, r: "A223P000001" }, [[-1.75, -60], [-1.75, 0]]),
+    // Through the junction: the lanes straight on; the pocket turns round onto the southbound lanes (its U-turn).
+    ...[1, 2, 3].map((k) => link({ id: `A223P00001${k}`, lane: k, a: `P${k}`, b: null, l: null, r: null }, [[1.75 + 3.5 * (k - 1), 0], [1.75 + 3.5 * (k - 1), 200]])),
+    link({ id: "A223P000092", lane: 1, a: "Q1", b: null, l: null, r: null }, [[-1.75, 0], [-3, 8], [-6, 11], [-9, 8], [-10, 0], [-10, -150]]),
+  ]);
+  const xOf = (p: LonLat) => (p[0] - O[0]) * M * Math.cos((O[1] * Math.PI) / 180);
+  // The route: north up the middle of the road, every 20 m, the provider's line on the centre line (x = 0).
+  const ys = Array.from({ length: 16 }, (_, k) => -100 + 20 * k);
+  const through = index.snap(ys.map((y) => at(0, y)), ys.map(() => 0), ys.map(() => 0));
+  for (const [k, y] of ys.entries()) {
+    const got = through[k];
+    if (y > -60 && y < -10) assert.ok(got && Math.abs(xOf(got) - 5.25) < 0.05, `through at y=${y} → 2차로, not the pocket's neighbour: ${got && xOf(got)}`);
+  }
+  const left = index.snap([at(0, -30)], [0], [-1])[0];
+  assert.ok(left && Math.abs(xOf(left) + 1.75) < 0.05, `a left turn ahead → the pocket: ${left && xOf(left)}`);
+});
+
+test("a left turn ahead, past a junction where 1차로 is left-only: up to that stop line the line is in the lane going straight there", async () => {
+  // Two lanes north at x = 1.75, 5.25 to a stop line at y = 0; 1차로 only turns left there, 2차로 goes straight on to
+  // y = 200, where the route turns left from 1차로 of the next pair.
+  const index = await indexOf([
+    link({ id: "A223W000001", lane: 1, a: "W0", b: "W1", l: null, r: "A223W000002" }, [[1.75, -150], [1.75, 0]]),
+    link({ id: "A223W000002", lane: 2, a: "W0", b: "W2", l: "A223W000001", r: null }, [[5.25, -150], [5.25, 0]]),
+    link({ id: "A223W000011", lane: 1, a: "W1", b: null, l: null, r: null }, [[1.75, 0], [-5, 12], [-30, 18], [-80, 20]]),
+    link({ id: "A223W000012", lane: 2, a: "W2", b: "W3", l: null, r: null }, [[5.25, 0], [5.25, 30]]),
+    link({ id: "A223W000021", lane: 1, a: "W3", b: "W4", l: null, r: "A223W000022" }, [[1.75, 30], [1.75, 200]]),
+    link({ id: "A223W000022", lane: 2, a: "W3", b: "W5", l: "A223W000021", r: null }, [[5.25, 30], [5.25, 200]]),
+    link({ id: "A223W000031", lane: 1, a: "W4", b: null, l: null, r: null }, [[1.75, 200], [-5, 212], [-30, 218], [-120, 220]]),
+    link({ id: "A223W000032", lane: 2, a: "W5", b: null, l: null, r: null }, [[5.25, 200], [5.25, 400]]),
+  ]);
+  const xOf = (p: LonLat) => (p[0] - O[0]) * M * Math.cos((O[1] * Math.PI) / 180);
+  // The route north on the centre line, left at y = 205; the left turn's side asked for all the way (its reach).
+  const route: LonLat[] = [...Array.from({ length: 21 }, (_, k) => at(3.5, -150 + 15 * k)), at(3.5, 160), at(3.5, 190), at(-20, 215), at(-60, 218), at(-100, 220)];
+  const headings = route.map((p, k) => { const q = route[Math.min(route.length - 1, k + 1)], o = route[Math.max(0, k - 1)]; return (Math.atan2(xOf(q) - xOf(o), (q[1] - o[1]) * M) * 180) / Math.PI; });
+  const got = index.snap(route, headings, route.map(() => -1));
+  const before = got[route.findIndex((p) => (p[1] - O[1]) * M >= -30)];
+  assert.ok(before && Math.abs(xOf(before) - 5.25) < 0.05, `30 m before the left-only stop line → 2차로: ${before && xOf(before)}`);
+  const later = got[route.findIndex((p) => (p[1] - O[1]) * M >= 150)];
+  assert.ok(later && Math.abs(xOf(later) - 1.75) < 0.05, `before the turn itself → 1차로: ${later && xOf(later)}`);
+});
+
 test("an exit ramp just parted from the motorway is its own road: the line stays on it, not taken back to the motorway's middle", async () => {
   const index = await indexOf([
     // Three motorway lanes north at x = 0, 3.5, 7; the ramp 9 m right of the outer one, neighbour to none.
@@ -240,4 +287,45 @@ test("the line keeps to lanes of the route's road: not a deceleration lane besid
   assert.equal(xOf(200), 3.5, "beside the loop ramp: the motorway's lane, though the ramp is the newer survey");
   // Near the end of the points asked every lane runs past it: still a lane, on the right.
   assert.equal(xOf(380), 7, "the loop ramp, 200 m on, runs with the route: the rightmost");
+});
+
+test("a left turn where the map has no links through the junction is bridged: from 1차로's end, straight in, round, into the leftmost lane out", async () => {
+  // Three lanes north to a stop line at y = 0, nothing on from them; the road turned into runs west from x = -20 on,
+  // its westbound lanes on its north side, 1차로 by the centre line at y = 23.25 and 2차로 at y = 26.75, the eastbound
+  // south of them; no lanes on the road east.
+  const index = await indexOf([
+    link({ id: "A223A000001", lane: 1, a: "S1", b: "E1", l: null, r: "A223A000002" }, [[-5.25, -120], [-5.25, 0]]),
+    link({ id: "A223A000002", lane: 2, a: "S2", b: "E2", l: "A223A000001", r: "A223A000003" }, [[-1.75, -120], [-1.75, 0]]),
+    link({ id: "A223A000003", lane: 3, a: "S3", b: "E3", l: "A223A000002", r: null }, [[1.75, -120], [1.75, 0]]),
+    link({ id: "A223A000011", lane: 1, a: "W1", b: "W9", l: null, r: "A223A000012" }, [[-20, 23.25], [-200, 23.25]]),
+    link({ id: "A223A000012", lane: 2, a: "W2", b: "W8", l: "A223A000011", r: null }, [[-20, 26.75], [-200, 26.75]]),
+    link({ id: "A223A000021", lane: 1, a: "V1", b: "V9", l: null, r: null }, [[-200, 19.75], [-20, 19.75]]),
+  ]);
+  const after: LonLat[] = [];
+  for (let x = 0; x >= -200; x -= 15) after.push(at(x, 25));
+  assert.equal(index.thread(at(0, 25), 0, after), null, "no links through it to thread");
+  const trail = index.bridge(at(0, 25), 0, after);
+  assert.ok(trail, "bridged");
+  const xy = trail.map((p) => [(p[0] - O[0]) * M * Math.cos((O[1] * Math.PI) / 180), (p[1] - O[1]) * M]);
+  const near = (x: number, y: number, m = 0.6) => xy.some(([a, b]) => Math.hypot(a - x, b - y) < m);
+  assert.ok(near(-5.25, 0), "from 1차로's end at the stop line");
+  assert.ok(near(-5.25, -80), "and from 80 m up 1차로 before it");
+  assert.ok(xy.every(([x, y]) => y < 0.5 || x < -5 || Math.abs(x + 5.25) < 0.5), "on straight into the junction first");
+  const onTrail = (x: number, y: number) => xy.some(([ax, ay], i) => {
+    if (i === 0) return false;
+    const [bx, by] = xy[i - 1], dx = bx - ax, dy = by - ay, t = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy || 1)));
+    return Math.hypot(ax + t * dx - x, ay + t * dy - y) < 0.6;
+  });
+  assert.ok(onTrail(-60, 23.25), "out in the westbound 1차로");
+  assert.ok(xy.every(([x, y]) => x > -25 || Math.abs(y - 23.25) < 0.5), "in it from the junction's edge on, not over in the eastbound lanes");
+  // Turning one way only: the heading only ever comes round to the left.
+  for (let i = 2; i < xy.length; i++) {
+    const h = (a: number[], b: number[]) => Math.atan2(b[0] - a[0], b[1] - a[1]);
+    const d = ((h(xy[i - 1], xy[i]) - h(xy[i - 2], xy[i - 1]) + 3 * Math.PI) % (2 * Math.PI)) - Math.PI;
+    assert.ok(d < 0.05, `bends right at ${xy[i - 1].map((v) => v.toFixed(1))}`);
+  }
+  // A right turn there finds no lanes out: none.
+  const east: LonLat[] = [];
+  for (let x = 0; x <= 200; x += 15) east.push(at(x, 25));
+  assert.equal(index.bridge(at(0, 25), 0, east), null);
 });

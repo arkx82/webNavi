@@ -849,12 +849,9 @@ function showJunction3d(shown: Shown) {
   const toward = g ? (g.text.match(/'([^']+)'\s*방면/)?.[1] ?? junctionOf(g)?.toward ?? g.text.match(/([^\s,]+(?:,\s*[^\s,]+)*)\s*방면/)?.[1] ?? "") : "";
   const sign = toward ? `${side === "right" ? "↗" : side === "left" ? "↖" : "↑"} ${toward.replace(/,\s*/g, " · ")}` : "";
   junctionView.mode = guide.junction3dMode;
-  junctionView.frame(g, !!c, () => (closeup && closeup.guide === g ? closeup.inM : null), sign, c ? km(Math.max(0, Math.round(c.inM / 10) * 10)) : "");
-  // The lane card goes into the 3D picture while it shows — the turn's arrow, the distance and the lanes over its sky,
-  // the junction under them left clear — and back to the top of the map after.
-  const lanes = el("lanes"), jv = el("jv"), view = jv.querySelector<HTMLElement>(".jv-view")!;
-  if (junctionView.open && lanes.parentElement !== view) { lanes.style.top = ""; lanes.style.left = ""; view.prepend(lanes); measure(); }
-  else if (!junctionView.open && jv.contains(lanes)) { jv.after(lanes); measure(); }
+  junctionView.frame(g, !!c, () => (closeup && closeup.guide === g ? closeup.inM : null), sign, c ? km(Math.max(0, Math.round(c.inM / 10) * 10)) : "", m ?? "straight");
+  // The lane card stays where 차로 안내 위치 puts it, the panel or not (at the top, the stack puts it under the
+  // panel): moved into the picture it covered the arrow, and the place chosen for it was not kept (2026-10-28).
 }
 
 /** The junction shown close up now, or null: closeup.ts holds it a little past the junction, and a new route resets it (prepareHighway). */
@@ -895,14 +892,13 @@ function measure() {
   // before it that shows, by its real height (a lane card with a fork and a note runs to twice a plain one's, and a
   // fixed offset left the 구간단속 box on top of it). The car is kept clear of the lot.
   let top = TOP_STACK_PX, bottom = 0;
-  // The lane card under the car (차로 안내 위치): out of the stack; its size kept for placeLanesUnderCar. In the 3D
-  // panel it is the panel's, as before.
+  // The lane card under the car (차로 안내 위치): out of the stack; its size kept for placeLanesUnderCar.
   const lanes = el("lanes");
   // measure() runs once before the settings are read (the first frame needs the canvas's size): the default till then.
   let at: GuideSettings["lanesAt"] = "car";
   try { at = guide.lanesAt; } catch { /* not yet */ }
   // 내 차 위 is the same small card, over the car's nose instead.
-  const under = (at === "car" || at === "above") && !el("jv").contains(lanes);
+  const under = at === "car" || at === "above";
   if (layout.lanesAbove !== (at === "above")) lanesPlaced = "";
   layout.lanesAbove = at === "above";
   if (lanes.classList.contains("under") !== under) {
@@ -919,8 +915,8 @@ function measure() {
   layout.dock = dock.hidden ? null : dock.getBoundingClientRect();
   for (const id of TOP_STACK) {
     const box = el(id);
-    // The lane card inside the 3D 분기점 panel is part of it; under the car it is not up here.
-    if (box.hidden || (id === "lanes" && (under || el("jv").contains(box)))) continue;
+    // Under the car the lane card is not up here.
+    if (box.hidden || (id === "lanes" && under)) continue;
     box.style.top = `${top}px`;
     top += box.offsetHeight + TOP_STACK_GAP_PX;
     bottom = box.getBoundingClientRect().bottom - canvas.top;
@@ -2310,6 +2306,12 @@ let laneStops: LaneStop[] = [];
 let laneStopsAt: number | null = null;
 const LANE_STOPS_AHEAD_M = 1500;
 const LANE_STOP_SHOWN_M = 300;
+/**
+ * A stop line this little before a turn of the route's own is that turn's: its card is the turn's, whatever the
+ * server read of the line's way there. A left turn of 73° drawn round a wide junction (lanes.ts bridge) has turned
+ * only 22° 60 m past the stop line, and was read as straight on (노원구민체육센터, 2026-10-28).
+ */
+const LANE_STOP_OWN_TURN_M = 60;
 /** Asked again each 800 m: the next kilometre and a half of the route, a point every 15 m. */
 function askLaneStops(along: number) {
   if (!routeLine || !guide.laneGuide || health?.hdmap === false) return;
@@ -2323,7 +2325,9 @@ function askLaneStops(along: number) {
   void fetch(`/api/hdmap/lanes-along?path=${path}`).then((a) => (a.ok ? a.json() : null)).then((j: { junctions?: (Lanes & { stop: LonLat; way: LaneTurn })[] } | null) => {
     if (line !== routeLine || !j?.junctions) return;
     // The server's word for the route's way at each stop line (from the route's shape past it).
-    const found = j.junctions.map((x) => ({ alongM: line.project(x.stop, 0, line.path.length).alongM, lanes: x.lanes, way: x.way }));
+    const turns = (route?.guides ?? []).filter((g) => hasTurnCard(maneuverFor(g))).map((g) => line.project(g.at, 0, line.path.length).alongM);
+    const found = j.junctions.map((x) => ({ alongM: line.project(x.stop, 0, line.path.length).alongM, lanes: x.lanes, way: x.way }))
+      .filter((f) => !turns.some((t) => t - f.alongM >= -10 && t - f.alongM <= LANE_STOP_OWN_TURN_M));
     // Keep what is still ahead from the last answer, and take the new.
     laneStops = [...laneStops.filter((s) => s.alongM >= along - 20 && !found.some((f) => Math.abs(f.alongM - s.alongM) < 25)), ...found].sort((a, b) => a.alongM - b.alongM);
     if (found.length) log(`전용 차로 ${found.map((f) => `${Math.round(f.alongM - along)}m ${onlyWords(f.lanes, f.way)}`).join(", ")}`);

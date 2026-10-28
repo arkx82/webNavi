@@ -138,7 +138,8 @@ export function registerHdmap(app: FastifyInstance, workDir: string) {
       const stop = lanes.thread(t.at, t.in, after), slip = before ? lanes.threadAlong(before, after) : null;
       // Turning right, the slip lane first where there is one: the stop line's way through the junction is not the car's.
       if (stop && slip && turnsRight(t.in, t.at, after) && cornerGap(slip, t.at) >= cornerGap(stop, t.at) + SLIP_EXTRA_M) return { first: slip, then: stop };
-      return { first: stop ?? slip, then: stop ? slip : null };
+      // Neither: the junction has no links through it — bridged from the lanes either side.
+      return { first: stop ?? slip ?? lanes.bridge(t.at, t.in, after), then: stop ? slip : null };
     });
     const trails = answers.map((a) => a?.first ?? null);
     const alts = answers.map((a) => a?.then ?? null);
