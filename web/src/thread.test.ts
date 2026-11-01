@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { applySnap, densify, easeSteps, headingsOf, roundCorners, snapRouteWith, splice, turnsOf, unloop } from "./thread.js";
+import { applySnap, densify, easeSteps, headingsOf, roundCorners, snapRouteWith, splice, turnsOf, unloop, unspike } from "./thread.js";
 import type { LonLat, Route } from "./types.js";
 
 /** Metres east/north of 강남역 as lon/lat. */
@@ -355,4 +355,27 @@ test("a short loop where the line runs past a corner and comes back over its own
   const n = ramp.path.length;
   unloop(ramp);
   assert.equal(ramp.path.length, n);
+});
+
+test("a spike at a corner (out past it and back) is laid straight; a U-turn, a hairpin and a lane change's S are left", () => {
+  const k = 111_320, kx = k * Math.cos((37.6478 * Math.PI) / 180);
+  const at = (x: number, y: number): LonLat => [127.07005 + x / kx, 37.6478 + y / k];
+  const mk = (pts: [number, number][]) => ({ provider: "kakao", distanceM: 0, durationS: 0, guides: [], path: pts.map(([x, y]) => at(x, y)), segments: [{ from: 0, to: pts.length - 1, congestion: 1 as const }] }) as Route;
+  // 노원 home's right turn after its loop was cut: west, out 4 m to the south-west, back up north (2026-11-01).
+  const home = mk([[23.9, -1.2], [10.7, 0.4], [9.3, 1.3], [8.0, 2.4], [7.8, 3.2], [7.5, 3.8], [6.1, 5.2], [5.8, 6.2], [3.9, 2.7], [3.1, 1.9], [3.8, 5.1], [5.2, 10.7], [6.5, 16.8], [7.2, 29.3]]);
+  unspike(home);
+  const kept = home.path.map((p) => [Math.round((p[0] - 127.07005) * kx * 10) / 10, Math.round((p[1] - 37.6478) * k * 10) / 10]);
+  assert.ok(!kept.some(([, y]) => y < 2.5 && y > 1.5), `the spike's tip gone: ${JSON.stringify(kept)}`);
+  assert.equal(home.segments[0].to, home.path.length - 1);
+  // A lane change's S: kept.
+  const s = mk([[0, 0], [0, 20], [1, 25], [2.5, 30], [3.5, 35], [3.5, 55]]);
+  unspike(s);
+  assert.equal(s.path.length, 6);
+  // A U-turn 12 m across, and a 150° hairpin: kept.
+  const u = mk([[0, 0], [0, 30], [2, 36], [6, 38], [10, 36], [12, 30], [12, 0]]);
+  unspike(u);
+  assert.equal(u.path.length, 7);
+  const hairpin = mk([[0, 0], [0, 30], [3, 34], [7, 33], [17, 13]]);
+  unspike(hairpin);
+  assert.equal(hairpin.path.length, 5);
 });

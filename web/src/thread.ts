@@ -778,6 +778,7 @@ export async function snapRouteWith(route: Route, snap: Snapper): Promise<Route>
     if (route.threaded) route.threaded = threaded.map(([a, b]) => [ease(a), ease(b)] as [number, number]);
     route.path = eased.path;
     unloop(route);
+    unspike(route);
   } catch { /* the line as the provider drew it */ }
   return route;
 }
@@ -845,6 +846,51 @@ export function unloop(route: Route) {
   }
 }
 
+/**
+ * A spike of the line no longer than SPIKE_M: a few vertices that go out and come back — the line turns through
+ * SPIKE_WASTE_DEG more, all told, than the way it goes on differs from the way it came — laid straight from where it
+ * goes out to where it is back. The corner at 노원 home kept one after its loop was cut (4 m out to the south-west
+ * and back up north). A U-turn or a hairpin turns as much as the way changes and is left; so is a lane change's S.
+ */
+const SPIKE_M = 25;
+const SPIKE_WASTE_DEG = 120;
+const SPIKE_RATIO = 0.75;
+export function unspike(route: Route) {
+  const kx = 111_320 * Math.cos(((route.path[0]?.[1] ?? 37) * Math.PI) / 180), ky = 111_320;
+  for (let guard = 0; guard < 200; guard++) {
+    const p = route.path, n = p.length;
+    if (n < 5) return;
+    const xy = p.map((q) => [q[0] * kx, q[1] * ky]);
+    const head = (a: number, b: number) => (Math.atan2(xy[b][0] - xy[a][0], xy[b][1] - xy[a][1]) * 180) / Math.PI;
+    const turn = (a: number, b: number) => Math.abs(((b - a + 540) % 360) - 180);
+    const len = (a: number, b: number) => Math.hypot(xy[b][0] - xy[a][0], xy[b][1] - xy[a][1]);
+    let cut: { i: number; j: number } | null = null;
+    for (let i = 1; i + 2 < n && !cut; i++) {
+      let pathM = 0;
+      for (let j = i + 1; j + 1 < n; j++) {
+        pathM += len(j - 1, j);
+        if (pathM > SPIKE_M) break;
+        if (j < i + 2 || pathM < 2) continue;
+        // Back near where it went out, the line between much longer than the way across.
+        if (len(i, j) > SPIKE_RATIO * pathM) continue;
+        // The way it comes in and goes on, and all the turning between.
+        let total = 0;
+        for (let k = i; k <= j; k++) if (len(k - 1, k) > 0.05 && len(k, k + 1) > 0.05) total += turn(head(k - 1, k), head(k, k + 1));
+        const net = turn(head(i - 1, i), head(j, j + 1));
+        if (total - net >= SPIKE_WASTE_DEG) cut = { i, j };
+      }
+    }
+    if (!cut) return;
+    const { i, j } = cut;
+    route.path = [...p.slice(0, i + 1), ...p.slice(j)];
+    const move = (k: number) => (k <= i ? k : k < j ? i + 1 : k - (j - i) + 1);
+    for (const seg of route.segments) { seg.from = move(seg.from); seg.to = move(seg.to); }
+    route.segments = route.segments.filter((seg) => seg.to > seg.from);
+    if (route.motorways) route.motorways = route.motorways.map(([a, b]) => [move(a), move(b)] as [number, number]).filter(([a, b]) => b > a);
+    if (route.threaded) route.threaded = route.threaded.map(([a, b]) => [move(a), move(b)] as [number, number]).filter(([a, b]) => b > a);
+  }
+}
+
 /** Where segment a–b crosses segment c–d, strictly inside both; null where they do not. */
 function crossing(a: LonLat, b: LonLat, c: LonLat, d: LonLat, kx: number, ky: number): LonLat | null {
   const ax = a[0] * kx, ay = a[1] * ky, bx = b[0] * kx, by = b[1] * ky, cx = c[0] * kx, cy = c[1] * ky, dx = d[0] * kx, dy = d[1] * ky;
@@ -875,6 +921,6 @@ export async function threadRoute(route: Route): Promise<Route> {
   } catch { /* the corners as the provider drew them */ }
   // What the lanes did not thread, rounded.
   try { roundCorners(route); } catch { /* left as drawn */ }
-  try { unloop(route); } catch { /* left as drawn */ }
+  try { unloop(route); unspike(route); } catch { /* left as drawn */ }
   return route;
 }
