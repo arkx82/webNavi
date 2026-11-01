@@ -777,6 +777,7 @@ export async function snapRouteWith(route: Route, snap: Snapper): Promise<Route>
     if (route.motorways) route.motorways = route.motorways.map(([a, b]) => [ease(a), ease(b)] as [number, number]);
     if (route.threaded) route.threaded = threaded.map(([a, b]) => [ease(a), ease(b)] as [number, number]);
     route.path = eased.path;
+    unloop(route);
   } catch { /* the line as the provider drew it */ }
   return route;
 }
@@ -813,6 +814,48 @@ export function unjog(route: Route) {
   for (const [k, at] of moves) p[k] = at;
 }
 
+/**
+ * A loop of the line no longer than LOOP_M that crosses itself, cut at the crossing: a provider's vertex left past a
+ * corner the lanes threaded (the line ran 8 m on past the right turn out of 노원 home, came back and went north over
+ * its own way — a small triangle drawn at the corner, read as going round it, 2026-11-01). A loop ramp is hundreds of
+ * metres round and is left as it is. The indices into the path (congestion, motorways, threaded) move with it.
+ */
+const LOOP_M = 60;
+export function unloop(route: Route) {
+  const kx = 111_320 * Math.cos(((route.path[0]?.[1] ?? 37) * Math.PI) / 180), ky = 111_320;
+  for (let guard = 0; guard < 50; guard++) {
+    const p = route.path, n = p.length;
+    if (n < 4) return;
+    const line = new Line(p);
+    let cut: { i: number; j: number; x: LonLat } | null = null;
+    for (let i = 0; i + 3 < n && !cut; i++) {
+      for (let j = i + 2; j + 1 < n && line.along[j] - line.along[i + 1] <= LOOP_M; j++) {
+        const x = crossing(p[i], p[i + 1], p[j], p[j + 1], kx, ky);
+        if (x) { cut = { i, j, x }; break; }
+      }
+    }
+    if (!cut) return;
+    const { i, j, x } = cut;
+    route.path = [...p.slice(0, i + 1), x, ...p.slice(j + 1)];
+    const move = (k: number) => (k <= i ? k : k <= j ? i + 1 : k - (j - i) + 1);
+    for (const seg of route.segments) { seg.from = move(seg.from); seg.to = move(seg.to); }
+    route.segments = route.segments.filter((seg) => seg.to > seg.from);
+    if (route.motorways) route.motorways = route.motorways.map(([a, b]) => [move(a), move(b)] as [number, number]).filter(([a, b]) => b > a);
+    if (route.threaded) route.threaded = route.threaded.map(([a, b]) => [move(a), move(b)] as [number, number]).filter(([a, b]) => b > a);
+  }
+}
+
+/** Where segment a–b crosses segment c–d, strictly inside both; null where they do not. */
+function crossing(a: LonLat, b: LonLat, c: LonLat, d: LonLat, kx: number, ky: number): LonLat | null {
+  const ax = a[0] * kx, ay = a[1] * ky, bx = b[0] * kx, by = b[1] * ky, cx = c[0] * kx, cy = c[1] * ky, dx = d[0] * kx, dy = d[1] * ky;
+  const den = (bx - ax) * (dy - cy) - (by - ay) * (dx - cx);
+  if (Math.abs(den) < 1e-9) return null;
+  const t = ((cx - ax) * (dy - cy) - (cy - ay) * (dx - cx)) / den;
+  const u = ((cx - ax) * (by - ay) - (cy - ay) * (bx - ax)) / den;
+  if (t <= 1e-6 || t >= 1 - 1e-6 || u <= 1e-6 || u >= 1 - 1e-6) return null;
+  return [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])];
+}
+
 /** [route] with every corner the server can thread taken from the painted lanes; the route as it came where it cannot. */
 export async function threadRoute(route: Route): Promise<Route> {
   try { unjog(route); } catch { /* the line as it came */ }
@@ -832,5 +875,6 @@ export async function threadRoute(route: Route): Promise<Route> {
   } catch { /* the corners as the provider drew them */ }
   // What the lanes did not thread, rounded.
   try { roundCorners(route); } catch { /* left as drawn */ }
+  try { unloop(route); } catch { /* left as drawn */ }
   return route;
 }

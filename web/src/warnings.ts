@@ -473,12 +473,11 @@ export class RouteWatch {
         }
         sections.push({ feature: f.feature, alongM: f.alongM, endM });
       } else {
-        // An end with no start before it: the other way's — its start ahead, or beside a start of another direction —
-        // or this one's, the car having joined the stretch partway (then it is said).
-        const toward = pair ? heading(f.alongM, pair) === 1 : false;
-        const twin = cams.some((s) => s.feature.kind === "section-start" && directionOf(s.feature) !== dir && Math.abs(s.alongM - f.alongM) <= SECTION_TWIN_M);
-        const reversed = dir !== "" && cams.some((s) => s.feature.kind === "section-start" && !used.has(s) && directionOf(s.feature) === dir && s.alongM > f.alongM + SECTION_TWIN_M && s.alongM - f.alongM <= SECTION_MAX_M);
-        if (toward || twin || reversed) silent.add(f.feature.id);
+        // An end with no start before it on the route: the other way's (its start ahead, or beside a start of another
+        // direction), or this one's with the car joined partway — not timed from a start it did not pass. Unsaid either
+        // way: "삼백미터 앞에서 구간 단속이 끝납니다" came out of nowhere on 동부간선 southbound, joined from 노원
+        // below the stretch's start at 수락 (2026-11-01).
+        silent.add(f.feature.id);
       }
     }
     sections.sort((a, b) => a.alongM - b.alongM);

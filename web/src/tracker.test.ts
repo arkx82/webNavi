@@ -606,3 +606,14 @@ test("a route that begins on a road 40 m from the parked car is not left on the 
   for (let m = START_LEAVE_M + 5; m <= START_LEAVE_M + 30; m += 5, t += 1000) tracker.feed(fix(offset(parked, 90, m), t, { speed: 5, course: 90 }), t);
   assert.equal(calls.length, 1, "once out of it");
 });
+
+test("out of a reckoning that ran ahead, the car slows to a stand at most, never back (39 m at 26 km/h, 2026-11-01)", async () => {
+  const { slideSeconds, SNAP_AHEAD_MAX_S, SNAP_S } = await import("./tracker");
+  const s = slideSeconds(39, 7.2);
+  assert.ok(s > 4 && s <= SNAP_AHEAD_MAX_S, `${s}`);
+  // The curve's steepest backward rate 1.5 × miss / s: no faster than the car goes forward.
+  assert.ok((1.5 * 39) / s <= 7.2 + 1e-9);
+  // Behind the fixes (to catch up, faster forward) or too far ahead to slide: as before.
+  assert.equal(slideSeconds(-39, 7.2), SNAP_S);
+  assert.equal(slideSeconds(271, 20), SNAP_S);
+});

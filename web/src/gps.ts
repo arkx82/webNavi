@@ -5,7 +5,7 @@ import { Kalman } from "./kalman";
  * hands over — speed and heading are optional in the spec and null on many
  * browsers — so every sample is kept and can be saved for the record.
  */
-import { bearing, lerpAngle, metres } from "./geo";
+import { angleBetween, bearing, lerpAngle, metres } from "./geo";
 
 export interface Fix {
   t: number;
@@ -28,6 +28,11 @@ export interface Fix {
 
 const MIN_MOVE_M = 3;
 const MIN_SPEED_MPS = 1.4;
+/** The way the fixes went: over this many seconds, at least this far, from fixes this good; a heading this far off it is not taken. */
+const MOTION_S = 1.5;
+const MOTION_M = 8;
+const MOTION_ACC_M = 25;
+const MOTION_DEG = 60;
 
 export type FixListener = (fix: Fix, samples: Fix[]) => void;
 
@@ -86,6 +91,11 @@ export class Gps {
     const last = this.samples[this.samples.length - 1];
     const lastCourse = last?.course ?? null;
     if (fix.heading != null && !Number.isNaN(fix.heading) && (fix.speed ?? 0) > MIN_SPEED_MPS) {
+      // The browser's heading against the way the fixes went over the last seconds: the car's browser said 0° (north)
+      // for four seconds at 60 km/h going south-west, the car was drawn turned round off the route, and the route was
+      // asked again (2026-11-01, seven times on one drive). Where they part by more than MOTION_DEG, the fixes' way.
+      const moved = this.motionBearing(fix);
+      if (moved != null && angleBetween(fix.heading, moved) > MOTION_DEG) return moved;
       return fix.heading;
     }
     if (!last) return null;
@@ -94,6 +104,23 @@ export class Gps {
     if (moved < MIN_MOVE_M || dt <= 0 || dt > 30) return lastCourse;
     const raw = bearing(last.lon, last.lat, fix.lon, fix.lat);
     return lastCourse == null ? raw : lerpAngle(lastCourse, raw, 0.3);
+  }
+
+  /**
+   * The way the fixes went over the last MOTION_S: from the fix that long ago to [fix], where both are good and the car
+   * went at least MOTION_M between; null where that cannot be told.
+   */
+  private motionBearing(fix: Fix): number | null {
+    if (fix.accM > MOTION_ACC_M) return null;
+    for (let i = this.samples.length - 1; i >= 0; i--) {
+      const s = this.samples[i];
+      const dt = fix.t - s.t;
+      if (dt > MOTION_S * 1000 * 2) return null;
+      if (dt < MOTION_S * 1000) continue;
+      if (s.accM > MOTION_ACC_M) return null;
+      return metres(s.lon, s.lat, fix.lon, fix.lat) >= MOTION_M ? bearing(s.lon, s.lat, fix.lon, fix.lat) : null;
+    }
+    return null;
   }
 
   stop() {

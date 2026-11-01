@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { applySnap, densify, easeSteps, headingsOf, roundCorners, snapRouteWith, splice, turnsOf } from "./thread.js";
+import { applySnap, densify, easeSteps, headingsOf, roundCorners, snapRouteWith, splice, turnsOf, unloop } from "./thread.js";
 import type { LonLat, Route } from "./types.js";
 
 /** Metres east/north of 강남역 as lon/lat. */
@@ -336,4 +336,23 @@ test("a turn's trail is followed on no nearer the next turn than 200 m: the line
   const [a, b] = near.threaded![0];
   const xs = near.path.slice(a, b).map((p) => (p[0] - at(0, 0)[0]) * 111_320 * Math.cos((37.4979 * Math.PI) / 180));
   assert.ok(Math.max(...xs) <= 200.5, `the trail let go by x = 200, not ${Math.max(...xs).toFixed(0)}`);
+});
+
+test("a short loop where the line runs past a corner and comes back over its own way is cut at the crossing; a long one is left", () => {
+  // West along y = 7 m, on 8 m past the corner and back, then north over its own way (노원 home, 2026-11-01).
+  const k = 111_320, kx = k * Math.cos((37.6478 * Math.PI) / 180);
+  const at = (x: number, y: number): LonLat => [127.06995 + x / kx, 37.64775 + y / k];
+  const route = {
+    provider: "kakao", distanceM: 0, durationS: 0, guides: [],
+    path: [at(32.7, 4.5), at(16.7, 7.0), at(14.7, 7.5), at(11.1, 8.2), at(8.1, 1.0), at(16.3, 2.7), at(15.9, 4.2), at(15.7, 6.1), at(15.9, 8.3), at(15.5, 27.3)],
+    segments: [{ from: 0, to: 9, congestion: 1 as const }],
+  } as Route;
+  unloop(route);
+  assert.equal(route.path.length, 5, "the loop's six points as the one crossing");
+  assert.deepEqual(route.segments, [{ from: 0, to: 4, congestion: 1 }], "the traffic's indices moved with it");
+  // A loop ramp, 200 m round, crossing its own way on the bridge: left.
+  const ramp = { ...route, path: Array.from({ length: 40 }, (_, i) => { const a = (i / 39) * 1.6 * Math.PI; return at(30 * Math.sin(a) + i, -30 * Math.cos(a)); }), segments: [] } as Route;
+  const n = ramp.path.length;
+  unloop(ramp);
+  assert.equal(ramp.path.length, n);
 });

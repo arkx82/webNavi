@@ -44,6 +44,23 @@ export class TrafficBar {
   private route: Route | null = null;
   private key = "";
   private shownPct = -1;
+  /**
+   * The metres driven on this trip before the route now (re-routes, a quicker way to the same place): the bar is the
+   * whole trip, the part before the route grey. Begun anew on each re-route, the bar went back to its foot every time
+   * and was read as the route drawn over and over (2026-11-01, seven re-routes on one drive).
+   */
+  private before = 0;
+  private carried = 0;
+
+  /** A new trip: nothing driven before the route. */
+  newTrip() {
+    this.before = 0;
+  }
+
+  /** The route is replaced on the same trip, the car [alongM] along the old one: that is carried into the trip. */
+  carry(alongM: number | null) {
+    this.before += Math.max(0, alongM ?? 0);
+  }
 
   constructor(private el: HTMLElement) {
     el.innerHTML = `<div class="tb-done"></div><div class="tb-car"></div>`;
@@ -60,12 +77,17 @@ export class TrafficBar {
     // The buttons and the music player at the right edge step in for it (style.css body.traffic-bar).
     if (this.el.hidden) { this.el.hidden = false; document.body.classList.add("traffic-bar"); }
     const key = trafficKey(route!);
-    if (route !== this.route || key !== this.key) {
+    const total = this.before + Math.max(1, line!.lengthM);
+    if (route !== this.route || key !== this.key || this.carried !== this.before) {
       this.route = route;
       this.key = key;
-      this.el.style.background = `linear-gradient(to top, ${trafficStops(route!, line!.along)})`;
+      this.carried = this.before;
+      // The route's colours above the trip's driven part (under the grey of the part done anyway).
+      const lift = (100 * this.before) / total, scale = 1 - lift / 100;
+      const stops = trafficStops(route!, line!.along).replace(/(-?\d+(?:\.\d+)?)%/g, (_, v: string) => `${(lift + Number(v) * scale).toFixed(2)}%`);
+      this.el.style.background = `linear-gradient(to top, ${stops})`;
     }
-    const pct = Math.round((1000 * Math.max(0, Math.min(1, (alongM ?? 0) / Math.max(1, line!.lengthM))))) / 10;
+    const pct = Math.round((1000 * Math.max(0, Math.min(1, (this.before + (alongM ?? 0)) / total)))) / 10;
     if (pct !== this.shownPct) {
       this.shownPct = pct;
       this.el.style.setProperty("--tb-at", `${pct}%`);

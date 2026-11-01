@@ -503,7 +503,8 @@ function drawRows(box: HTMLElement, rows: Row[], s: GuideSettings, set: (patch: 
     } else {
       const input = document.createElement("input");
       input.type = "range";
-      input.min = "0.2";
+      // Down to nothing: at the least of 20 % the voice was still heard (2026-11-01).
+      input.min = "0";
       input.max = String(MAX_VOLUME);
       input.step = "0.1";
       const key = row.key;

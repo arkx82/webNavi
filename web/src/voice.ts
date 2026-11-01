@@ -58,8 +58,20 @@ export class Voice {
   onLate: (text: string, waitedS: number) => void = () => {};
   /** When each sentence was last said, by its key: the same one again this soon is dropped. */
   private lastSaid = new Map<string, number>();
-  /** Off, the voice says nothing (the chime too). */
-  enabled = true;
+  /**
+   * Off, the voice says nothing (the chime too) — what was waiting is dropped and what is being said stops: turned off
+   * mid-drive, the sentences already queued (two waiting for their sound) came out after it (2026-11-01).
+   */
+  get enabled() {
+    return this.on;
+  }
+  set enabled(on: boolean) {
+    this.on = on;
+    if (on) return;
+    this.queue.length = 0;
+    try { this.playing?.stop(); } catch { /* not started, or over */ }
+  }
+  private on = true;
   /** The voice asked of the server (안내 설정 → 목소리); null is the server's own. */
   voiceName: string | null = null;
   /** How far the music drops while the voice speaks. */
@@ -275,6 +287,11 @@ export class Voice {
       // meanwhile stays unsaid rather than coming out at the wrong place.
       if (Date.now() > item.until) {
         this.onLate(text, (Date.now() - item.at) / 1000);
+        void this.next();
+        return;
+      }
+      // Turned off while it was fetched or waited for.
+      if (!this.enabled) {
         void this.next();
         return;
       }

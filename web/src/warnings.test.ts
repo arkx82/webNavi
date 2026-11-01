@@ -568,3 +568,11 @@ test("the sign: the road's limit along the route, a speed camera's own over it r
   // Past the line's end: nothing.
   assert.equal(watch.signLimitAt(5000), null);
 });
+
+test("an end camera of our way with no start on the route (the stretch joined partway, 동부간선 from 노원, 2026-11-01) is unsaid", () => {
+  const watch = new RouteWatch(route);
+  // Its start 2 km behind the route's start, the same way: the car comes onto the stretch partway.
+  watch.add([{ id: "end", kind: "section-end", ...lonLat(offset(start, 0, 500)), direction: "2", pair: offset(start, 180, 1500) }]);
+  assert.deepEqual(watch.ahead(0, 2100).map((a) => a.feature.id), []);
+  assert.deepEqual(watch.sections(), []);
+});

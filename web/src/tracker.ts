@@ -46,6 +46,26 @@ export const SNAP_S = 1.5;
 export const SNAP_MAX_S = 4;
 /** In the slide the miss is taken out at no more than this share of the car's speed (where SNAP_MAX_S allows). */
 const SNAP_SPEED_SHARE = 0.5;
+/**
+ * A reckoning that ran ahead of the fixes is taken out by slowing the car, down to a standstill at most, over as long
+ * as this: in SNAP_S the drawn car went 39 m backward out of a 30 s reckoning at 26 km/h and was seen to turn round and
+ * come on again (2026-11-01). Further ahead than that slide can take, it leaps (a long tunnel's 271 m).
+ */
+export const SNAP_AHEAD_MAX_S = 12;
+
+/**
+ * How long the slide out of a reckoning [miss] metres ahead (+) or behind (−) of the fixes takes at [speedMps];
+ * [beyond] where no slide fits.
+ */
+export function slideSeconds(miss: number, speedMps: number, beyond = SNAP_S): number {
+  const v = Math.max(speedMps, 3);
+  const smooth = (1.5 * Math.abs(miss)) / (SNAP_SPEED_SHARE * v);
+  if (smooth <= SNAP_MAX_S) return Math.max(SNAP_S, smooth);
+  // Ahead: slowed to a standstill at most (the curve's steepest is 1.5 times its mean), never turned round.
+  const standstill = (1.5 * miss) / v;
+  if (miss > 0 && standstill <= SNAP_AHEAD_MAX_S) return Math.max(SNAP_MAX_S, standstill);
+  return beyond;
+}
 /** How far ahead of its last fix the car is carried by its speed before it waits for the next. */
 const PREDICT_S = 2.5;
 /** How quickly the drawn car closes on where the fixes say it is: most of the way in a couple of seconds. */
@@ -368,10 +388,9 @@ export class Tracker {
       this.snapBase = this.glideToAlong;
       this.snapMiss = this.shownAlong != null && this.glideToAlong != null ? this.shownAlong - this.glideToAlong : 0;
       // Long enough that the miss comes out at no more than half the speed, so the car never stands or turns round for a
-      // few metres. A miss too big for that within SNAP_MAX_S (a long tunnel's: 271 m on 2026-10-09) cannot be put right
-      // without a turn back whatever the length: it is over in SNAP_S, not drawn out.
-      const smoothS = (1.5 * Math.abs(this.snapMiss)) / (SNAP_SPEED_SHARE * Math.max(this.speedMps, 3));
-      this.snapS = smoothS <= SNAP_MAX_S ? Math.max(SNAP_S, smoothS) : SNAP_S;
+      // few metres; one too far ahead for that, by slowing to a stand at most (slideSeconds). A miss too big even for
+      // that (a long tunnel's: 271 m on 2026-10-09) is over in SNAP_S, not drawn out.
+      this.snapS = slideSeconds(this.snapMiss, this.speedMps);
       this.snapUntil = now + this.snapS * 1000;
       this.startGlide(target, now, this.snapS);
     } else if (now < this.snapUntil) {
@@ -490,8 +509,7 @@ export class Tracker {
       if (entering && this.shownAlong != null && Math.abs(this.shownAlong - ahead) > 0.3 && Math.abs(this.shownAlong - ahead) <= LEAP_M) {
         this.snapStart = now;
         this.snapMiss = this.shownAlong - ahead;
-        const smoothS = (1.5 * Math.abs(this.snapMiss)) / (SNAP_SPEED_SHARE * Math.max(this.speedMps, 3));
-        this.snapS = smoothS <= SNAP_MAX_S ? Math.max(SNAP_S, smoothS) : SNAP_MAX_S;
+        this.snapS = slideSeconds(this.snapMiss, this.speedMps, SNAP_MAX_S);
         this.snapUntil = now + this.snapS * 1000;
         this.snapBase = null;
       }

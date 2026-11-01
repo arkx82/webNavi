@@ -1800,6 +1800,9 @@ function startDrive(r: Route) {
   // A new route or a new place: the offer, and the way declined, are of the old one.
   clearFaster();
   if (fresh || elsewhere || r !== faster?.best) declinedS = null;
+  // 경로 막힘 막대: the trip goes on over a re-route; a new place starts it again.
+  if (fresh || elsewhere) routeBar.newTrip();
+  else routeBar.carry(tracker.frame()?.alongM ?? null);
   route = r;
   // The line onto the travel-direction lanes where 정밀도로지도 has them (laneLine, often done while the cards were open).
   laneLine(r);
@@ -3135,6 +3138,8 @@ function kakaoSay(e: KakaoSafety, speedMps: number | null) {
   }
   if (KAKAO_CAMERAS.has(e.kind) && e.limit && (!kakaoCard || kakaoCard.s.id !== e.id)) kakaoCard = { s: e, since: Date.now(), nearest: Infinity };
   if (!wants(guide, e.kind)) return;
+  // A 구간 단속's end with none being driven (joined partway): unsaid, as ours (warnings.ts sectionPlan).
+  if (e.kind === "section-end" && !currentSectionInfo) return;
   // 카카오's "at the place" telling (~150 m): too near for a rung of ours ("삼백미터 앞" at 145 m) — the card and the
   // sign show it; its far (~1 km) and middle (~500 m) tellings are said.
   if (e.dist < 200) return;
