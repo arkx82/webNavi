@@ -39,6 +39,15 @@ test("TMAP's: the words over the rest of the sentence, the code where the words 
   assert.equal(m("tmap", 119, "창동 지하차도에서 지하차도"), "other");
 });
 
+test("our own route's roundabout: the step out of it is the roundabout's exit, not a right turn", () => {
+  const osrm = (turnType: string, text: string) => maneuverOf("korea", { at: [0, 0], text, distanceM: 0, turnType });
+  assert.equal(osrm("roundabout/right", "회전교차로에서 두 번째 출구"), "roundabout");
+  assert.equal(osrm("exit roundabout/right", "회전교차로 두 번째 출구"), "roundabout");
+  assert.equal(osrm("exit rotary/slight right", "회전교차로에서 나가기"), "roundabout");
+  // A plain turn still reads by its modifier.
+  assert.equal(osrm("turn/right", "우회전"), "right");
+});
+
 test("a guide with no way in its words gets one from the road's bend", () => {
   assert.equal(fromBend(10, 40, true), "ramp-right");
   assert.equal(fromBend(10, 350, true), "ramp-left");

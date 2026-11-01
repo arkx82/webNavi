@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { validateStyleMin } from "@maplibre/maplibre-gl-style-spec";
 import type maplibregl from "maplibre-gl";
 import { CameraLayer } from "./camera-layer";
-import { HdLayer } from "./hdmap-layer";
 import { NightCity } from "./night-city";
 import { PinLayer } from "./pin-layer";
 import { RouteLayer } from "./route-layer";
@@ -38,7 +37,6 @@ test("every map layer is one MapLibre accepts", async () => {
   (globalThis as { window?: unknown }).window ??= { setInterval: () => 0, clearInterval: () => {} };
   const made: unknown[] = [
     new CameraLayer(map, () => true, () => {}),
-    new HdLayer(map, () => true),
     new NightCity(map, () => true),
     new PinLayer(map, () => {}),
     new RouteLayer(map),

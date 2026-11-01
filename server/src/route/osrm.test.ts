@@ -6,6 +6,10 @@ test("OSRM manoeuvres come out as the phrases car apps say", () => {
   assert.equal(korean("turn", "right", undefined, "테헤란로"), "테헤란로 방면 우회전");
   assert.equal(korean("turn", "left"), "좌회전");
   assert.equal(korean("roundabout", "right", 2), "회전교차로에서 두 번째 출구");
+  assert.equal(korean("rotary", "slight right"), "회전교차로");
+  // The step out of a roundabout is the roundabout's exit, not the turn its modifier makes of it.
+  assert.equal(korean("exit roundabout", "right", 2), "회전교차로 두 번째 출구");
+  assert.equal(korean("exit rotary", "right"), "회전교차로에서 나가기");
   assert.equal(korean("off ramp", "slight right", undefined, "올림픽대로"), "올림픽대로 방면 오른쪽 출구");
   assert.equal(korean("end of road", "left"), "길 끝에서 좌회전");
   assert.equal(korean("arrive"), "목적지 도착");
@@ -100,6 +104,29 @@ test("on the move, the route starts on the road the car goes along (bearings), a
     await osrm.route({ start: [127, 37.5], goal: [127, 37.501], heading: 90 });
     assert.equal(asked.length, 4, "refused that way, asked again");
     assert.ok(!asked[3].includes("bearings"));
+  } finally {
+    globalThis.fetch = real;
+  }
+});
+
+test("a roundabout's way out (OSRM's \"exit roundabout\" step) is no guide of its own: folded into the entry's, which names the exit and keeps the distance to the next guide", async () => {
+  const real = globalThis.fetch;
+  const at = (i: number): [number, number] => [127 + i * 0.001, 37.5];
+  const answer = { code: "Ok", routes: [{ distance: 900, duration: 90, geometry: { coordinates: [at(0), at(1), at(2), at(3), at(4)] }, legs: [{ steps: [
+    { maneuver: { location: at(0), type: "depart", modifier: "straight" }, name: "동일로", distance: 300 },
+    { maneuver: { location: at(1), type: "roundabout", modifier: "right", exit: 2 }, name: "", distance: 40 },
+    { maneuver: { location: at(2), type: "exit roundabout", modifier: "right" }, name: "노원로", distance: 360 },
+    { maneuver: { location: at(3), type: "turn", modifier: "left" }, name: "한글비석로", distance: 200 },
+    { maneuver: { location: at(4), type: "arrive" }, name: "한글비석로", distance: 0 },
+  ] }] }] };
+  globalThis.fetch = (async () => new Response(JSON.stringify(answer))) as typeof fetch;
+  try {
+    const route = await new Osrm("http://osrm:5000", "korea", true).route({ start: at(0), goal: at(4) });
+    assert.deepEqual(route.guides.map((g) => [g.text, g.turnType, g.distanceM]), [
+      ["회전교차로에서 두 번째 출구", "roundabout/right", 400],
+      ["한글비석로 방면 좌회전", "turn/left", 200],
+      ["목적지 도착", "arrive/", 0],
+    ]);
   } finally {
     globalThis.fetch = real;
   }

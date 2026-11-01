@@ -160,6 +160,15 @@ test("an incident list asked again replaces the last one", () => {
   assert.equal(phraseFor(watch.due(0)[0]), "일킬로미터 앞에 교통사고가 났습니다, 주의하세요");
 });
 
+test("an incident still on the list asked again stays (it went at every refresh, review 2026-11-01)", () => {
+  const watch = new RouteWatch(route);
+  const work = { id: "work", kind: "incident-work" as const, ...lonLat(offset(start, 0, 700)) };
+  watch.add([work]);
+  watch.drop(["incident-crash", "incident-work", "incident-other"]);
+  watch.add([work]);
+  assert.deepEqual(watch.ahead(0).map((a) => a.feature.id), ["work"]);
+});
+
 test("a camera's sentence ends as a sentence: its limit, or what it is", () => {
   const say = (kind: Feature["kind"], limit?: number) => phraseFor({ feature: { id: "x", kind, lon: 0, lat: 0, limit }, alongM: 0, inM: 0, rungM: 300 });
   assert.equal(say("speed", 80), "삼백미터 앞에 과속 단속 카메라가 있습니다, 제한 속도 팔십입니다");
@@ -575,4 +584,16 @@ test("an end camera of our way with no start on the route (the stretch joined pa
   watch.add([{ id: "end", kind: "section-end", ...lonLat(offset(start, 0, 500)), direction: "2", pair: offset(start, 180, 1500) }]);
   assert.deepEqual(watch.ahead(0, 2100).map((a) => a.feature.id), []);
   assert.deepEqual(watch.sections(), []);
+});
+
+test("a 구간 단속 being measured goes on over a re-route: the new watch, given its start, runs it to the end camera alone on the line", () => {
+  const endAt = offset(start, 0, 500);
+  // The start passed 1.5 km back, its pair the end ahead: carried from the old watch into the new one.
+  const carriedStart = { id: "s", kind: "section-start" as const, ...lonLat(offset(start, 180, 1500)), limit: 80, direction: "2", pair: endAt };
+  const watch = new RouteWatch(route, undefined, undefined, carriedStart);
+  watch.add([{ id: "end", kind: "section-end", ...lonLat(endAt), direction: "2", pair: offset(start, 180, 1500) }]);
+  assert.deepEqual(watch.sections().map((s) => [s.feature.id, s.alongM, Math.round(s.endM)]), [["s", 0, 500]]);
+  assert.equal(watch.currentSection(200)?.limit, 80);
+  // Its end is said: the stretch is this one's.
+  assert.deepEqual(watch.ahead(0, 2100).map((a) => a.feature.id), ["end"]);
 });

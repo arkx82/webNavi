@@ -174,6 +174,8 @@ export function mergeCameras(a: Feature, b: Feature, aWith?: boolean, bWith?: bo
 const directionOf = (f: Feature) => (f.direction ?? "").trim().replace(/^0+/, "");
 /** A start and an end of two different directions this close together are the two carriageways' cameras at one place. */
 const SECTION_TWIN_M = 300;
+/** A carried 구간 단속's end camera is the one its start's pair points at: this near the pair's point. */
+const CARRIED_END_M = 100;
 const metresBetween = (a: LonLat, b: LonLat) => Math.hypot((b[0] - a[0]) * 111_320 * Math.cos(((a[1] + b[1]) / 2) * Math.PI / 180), (b[1] - a[1]) * 111_320);
 /** The limits a zone camera can give its zone. */
 const ZONE_LIMITS = new Set([20, 30, 40, 50, 60]);
@@ -207,7 +209,8 @@ export class RouteWatch {
    *   last watch when the same trip is re-routed, so a camera said before the
    *   wrong turn is not said again after it.
    */
-  constructor(private route: Route, private prefs: () => WatchPrefs = () => ALL, private spoken = new Map<string, Set<number>>()) {
+  /** [carried]: the start camera of a 구간 단속 being measured as this watch is made (a re-route inside the stretch). */
+  constructor(private route: Route, private prefs: () => WatchPrefs = () => ALL, private spoken = new Map<string, Set<number>>(), private carried: Feature | null = null) {
     this.line = new Line(route.path);
     this.underOrOver = underOrOverStretches(route, this.line);
     for (const c of findCurves(route)) this.place(c);
@@ -473,6 +476,15 @@ export class RouteWatch {
         }
         sections.push({ feature: f.feature, alongM: f.alongM, endM });
       } else {
+        // The end of the stretch being driven as this watch was made (a re-route inside it: its start is behind the
+        // new route's beginning): the stretch goes on from here to it, under the start's limit. Without this the HUD
+        // went 8 s after a re-route and the end was never said (review, 2026-11-01).
+        const c = this.carried;
+        if (c && c.pair && metresBetween(c.pair, [f.feature.lon, f.feature.lat]) <= CARRIED_END_M) {
+          sections.push({ feature: c, alongM: 0, endM: f.alongM });
+          used.add(f);
+          continue;
+        }
         // An end with no start before it on the route: the other way's (its start ahead, or beside a start of another
         // direction), or this one's with the car joined partway — not timed from a start it did not pass. Unsaid either
         // way: "삼백미터 앞에서 구간 단속이 끝납니다" came out of nowhere on 동부간선 southbound, joined from 노원
@@ -613,8 +625,13 @@ export class RouteWatch {
     return null;
   }
 
-  /** Forgets the features of [kinds] (an incident list asked again: the cleared ones go). */
+  /**
+   * Forgets the features of [kinds] (an incident list asked again: the cleared ones go). Forgotten from the ones
+   * tried too, so the same incident still on the list comes back: a 공사 구간 12 km ahead went at the first refresh
+   * and never warned (review, 2026-11-01).
+   */
   drop(kinds: Kind[]) {
+    for (const f of this.onRoute) if (kinds.includes(f.feature.kind)) this.tried.delete(f.feature.id);
     this.onRoute = this.onRoute.filter((f) => !kinds.includes(f.feature.kind));
   }
 

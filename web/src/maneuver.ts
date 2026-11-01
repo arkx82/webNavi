@@ -61,6 +61,10 @@ function readManeuver(provider: Provider, guide: Guide): Maneuver {
     const [type, mod] = t.split("/");
     if (type === "arrive") return "arrive";
     if (type === "roundabout" || type === "rotary") return "roundabout";
+    // The step out of a roundabout, should one come as a guide (the server folds it into the entry's): the
+    // roundabout's exit, not the turn its modifier ("right") would read as — a second turn sentence and a right-turn
+    // arrow at the ring's exit, after "잠시 후 회전교차로입니다".
+    if (type === "exit roundabout" || type === "exit rotary") return "roundabout";
     if (type === "off ramp" || type === "on ramp") return mod?.includes("left") ? "ramp-left" : "ramp-right";
     if (mod) {
       const m = OSRM_MOD[mod];

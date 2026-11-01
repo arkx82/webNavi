@@ -5,13 +5,19 @@
  * as a turn comes up, so the junction is big when it matters.
  *
  * Zooms are MapLibre's (512 px tiles): 18 is about 0.24 m a pixel here,
- * 16.5 about 0.67. Close enough that the lanes read in town (the car's
- * screen looks further down the road than a phone's); the road beyond
- * the screen is the banner's to tell — the next turn and the one after.
+ * 16.5 about 0.67. The table is the car apps' distance: on the car's
+ * screen (804 × 638, tilted 55°) about 240 m of road ahead standing, 400 m
+ * at 60 km/h, 700 m at 100 (measured 2026-11-01 on the pretend drive). It
+ * was a level closer, so that the painted lanes read in town; the owner
+ * found the apps' scale the familiar one, and the lanes are no longer
+ * drawn — a road is one line, and the lane card says which lane. 지도
+ * 거리 "가깝게" (CLOSE_ZOOM) puts the old scale back.
  */
 const BY_SPEED: [kmh: number, zoom: number][] = [
-  [0, 19.2], [30, 19.0], [60, 18.4], [80, 18.0], [100, 17.6], [130, 17.2],
+  [0, 18.3], [30, 18.1], [60, 17.5], [80, 17.1], [100, 16.7], [130, 16.3],
 ];
+/** 지도 거리 가깝게: the level closer the map was until 2026-11-01. */
+export const CLOSE_ZOOM = 0.9;
 /** From this far out a turn starts drawing the camera in, up to TURN_ZOOM at the junction. */
 export const TURN_M = 300;
 export const TURN_ZOOM = 0.5;

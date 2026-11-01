@@ -44,6 +44,22 @@ function readJunction(guide: Pick<Guide, "text" | "name">): Junction | null {
   return { name, toward: toward || undefined };
 }
 
+/**
+ * A town crossing's name, where the provider's words give one ("중계구민체육센터에서 노원역 방면으로 우회전",
+ * TMAP and NAVER; Kakao names none): the place before 에서, not a motorway junction's (junctionOf has those), and not
+ * long — "삼백미터 앞 중계구민체육센터에서, 우회전입니다" (2026-11-01).
+ */
+const TOWN_AT = /^\s*([가-힣A-Za-z0-9·()]{2,14})에서\s/;
+export function townJunctionOf(guide: Pick<Guide, "text" | "name">): Junction | null {
+  const had = townKnown.get(guide);
+  if (had !== undefined) return had;
+  const name = (guide.text ?? "").match(TOWN_AT)?.[1];
+  const j = name && !PLACE.test(name) ? { name } : null;
+  townKnown.set(guide, j);
+  return j;
+}
+const townKnown = new WeakMap<object, Junction | null>();
+
 /** "1킬로미터 앞 신갈JC에서 원주 방면, 왼쪽 방향입니다" — made by the voice service the first time, then kept. */
 export function namedTurnPhrase(turn: Turn, rungM: number, j: Junction): string | null {
   const where = [j.name && `${j.name}에서`, j.toward && `${j.toward} 방면`].filter(Boolean).join(" ");

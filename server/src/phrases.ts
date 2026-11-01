@@ -185,6 +185,9 @@ export const EVENTS = {
   // cameras behind it 4–5 s after each re-route on 2026-10-11, and one camera warning was dropped as late.
   off: "경로를 재탐색합니다",
   nearGoal: "잠시 후 목적지에 도착합니다",
+  // Which side the place is, after 잠시 후 (the car apps say it; asked for on 2026-11-01).
+  goalLeft: "목적지는 왼쪽에 있습니다",
+  goalRight: "목적지는 오른쪽에 있습니다",
   arrived: "목적지에 도착했습니다. 안내를 종료합니다",
   weakGps: "GPS 신호가 약합니다",
   resumed: "이전 안내를 이어서 시작합니다",
@@ -253,6 +256,8 @@ export const GUIDE_LINES = {
 
 /** Before a motorway exit or branch: which side to be on, a kilometre out (not lane data: the side of the turn). */
 export const LANE_HINTS = { right: "오른쪽 차로로 미리 이동하세요", left: "왼쪽 차로로 미리 이동하세요" } as const;
+/** "삼차로로 미리 이동하세요": in town, 300 m before a turn whose lane 정밀도로지도 knows (one lane; else the side's hint). */
+export const LANE_NUMBER_HINTS: readonly string[] = Array.from({ length: 8 }, (_, i) => `${sino(i + 1)}차로로 미리 이동하세요`);
 
 /** 기상특보 a driver is told of: the rest (풍랑, 폭풍해일, 건조) are shown, not said. */
 export const ALERT_KINDS = ["호우", "대설", "태풍", "강풍", "한파", "폭염", "황사"] as const;
@@ -289,6 +294,7 @@ export function fixedPhrases(): string[] {
   }
   for (const k of ALERT_KINDS) for (const l of ALERT_LEVELS) out.add(alertPhrase(k, l));
   for (const h of Object.values(LANE_HINTS)) out.add(h);
+  for (const h of LANE_NUMBER_HINTS) out.add(h);
   for (const m of FASTER_MINUTES) out.add(fasterPhrase(m));
   for (const g of Object.values(GUIDE_LINES)) out.add(g);
   for (const kind of FACILITY_KINDS) for (const how of FACILITY_HOWS) for (const side of FACILITY_SIDES) {

@@ -7,6 +7,7 @@
  * the car is — no GPS tells a lane — but where to be before the stop line.
  */
 import { escape } from "./html";
+import { LANE_HINTS, LANE_NUMBER_HINTS } from "../../server/src/phrases";
 
 export type Turn = "uturn" | "left" | "straight" | "right";
 export interface Lanes { lanes: { turns: Turn[]; best: boolean; /** Can take the way too, but a lane nearer the turn after is better (main.ts narrows best by it). */ ok?: boolean }[]; stopM?: number }
@@ -78,6 +79,22 @@ export function laneWords(lanes: Lanes["lanes"]): string | null {
   if (n.length === 0 || n.length === lanes.length) return null;
   const run = n.every((v, i) => i === 0 || v === n[i - 1] + 1);
   return `${run && n.length > 2 ? `${n[0]}~${n[n.length - 1]}` : n.join("·")}차로`;
+}
+
+/**
+ * The lane to be in for a town turn, as a sentence 300 m out (main.ts showTurn): one lane by its number ("삼차로로
+ * 미리 이동하세요"); the lanes at the road's edge by their side; lanes in the middle, or none known, nothing — the
+ * card shows them. The lanes are no longer drawn on the map (2026-11-01): the card and this say which lane.
+ */
+export function townLaneHint(info: Lanes | null): string | null {
+  if (!info || info.lanes.length < 2) return null;
+  const best = info.lanes.map((l, i) => (l.best ? i : -1)).filter((i) => i >= 0);
+  if (best.length === 0 || best.length === info.lanes.length) return null;
+  const run = best.every((v, i) => v === best[0] + i);
+  if (best.length === 1) return LANE_NUMBER_HINTS[best[0]] ?? null;
+  if (run && best[0] === 0) return LANE_HINTS.left;
+  if (run && best[best.length - 1] === info.lanes.length - 1) return LANE_HINTS.right;
+  return null;
 }
 
 const ONLY_WORDS: Record<Turn, string> = { uturn: "유턴", left: "좌회전", straight: "직진", right: "우회전" };

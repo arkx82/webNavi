@@ -33,6 +33,10 @@ interface OsrmAnswer {
   }[];
 }
 
+/** OSRM's steps into a roundabout and out of it: the one carries the exit's number, the other a turn's modifier. */
+const ROUNDABOUT = new Set(["roundabout", "rotary"]);
+const EXIT_ROUNDABOUT = new Set(["exit roundabout", "exit rotary"]);
+
 /** 표준노드링크's node ids are below this; a link's inner vertices are numbered from it (tools/nodelink/build.py VERTEX_BASE). */
 const MOCT_NODE_MAX = 9e9;
 
@@ -94,16 +98,22 @@ export class Osrm implements RouteProvider {
     });
     const first = answer.routes?.[0];
     if (answer.code !== "Ok" || !first) throw new Error(`osrm: ${answer.message ?? answer.code}`);
-    const guides = first.legs.flatMap((leg) =>
-      leg.steps
-        .filter((s) => s.maneuver.type !== "depart")
-        .map((s) => ({
-          at: s.maneuver.location,
-          text: korean(s.maneuver.type, s.maneuver.modifier, s.maneuver.exit, s.name),
-          distanceM: s.distance,
-          turnType: `${s.maneuver.type}/${s.maneuver.modifier ?? ""}`,
-        })),
-    );
+    const guides: Route["guides"] = [];
+    for (const s of first.legs.flatMap((leg) => leg.steps)) {
+      if (s.maneuver.type === "depart") continue;
+      // A roundabout is two steps, into it ("roundabout", with the exit's number) and out of it ("exit roundabout",
+      // with the way out as a turn's modifier). The way out as its own guide was said as a turn — "잠시 후
+      // 회전교차로입니다" and then "우회전" with a right-turn arrow at the ring's exit. The entry guide names the exit
+      // already; the way out is folded into it, its distance kept so the guide's still reaches the next one.
+      const last = guides[guides.length - 1];
+      if (EXIT_ROUNDABOUT.has(s.maneuver.type) && last && ROUNDABOUT.has(String(last.turnType).split("/")[0])) { last.distanceM += s.distance; continue; }
+      guides.push({
+        at: s.maneuver.location,
+        text: korean(s.maneuver.type, s.maneuver.modifier, s.maneuver.exit, s.name),
+        distanceM: s.distance,
+        turnType: `${s.maneuver.type}/${s.maneuver.modifier ?? ""}`,
+      });
+    }
     const route: Route = {
       provider: this.name,
       distanceM: first.distance,
@@ -171,7 +181,10 @@ export function korean(type: string, modifier?: string, exit?: number, road?: st
   };
   switch (type) {
     case "arrive": return "목적지 도착";
-    case "roundabout": case "rotary": return exit ? `회전교차로에서 ${koreanNumbers(`${exit}번째`)} 출구` : "회전교차로 출구";
+    case "roundabout": case "rotary": return exit ? `회전교차로에서 ${koreanNumbers(`${exit}번째`)} 출구` : "회전교차로";
+    // The way out of a roundabout (its own step in OSRM; folded into the entry guide in route()): the roundabout's
+    // exit, never the turn its modifier would make of it.
+    case "exit roundabout": case "exit rotary": return exit ? `회전교차로 ${koreanNumbers(`${exit}번째`)} 출구` : "회전교차로에서 나가기";
     case "merge": return `${onto}합류`;
     case "on ramp": return `${onto}진입`;
     case "off ramp": return `${onto}${modifier?.includes("left") ? "왼쪽" : "오른쪽"} 출구`;

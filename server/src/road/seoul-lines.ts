@@ -10,11 +10,23 @@ import type { GuideColour } from "./color-guides.js";
  * the big junctions 한국도로공사's list (color-guides.ts) does not cover. A
  * point a line (in the lane's middle: 40 checked against 정밀도로지도, all
  * within 2.2 m of a lane's centre), and no colour. The colour is the
- * manual's (국토교통부 노면 색깔 유도선 설치 및 관리 매뉴얼): the branch away
- * from the centre line — the right one — pink, the nearer left one green,
- * and a way out that is the only one pink. So a right turn on a painted
- * line is pink; a left one is green where another line goes off to its
- * right, else said without a colour.
+ * manual's (국토교통부 노면 색깔 유도선 설치 및 관리 매뉴얼): one line alone,
+ * guiding one way, is pink; only where two ways are guided at the same
+ * place is the second one green — the branch away from the centre line,
+ * the right one, pink, and the nearer left one green. So a line on the
+ * route's way is pink, unless the route takes the left of two painted
+ * side by side there: then green.
+ *
+ * A line is several rows, one a section (the 동부간선도로 entrance toward
+ * 성수대교 at 127.054°E 37.641°N is five, 60–110 m apart along the ramp), so a row
+ * a few metres off the route further along is the same line where the
+ * route's polyline leaves the painted lane, not a second one. On
+ * 2026-11-01 that entrance (a lone pink line, seen) was said green: a
+ * section's row near the fork lay 5–15 m right of the route's line and
+ * was taken for a second line. A second line is painted beside the
+ * first, one lane over at the same place (rows 1158–1160 of the city's
+ * file are three in a row 3.5 m apart), so it is only one alongside an
+ * on-route row, not one ahead of it.
  */
 const PAGE = "https://data.seoul.go.kr/dataList/OA-22350/F/1/datasetView.do";
 const DOWNLOAD = "https://datafile.seoul.go.kr/bigfile/iot/inf/nio_download.do?&useCache=false";
@@ -24,7 +36,9 @@ const FILE = "seoul-color-lines.csv";
 const ON_PATH_M = 4;
 /** Another line this near the turn, and this far to the route's right, is the branch beside it. */
 const BESIDE_M = 40;
-const OFF_PATH_M = 5;
+const OFF_PATH_M = 15;
+/** Two lines painted side by side begin at the same place: their rows this near each other along the route. */
+const ALONGSIDE_M = 30;
 
 const R = 6_371_008.8;
 const RAD = Math.PI / 180;
@@ -61,16 +75,21 @@ export function parseSeoulLines(text: string): LonLat[] {
 /** Metres east and north of [o]. */
 const xy = (p: LonLat, o: LonLat) => [(p[0] - o[0]) * RAD * Math.cos(o[1] * RAD) * R, (p[1] - o[1]) * RAD * R] as const;
 
-/** Where [p] is from the polyline [path]: metres off, and which side (+ right of the way the path runs, - left). */
-function offPath(p: LonLat, path: LonLat[]): { off: number; side: number } {
-  let best = { off: Infinity, side: 0 };
+/**
+ * Where [p] is from the polyline [path]: metres off, which side (+ right of the way the path runs, - left), and how far
+ * along the path its nearest place is.
+ */
+export function offPath(p: LonLat, path: LonLat[]): { off: number; side: number; along: number } {
+  let best = { off: Infinity, side: 0, along: 0 };
+  let walked = 0;
   for (let i = 1; i < path.length; i++) {
     const [ax, ay] = xy(path[i - 1], p), [bx, by] = xy(path[i], p);
     const dx = bx - ax, dy = by - ay, len = dx * dx + dy * dy;
     const t = len ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / len)) : 0;
     const qx = ax + t * dx, qy = ay + t * dy, off = Math.hypot(qx, qy);
     // The point is at the origin; the path's way is (dx, dy): the point is right of it when the cross product is negative.
-    if (off < best.off) best = { off, side: -(dx * (0 - ay) - dy * (0 - ax)) };
+    if (off < best.off) best = { off, side: -(dx * (0 - ay) - dy * (0 - ax)), along: walked + t * Math.sqrt(len) };
+    walked += Math.sqrt(len);
   }
   return best;
 }
@@ -137,14 +156,18 @@ export class SeoulLines {
 
   /**
    * The line to follow where the route turns [go] at [at], driving [path] (the route round the turn, a point every
-   * few metres): none unless a painted line lies on the route there.
+   * few metres): none unless a painted line lies on the route there. Pink, the manual's colour for a line alone and
+   * for the right of two; green only for the left of two painted side by side (another row beside an on-route row,
+   * to the route's right, near the turn).
    */
   lineFor(at: LonLat, path: LonLat[], go: "left" | "right"): GuideColour | null {
     if (!this.points.length || path.length < 2) return null;
-    const round = this.near(at, 150);
-    if (!round.some((q) => offPath(q, path).off <= ON_PATH_M)) return null;
+    const round = this.near(at, 150).map((q) => ({ ...offPath(q, path), toTurn: Math.hypot(...xy(q, at)) }));
+    const on = round.filter((o) => o.off <= ON_PATH_M);
+    if (!on.length) return null;
     if (go === "right") return "pink";
-    const beside = round.some((q) => { const o = offPath(q, path); return o.off > OFF_PATH_M && o.off <= 15 && o.side > 0 && Math.hypot(...xy(q, at)) <= BESIDE_M; });
-    return beside ? "green" : "line";
+    const beside = round.some((o) => o.off > ON_PATH_M && o.off <= OFF_PATH_M && o.side > 0 && o.toTurn <= BESIDE_M
+      && on.some((p) => Math.abs(p.along - o.along) <= ALONGSIDE_M));
+    return beside ? "green" : "pink";
   }
 }

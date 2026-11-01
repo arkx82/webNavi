@@ -32,10 +32,11 @@ export interface GuideSettings {
   junction3d: boolean;
   /** 3D 분기점 보기: a still picture of the junction (default) or the camera following the car through it. */
   junction3dMode: "still" | "live";
-  /** 정밀도로지도's lane lines and road markings on the map, close in (hdmap-layer.ts). */
-  hdLanes: boolean;
-  /** When, while driving: near a turn or slow (the lanes are the heaviest thing drawn in a city), or always. */
-  hdLanesWhen: "turns" | "always";
+  /**
+   * 지도 거리: the camera's distance while following — the car apps' (autozoom.ts), or a level closer, as it was until
+   * 2026-11-01 when the painted lanes were still drawn.
+   */
+  mapRange: "normal" | "close";
   /** The lanes at the junction ahead, the ones to be in lit (lanes-strip.ts). */
   laneGuide: boolean;
   /** "분홍색 유도선을 따라가세요": 한국도로공사's painted guide lines at motorway junctions. */
@@ -143,7 +144,7 @@ export interface GuideSettings {
 export type Mode = "voice" | "show" | "off";
 
 export const DEFAULTS: GuideSettings = {
-  voice: true, voiceName: null, volume: 1, turns: true, junctionNames: true, laneHints: true, merges: true, closeups: true, junction3d: true, junction3dMode: "still", sendLogs: true, layout: "classic", destAt: "left", hdLanes: true, hdLanesWhen: "turns", laneGuide: true, colorLines: true, theme: "auto", nightCity: false, carIcon: "model3d", carPaint: PAINTS[0][0], carSize: "large", trafficBar: true, lanesAt: "car", endOnArrive: true, mapDpr: "auto", followFps: "auto", ducking: "soft", fasterRoute: "ask", avoidSchool: false, carData: "auto", rev: 4, uiScale: 1, lightsOnMap: "route", camerasOnMap: "route", nextLight: true, flashSignals: true,
+  voice: true, voiceName: null, volume: 1, turns: true, junctionNames: true, laneHints: true, merges: true, closeups: true, junction3d: true, junction3dMode: "still", sendLogs: true, layout: "classic", destAt: "left", mapRange: "normal", laneGuide: true, colorLines: true, theme: "auto", nightCity: false, carIcon: "model3d", carPaint: PAINTS[0][0], carSize: "large", trafficBar: true, lanesAt: "car", endOnArrive: true, mapDpr: "auto", followFps: "auto", ducking: "soft", fasterRoute: "ask", avoidSchool: false, carData: "auto", rev: 4, uiScale: 1, lightsOnMap: "route", camerasOnMap: "route", nextLight: true, flashSignals: true,
   cameras: true, safeDrive: true, kakaoSafety: true, cameraFromM: 600, sections: true, schools: true,
   bumps: "show", curves: "off", accidents: "show", bikeAccidents: "show",
   overspeed: true, overspeedBy: 0, chimeVolume: null,
@@ -312,8 +313,8 @@ const GROUPS: Group[] = [
   ] },
   { id: "drive", title: "주행 안내", sub: "회전 · 차로 · 더 빠른 길 · 차량 데이터", rows: [
     { key: "turns", label: "회전 안내", kind: "toggle", sub: "1킬로미터 · 500미터 · 300미터 앞, 잠시 후 (고속도로 2킬로미터 · 1킬로미터 · 600미터, TMAP 기준)" },
-    { key: "junctionNames", label: "IC · JC 이름", kind: "toggle", sub: "고속도로에서 \"1킬로미터 앞 신갈JC에서 원주 방면\" (이름마다 처음 한 번 음성 합성)" },
-    { key: "laneHints", label: "차로 미리 이동", kind: "toggle", sub: "고속도로 출구 · 분기 1km 앞, 나갈 쪽 차로로 (차로 정보가 아닌 방향 기준)" },
+    { key: "junctionNames", label: "교차로 이름", kind: "toggle", sub: "고속도로에서 \"1킬로미터 앞 신갈JC에서 원주 방면\", 시내에서 \"300미터 앞 OO사거리에서 우회전\" (티맵 · 네이버 경로만 이름이 옴. 이름마다 처음 한 번 음성 합성)" },
+    { key: "laneHints", label: "차로 미리 이동", kind: "toggle", sub: "고속도로 출구 · 분기 1km 앞, 나갈 쪽 차로로 (방향 기준). 시내 회전 300m 앞, 정밀도로지도가 차로를 알면 \"3차로로 미리 이동하세요\" — 맨 끝 차로들이면 \"오른쪽 차로로\"" },
     { key: "laneGuide", label: "차로 안내", kind: "toggle", sub: "회전 800m 앞(고속도로 2km)부터 지날 때까지, 그리고 직진 중 앞 차로가 좌·우회전 전용이 되는 곳에서 탈 차로를 아래쪽에 (정밀도로지도가 있는 곳)" },
     { key: "lanesAt", label: "차로 안내 위치", kind: "choice", options: [["car", "내 차 아래"], ["above", "내 차 위"], ["top", "지도 위쪽"]], sub: "내 차 아래 · 위: 차 바로 밑이나 앞에 거리와 탈 차로를 작게. 지도 위쪽: 화면 위 가운데에 크게. 3D 분기점 화면이 뜨면 어느 쪽이든 그 안에" },
     { key: "colorLines", label: "색깔 유도선", kind: "toggle", sub: "고속도로 분기점 · 나들목(한국도로공사)과 서울시 도로(서울시 위치 자료, 색은 매뉴얼 기준: 오른쪽 분홍 · 두 갈래 왼쪽 녹색)에서 \"분홍색 유도선을 따라가세요\"" },
@@ -350,13 +351,12 @@ const GROUPS: Group[] = [
     { key: "restAreas", label: "고속도로 휴게소", kind: "choice", options: MODES, sub: "다음 휴게소의 기름값과 편의시설을 오른쪽 위에" },
     { key: "weatherAlerts", label: "기상특보", kind: "choice", options: MODES, sub: "호우 · 대설 · 태풍 · 강풍 · 한파 · 폭염 · 황사" },
   ] },
-  { id: "map", title: "지도", sub: "카메라 · 신호등 · 정밀 차선 · 야경", rows: [
+  { id: "map", title: "지도", sub: "카메라 · 신호등 · 지도 거리 · 야경", rows: [
     { key: "camerasOnMap", label: "지도에 카메라", kind: "choice", options: [["route", "경로만"], ["all", "모두"], ["off", "끔"]], sub: "경로만: 안내 중 가는 길 앞 3km 안의 것만 (제한 속도 표지판)" },
     { key: "lightsOnMap", label: "지도에 신호등", kind: "choice", options: [["route", "경로만"], ["all", "모두"], ["off", "끔"]], sub: "경로만: 안내 중 가는 길 앞 3km 안의 것만. 점멸 중이면 노란색" },
     { key: "nextLight", label: "다음 신호등 거리", kind: "toggle", sub: "안내 중 왼쪽 패널에 \"다음 신호등 250 m · 약 15초\"" },
     { key: "trafficBar", label: "경로 막힘 막대", kind: "toggle", sub: "지도 오른쪽 끝에 경로 전체를 세로 막대로 — 아래가 출발, 위가 목적지, 초록 원활 · 노랑 서행 · 빨강 정체, 지나온 곳은 회색, 점이 내 차 (교통 정보가 있는 경로만)" },
-    { key: "hdLanes", label: "정밀 차선 그리기", kind: "toggle", sub: "정밀도로지도가 있는 곳에서 크게 확대하면 실제 차선 · 화살표 · 횡단보도 (느린 차량이면 끄세요)" },
-    { key: "hdLanesWhen", label: "주행 중 정밀 차선", kind: "choice", options: [["turns", "회전 근처 · 저속만"], ["always", "항상"]], sub: "회전 400 m 안이거나 30 km/h 아래일 때만 그리고, 그 밖에서는 숨겨 시내 주행을 가볍게. 지도를 손으로 움직이면 다 나옴" },
+    { key: "mapRange", label: "지도 거리", kind: "choice", options: [["normal", "보통"], ["close", "가깝게"]], sub: "보통: 티맵 · 카카오내비처럼 — 시내에서 차 앞 400 m쯤, 고속도로 700 m. 가깝게: 한 단계 더 당겨서 (회전 300 m 안에서는 어느 쪽이든 조금 더 당김)" },
     { key: "nightCity", label: "야경 건물", kind: "toggle", sub: "밤에 3D 화면이면 티맵·네이버 바탕 위에 건물을 옅은 금빛으로 (OpenStreetMap 건물이라 도심 밖에는 드묾. 도로가 가려 보이면 끄세요)" },
   ] },
   { id: "display", title: "디스플레이", sub: "테마 · 자차 · 목적지 창 · 배치 · 크기 · 해상도", rows: [

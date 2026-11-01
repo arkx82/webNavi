@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { drawLaneCard, laneWords, type CardBox, type LaneCard } from "./lanes-strip";
+import { drawLaneCard, laneWords, townLaneHint, type CardBox, type LaneCard, type Turn } from "./lanes-strip";
 
 const lanes = (best: boolean[]) => best.map((b) => ({ turns: ["straight" as const], best: b }));
 
@@ -105,4 +105,14 @@ test("an entrance is drawn as driven: the ramp off to the side taken, joining th
   assert.ok(right.includes("남구리IC"));
   const left = junctionSvg({ kind: "enter", go: "left" });
   assert.ok(left.includes("M36 104 L36 8") && left.includes("C80 54 56 46 36 30"));
+});
+
+test("the lane to be in for a town turn, said: one lane by its number, the edge's lanes by their side, the middle not at all", () => {
+  const lanes = (best: number[], n = 4) => ({ lanes: Array.from({ length: n }, (_, i) => ({ turns: [] as Turn[], best: best.includes(i) })) });
+  assert.equal(townLaneHint(lanes([2])), "삼차로로 미리 이동하세요");
+  assert.equal(townLaneHint(lanes([0, 1])), "왼쪽 차로로 미리 이동하세요");
+  assert.equal(townLaneHint(lanes([2, 3])), "오른쪽 차로로 미리 이동하세요");
+  assert.equal(townLaneHint(lanes([1, 2])), null);
+  assert.equal(townLaneHint(lanes([0, 1, 2, 3])), null);
+  assert.equal(townLaneHint(null), null);
 });

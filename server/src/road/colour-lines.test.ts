@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ColourGuides, facilityKey, junctionKey, parseGuides } from "./color-guides.js";
-import { SeoulLines, tmToLonLat } from "./seoul-lines.js";
+import { SeoulLines, offPath, tmToLonLat } from "./seoul-lines.js";
 import type { LonLat } from "../route/types.js";
 
 test("the 2025 list's facility without its kind (\"강일\", 비고 나들목) is found by the route's \"강일IC\"; a 졸음쉼터 is not a junction", async () => {
@@ -29,7 +29,7 @@ test("서울시's X/Y (EPSG:5186) to lon/lat: the origin, and a 서초구 point 
   assert.ok(Math.abs(lon - 126.987291) < 1e-6 && Math.abs(lat - 37.467468) < 1e-6, `${lon},${lat}`);
 });
 
-test("a line 서울시 lists on the route's way: right is pink; left is green beside another going right, else a line of no named colour", () => {
+test("a line 서울시 lists on the route's way: right is pink; left is green beside another going right, else pink (one line alone is pink)", () => {
   // A road north along x = 0 (metres east/north of a point in 서울), parting at y = 100.
   const O: LonLat = [127.0, 37.5];
   const at = (x: number, y: number): LonLat => [O[0] + x / (111_320 * Math.cos((O[1] * Math.PI) / 180)), O[1] + y / 111_320];
@@ -50,11 +50,45 @@ test("a line 서울시 lists on the route's way: right is pink; left is green be
   const lone = toFile([[0.5, 80]]);
   assert.equal(lone.count, 1);
   assert.equal(lone.lineFor(at(0, 100), path, "right"), "pink");
-  assert.equal(lone.lineFor(at(0, 100), path, "left"), "line");
+  assert.equal(lone.lineFor(at(0, 100), path, "left"), "pink");
   // And another 7 m to its right: two branches, the route the left one.
   const pair = toFile([[0.5, 80], [7, 82]]);
   assert.equal(pair.lineFor(at(0, 100), path, "left"), "green");
   // Only beside the route, not on it: none.
   const off = toFile([[12, 80]]);
   assert.equal(off.lineFor(at(0, 100), path, "right"), null);
+  // The same line's next section, 8 m right of the route's polyline 60 m further on (the painted lane bending off
+  // it), is not a second line: still pink.
+  const sections = toFile([[0.5, 30], [8, 90]]);
+  assert.equal(sections.lineFor(at(0, 100), path, "left"), "pink");
+});
+
+test("the 동부간선도로 entrance toward 성수대교 (2026-11-01): the city's five rows are one line along the ramp, pink, not green", () => {
+  // The city's rows 1315, 28, 29, 1316, 1342 (연번), north to south: a lone line, pink on the road, in sections.
+  const rows: [number, number, number][] = [[1315, 204770.4543, 560343.3982], [28, 204759.7668, 560283.7594], [29, 204758.3855, 560222.8766], [1316, 204784.2565, 560113.123], [1342, 204812.9035, 560067.4249]];
+  const dir = mkdtempSync(join(tmpdir(), "sl-"));
+  writeFileSync(join(dir, "seoul-color-lines.csv"), `연번,자치구,도로구분,구분,X좌표,Y좌표\n${rows.map(([n, x, y]) => `${n},도봉구,시도,주행유도선,${x},${y}`).join("\n")}\n`);
+  const lines = new SeoulLines(dir);
+  const pts = rows.map(([, x, y]) => tmToLonLat(x, y));
+  // The route's polyline, 10 m a point: down the line through rows 1315, 28, 29, then 8 m east (southbound, its right) of row 1316 where
+  // the ramp's painted lane bends away from the road's line, and on 60 m.
+  const O = pts[2];
+  const m = (p: LonLat) => [(p[0] - O[0]) * 111_320 * Math.cos((O[1] * Math.PI) / 180), (p[1] - O[1]) * 111_320] as [number, number];
+  const back = (x: number, y: number): LonLat => [O[0] + x / (111_320 * Math.cos((O[1] * Math.PI) / 180)), O[1] + y / 111_320];
+  const [x1316, y1316] = m(pts[3]), [x1342, y1342] = m(pts[4]);
+  const bend: [number, number] = [x1316 + 8, y1316];
+  const on: [number, number] = [bend[0] + ((x1342 - x1316) / Math.hypot(x1342 - x1316, y1342 - y1316)) * 60, bend[1] + ((y1342 - y1316) / Math.hypot(x1342 - x1316, y1342 - y1316)) * 60];
+  const legs: [number, number][] = [m(pts[0]), m(pts[1]), [0, 0], bend, on];
+  const path: LonLat[] = [];
+  for (let i = 1; i < legs.length; i++) {
+    const [ax, ay] = legs[i - 1], [bx, by] = legs[i], n = Math.ceil(Math.hypot(bx - ax, by - ay) / 10);
+    for (let k = 0; k < n; k++) path.push(back(ax + ((bx - ax) * k) / n, ay + ((by - ay) * k) / n));
+  }
+  path.push(back(...on));
+  const at = back(...bend);
+  // Row 29 is on the route; row 1316, 8 m right of it near the fork, is what was taken for a second line.
+  assert.ok(offPath(pts[2], path).off < 1);
+  const o = offPath(pts[3], path);
+  assert.ok(o.off > 4 && o.off <= 15 && o.side > 0, `${o.off} ${o.side}`);
+  assert.equal(lines.lineFor(at, path, "left"), "pink");
 });

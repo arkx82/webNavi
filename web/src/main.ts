@@ -23,16 +23,15 @@ import { Notes, incidentNote, popupNote, restNote, schoolNote, type Note } from 
 import { CameraLayer } from "./camera-layer";
 import { loadDrive, loadLast, saveDrive, saveLast, worthResuming } from "./resume";
 import { applyTheme, screenMode, watchScreenMode } from "./theme";
-import { HdLayer } from "./hdmap-layer";
 import { ZoneLayer } from "./zone-layer";
-import { drawLaneCard, onlyWords, type GuideColour, type Junction as JunctionView, type LaneCard, type Lanes, type Turn as LaneTurn } from "./lanes-strip";
+import { type GuideColour, type Junction as JunctionView, type LaneCard, type Lanes, type Turn as LaneTurn, drawLaneCard, onlyWords, townLaneHint } from "./lanes-strip";
 import { GUIDE_LINES } from "../../server/src/phrases";
 import { ALERT_KINDS, alertPhrase, type AlertKind } from "../../server/src/phrases";
 import { Nearby } from "./nearby";
-import { autoZoom } from "./autozoom";
+import { CLOSE_ZOOM, autoZoom } from "./autozoom";
 import { EVENTS, facilityOf, straightMatters, turnRungs, turnSay, unrepeated } from "./speech";
 import { repaint, sharedShare } from "./traffic";
-import { junctionKind, junctionOf, laneHint, motorwayAt, motorwaySides, namedTurnPhrase } from "./highway";
+import { junctionKind, junctionOf, laneHint, motorwayAt, motorwaySides, namedTurnPhrase, townJunctionOf } from "./highway";
 import { CLOSEUP_CAR_AT, CLOSEUP_PITCH, CloseupHold, closeupFrom, isTricky, zoomToSee, type Closeup } from "./closeup";
 import { JunctionView as Junction3dView } from "./junction-view";
 import { RerouteBackoff } from "./reroute-backoff";
@@ -331,7 +330,7 @@ function showLean() {
 let zoomSpeed = 0;
 let turnInM: number | undefined;
 /** The zoom to follow at, before the driver's own bias. */
-const speedZoom = () => autoZoom(zoomSpeed, turnInM, VIEWS[view].zoomShift);
+const speedZoom = () => autoZoom(zoomSpeed, turnInM, VIEWS[view].zoomShift + (guide.mapRange === "close" ? CLOSE_ZOOM : 0));
 /** Gliding back to the car rather than jumping. */
 let returning = false;
 /** Fingers (or the mouse button) down on the map, by pointer id. */
@@ -689,7 +688,6 @@ function frame() {
       if (follow && !handsOn() && due) { followCar(shown.at, shown.speedMps); cameraMovedAt = now; }
       // The painted lanes only where they matter on the move — near a turn, or slow — unless asked for always; a map
       // moved by hand shows everything.
-      hdLayer?.setAway(guide.hdLanesWhen === "turns" && follow && !handsOn() && lanesAway(shown));
       showTurn(shown);
       showLanes(shown);
       placeLanesUnderCar();
@@ -710,18 +708,6 @@ function frame() {
 requestAnimationFrame(frame);
 
 const approach = (from: number, to: number, k: number) => (Math.abs(to - from) < 0.005 ? to : from + (to - from) * k);
-
-/** Whether the painted lanes can be put away for now: driving on at speed with no turn within reach (with a little play, so they do not flicker). */
-let lanesWereAway = false;
-function lanesAway(shown: Shown): boolean {
-  const kmh = shown.speedMps * 3.6;
-  const turnNear = shown.nextGuide != null && shown.nextGuide.inM < LANES_TURN_M;
-  const fast = kmh > (lanesWereAway ? LANES_SLOW_KMH - 5 : LANES_SLOW_KMH + 5);
-  lanesWereAway = fast && !turnNear;
-  return lanesWereAway;
-}
-const LANES_TURN_M = 400;
-const LANES_SLOW_KMH = 30;
 
 /** When the camera last followed, so its easing goes by time, not by frames. */
 let followedAt = 0;
@@ -1803,6 +1789,9 @@ function startDrive(r: Route) {
   // 경로 막힘 막대: the trip goes on over a re-route; a new place starts it again.
   if (fresh || elsewhere) routeBar.newTrip();
   else routeBar.carry(tracker.frame()?.alongM ?? null);
+  // A 구간 단속 being measured goes on over a re-route: its start is behind the new route's beginning, and its end
+  // alone on the line would be taken as a stretch joined partway (warnings.ts sectionPlan).
+  const carried = !fresh && !elsewhere && watch ? watch.currentSection(tracker.frame()?.alongM ?? -1)?.feature ?? null : null;
   route = r;
   // The line onto the travel-direction lanes where 정밀도로지도 has them (laneLine, often done while the cards were open).
   laneLine(r);
@@ -1823,11 +1812,12 @@ function startDrive(r: Route) {
     turnsSaid.clear();
     linesSaid.clear();
     warningsSaid.clear();
+    kakaoSaid.clear();
     popups.clear();
     dismissed.clear();
     backoff.reset();
   }
-  watch = new RouteWatch(route, () => ({ wants: (k) => wants(guide, k), shows: (k) => shows(guide, k), cameraFromM: guide.cameraFromM }), warningsSaid);
+  watch = new RouteWatch(route, () => ({ wants: (k) => wants(guide, k), shows: (k) => shows(guide, k), cameraFromM: guide.cameraFromM }), warningsSaid, carried);
   watchedAt = null;
   incidentsAt = null;
   prepareHighway(route);
@@ -2131,6 +2121,12 @@ const linesSaid = new Set<string>();
 const warningsSaid = new Map<string, Set<number>>();
 /** A junction's key: its place to about 20 m, since each provider puts the same turn a few metres apart. */
 const junction = (at: LonLat) => `${Math.round(at[0] * 5000)},${Math.round(at[1] * 5000)}`;
+/**
+ * A turn's key: its junction and its way. A re-route back to a junction whose turn was missed, going another way
+ * there (a U-turn and back to turn right where the left was missed), is a new turn to say; keyed by the junction
+ * alone it was taken as said (review, 2026-11-01).
+ */
+const turnKey = (g: Guide, m: Maneuver) => `${junction(g.at)}:${m}`;
 let arrived = false;
 const END_AFTER_ARRIVE_MS = 10_000;
 /** The drive's end: said, shown, and (도착하면 안내 종료) back to the search screen once it has been said. */
@@ -2230,7 +2226,7 @@ function showTurn(shown: Shown) {
   put("turn-text", shortOf(g));
   showTurnBar(shown.nextGuide.inM, (onMotorway.get(g) ?? false) ? TURN_BAR_MOTORWAY_M : TURN_BAR_TOWN_M);
   showThen(shown.nextGuide.inM, shown.thenGuide);
-  const key = junction(g.at);
+  const key = turnKey(g, m);
   const said = turnsSaid.get(key) ?? new Set<number>();
   turnsSaid.set(key, said);
   // TMAP's distances go by the road the turn is on (고속국도·도시고속화도로 or not), not the car's speed.
@@ -2239,7 +2235,8 @@ function showTurn(shown: Shown) {
   if (!due || !guide.turns) return;
   // On a motorway, 1 km and 600 m name the junction and its way (2 km is the plain sentence: each name is a new one to make);
   // the plain sentence is said if the named one cannot be had.
-  const named = motorway && guide.junctionNames && NAMED_RUNGS.includes(due.rung) ? namedFor(g, m, due.rung) : null;
+  // In town the last far rung names the crossing where the provider does ("삼백미터 앞 중계구민체육센터에서, 우회전입니다").
+  const named = guide.junctionNames && (motorway ? NAMED_RUNGS.includes(due.rung) : due.rung === TOWN_NAMED_RUNG) ? namedFor(g, m, due.rung, motorway) : null;
   // A guide said in its own words ("고속도로 출구") is made on the spot; if that fails, the fixed sentence for the road's bend.
   const bent = TURN_WORDS_OK.has(m) || m === "arrive" ? null : bendOf(g);
   const plain = due.fallback ?? (bent ? turnPhrase(bent, due.rung) : undefined);
@@ -2247,6 +2244,11 @@ function showTurn(shown: Shown) {
   // turn is dropped, not said after it.
   const aheadS = (m: number) => Math.max(2, Math.min(25, (m - 20) / Math.max(3, shown.speedMps)));
   voice.say(named ?? due.text, named ? due.text : plain, { key: `turn:${key}:${due.rung}`, turn: true, withinS: aheadS(shown.nextGuide.inM) });
+  // "목적지는 오른쪽에 있습니다" after 잠시 후, where the place stands clearly to a side of the road's end.
+  if (m === "arrive") {
+    const side = goalSide();
+    if (side) voice.say(EVENTS[side], undefined, { key: `goal:${key}`, turn: true, withinS: aheadS(shown.nextGuide.inM) + 6 });
+  }
   // What was said, where, and from what: the record a "the voice said right where the line goes left" is read from.
   log(`안내 "${named ?? due.text}" · ${Math.round(shown.nextGuide.inM)} m · ${m} · ${route.provider} ${g.turnType} "${g.text.replace(/\s*후\s.*$/, "").slice(0, 60)}"`);
   // A second turn close after this one, told with its "잠시 후" as TMAP does: "그리고 이백미터 앞에서 우회전입니다".
@@ -2261,7 +2263,7 @@ function showTurn(shown: Shown) {
       log(`안내 "${thenText}" · 다음 ${Math.round(gap)} m · ${then} · "${shown.thenGuide.guide.text.replace(/\s*후\s.*$/, "").slice(0, 60)}"`);
       // Told already: its own sentences due within a few seconds of this one are not said again ("그리고 삼백미터
       // 앞에서 좌회전" and then "잠시 후 좌회전" three seconds on); one further off still comes, as a reminder.
-      const thenKey = junction(shown.thenGuide.guide.at);
+      const thenKey = turnKey(shown.thenGuide.guide, then);
       const thenSaid = turnsSaid.get(thenKey) ?? new Set<number>();
       const away = shown.nextGuide.inM + gap;
       for (const r of turnRungs(thenRoad)) {
@@ -2283,10 +2285,34 @@ function showTurn(shown: Shown) {
     const hint = laneHint(m);
     if (hint) voice.say(hint, undefined, { key: `lane:${key}`, turn: true });
   }
+  // In town, 300 m out, the lane to be in where 정밀도로지도 knows it: the one lane, or the side when it is the edge's.
+  // The lanes are no longer drawn on the map (2026-11-01); the card and this say which lane.
+  else if (!motorway && guide.laneHints && due.rung === TOWN_NAMED_RUNG) {
+    const hint = townLaneHint(lanesAsked.get(g) ?? null);
+    if (hint) voice.say(hint, undefined, { key: `lane:${key}`, turn: true, withinS: aheadS(shown.nextGuide.inM) });
+  }
+}
+
+/**
+ * Which side of the road's end the place driven to is: by the route's last bearing and where the place stands, only
+ * where it is at least GOAL_SIDE_M off to that side (a place on the line, or a search point in the road, says nothing).
+ */
+const GOAL_SIDE_M = 6;
+function goalSide(): "goalLeft" | "goalRight" | null {
+  const to = drivingTo?.at;
+  if (!to || !routeLine || routeLine.lengthM < 30) return null;
+  const end = routeLine.place(routeLine.lengthM).at;
+  const way = routeLine.place(routeLine.lengthM - 30).bearing;
+  const d = metres(end[0], end[1], to[0], to[1]);
+  const across = d * Math.sin(((bearing(end[0], end[1], to[0], to[1]) - way) * Math.PI) / 180);
+  if (Math.abs(across) < GOAL_SIDE_M) return null;
+  return across > 0 ? "goalRight" : "goalLeft";
 }
 
 /** The far rungs a motorway turn names its junction at. */
 const NAMED_RUNGS = [1000, 600];
+/** The one rung a town turn names its crossing at (each name is a sentence to make). */
+const TOWN_NAMED_RUNG = 300;
 
 /** A second turn's own sentence due this soon after its "그리고" is left out: that told it. */
 const THEN_LEAD_S = 6;
@@ -2601,9 +2627,9 @@ function lineColour(g: Guide, m: Maneuver): GuideColour | null {
   return l ? l[l.go] ?? null : null;
 }
 const TURN_WORDS_OK = new Set<Maneuver>(["left", "right", "slight-left", "slight-right", "sharp-left", "sharp-right", "ramp-left", "ramp-right", "uturn", "roundabout", "straight"]);
-function namedFor(g: Guide, m: Maneuver, rung: number): string | null {
+function namedFor(g: Guide, m: Maneuver, rung: number, motorway: boolean): string | null {
   if (!TURN_WORDS_OK.has(m)) return null;
-  const j = junctionOf(g);
+  const j = motorway ? junctionOf(g) : townJunctionOf(g);
   return j ? namedTurnPhrase(m as Turn, rung, j) : null;
 }
 /** Junction words with no side in them ("분기도로 진입", "고속도로 출구"): the side is the road's to show. */
@@ -2637,8 +2663,19 @@ function bendAt(g: Guide): Bend | null {
   if (!routeLine) return null;
   const at = routeLine.project(g.at, 0, routeLine.path.length).alongM;
   const turn = (a: number, c: number) => ((routeLine!.place(c).bearing - routeLine!.place(a).bearing + 540) % 360) - 180;
+  // This guide's own bend: the sweep stops short of the next turn, else a left turn with a U-turn 150 m on (or three
+  // rights round a block) summed to a loop ramp's 270° (review, 2026-11-01).
+  let end = Math.min(at + 200, routeLine.lengthM);
+  const i = route!.guides.indexOf(g);
+  for (let k = i + 1; k < route!.guides.length; k++) {
+    const n = route!.guides[k];
+    const nm = maneuverOf(route!.provider, n);
+    if (nm === "straight" || nm === "other" || nm === "depart") continue;
+    end = Math.min(end, Math.max(at + 40, routeLine.project(n.at, 0, routeLine.path.length).alongM - 10));
+    break;
+  }
   let sweep = 0;
-  for (let m = at; m < at + 200 && m < routeLine.lengthM; m += 20) sweep += turn(m, Math.min(m + 20, routeLine.lengthM));
+  for (let m = at; m < end; m += 20) sweep += turn(m, Math.min(m + 20, end));
   b = { d60: turn(Math.max(0, at - 60), Math.min(routeLine.lengthM, at + 60)), sweep200: sweep };
   bends.set(g, b);
   return b;
@@ -2734,9 +2771,13 @@ function sideChanged() {
 // ---- the road ahead --------------------------------------------------------
 
 let watch: RouteWatch | null = null;
-/** Where each warning sentence was last said from: two features this close are one thing to say. */
+/**
+ * Where each warning sentence was last said from: two features this close are one thing to say. 80 m: a camera
+ * listed twice a little apart; it was 300 m, and the second of two cameras of one limit 200 m apart on a town road
+ * was never said (review, 2026-11-01).
+ */
 const spokenAt = new Map<string, { at: LonLat; t: number }>();
-const SAME_PLACE_M = 300;
+const SAME_PLACE_M = 80;
 /** Where the server was last asked what is near; asked again 500 m on or after 30 s. */
 let watchedAt: { at: LonLat; t: number } | null = null;
 /** Parked with the page open (still.ts): the polls that follow the car wait until it moves. */
@@ -2813,7 +2854,7 @@ function sentencesOf(g: Guide, next: Guide | null, alongM: number): string[] {
     out.add(due.text);
     if (due.fallback) out.add(due.fallback);
     if (bent) out.add(turnPhrase(bent, due.rung));
-    if (motorway && guide.junctionNames && NAMED_RUNGS.includes(due.rung)) { const named = namedFor(g, m, due.rung); if (named) out.add(named); }
+    if (guide.junctionNames && (motorway ? NAMED_RUNGS.includes(due.rung) : due.rung === TOWN_NAMED_RUNG)) { const named = namedFor(g, m, due.rung, motorway); if (named) out.add(named); }
     if (due.rung === 1000) {
       const colour = lineColour(g, m);
       if (colour) out.add(GUIDE_LINES[colour]);
@@ -2911,6 +2952,9 @@ setInterval(() => {
   if (!w || !r || performance.now() - roadCheckedAt < 600) return;
   holdAhead(w);
   checkRoad(w, r, tracker.frame()?.speedMps ?? null);
+  // The page covered by another (the frame loop stopped with it): the turns are still said, as the warnings are.
+  // Only the camera warnings came through on a covered page (review, 2026-11-01).
+  if (document.visibilityState === "hidden") { const shown = tracker.frame(); if (shown) showTurn(shown); }
 }, 500);
 
 // ---- 안전운전 모드: no route, and the road ahead watched all the same (safe-drive.ts) ----
@@ -3689,7 +3733,6 @@ map.once("load", () => void refreshAlerts(here()));
 const guide = loadGuide();
 /** The screen's theme where the car is: the lane lines' colour, and the lit buildings, follow it. */
 function themed(day: boolean) {
-  hdLayer?.setDay(day);
   nightCity?.setNight(!day);
 }
 /** 어린이 보호구역 회피 as last applied: a change asks the route sheet's ways again. */
@@ -3711,7 +3754,6 @@ function applyGuide() {
   document.body.classList.toggle("layout-mini", guide.layout === "mini");
   document.body.classList.toggle("dest-left", guide.destAt !== "top");
   themed(applyTheme(guide.theme, here()));
-  hdLayer?.refresh();
   nightCity?.refresh();
   // 화면 크기: everything over the map scaled together (style.css zooms the overlays by --ui).
   document.documentElement.style.setProperty("--ui", String(guide.uiScale || 1));
@@ -3740,8 +3782,6 @@ const cameraLayer: CameraLayer | null = new CameraLayer(map, (f, ahead) => {
 }, log);
 // A light turning to flashing at midnight turns amber on the map; the screen turns dark at dusk.
 setInterval(() => { cameraLayer?.redraw(); themed(applyTheme(guide.theme, here())); }, 60_000);
-// 정밀도로지도's lanes on the ground, close in; white by night, grey on a light day map.
-const hdLayer: HdLayer | null = new HdLayer(map, () => guide.hdLanes);
 // 야경: the buildings lit by night, only in the tilted view and where the driver left it on.
 nightCity = new NightCity(map, () => guide.nightCity && view === "3d" && base !== "osm", showBuildings);
 themed(applyTheme(guide.theme, loadLast() ?? HOME));

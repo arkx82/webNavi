@@ -49,6 +49,8 @@ export class Voice {
   private speaking = false;
   /** The sentence playing, held so no browser collects it half-way. */
   private playing: AudioBufferSourceNode | null = null;
+  /** What is being said now: a turn, and when its sound ends — a turn queued behind a warning may cut it short. */
+  private current: { turn: boolean; endsAt: number } | null = null;
   /**
    * Told how each sentence went: how long it waited before it began, how much of it played, its length, and how much
    * of the wait was its sound coming (not yet in the browser's cache: a slow link) rather than others said first.
@@ -156,6 +158,11 @@ export class Voice {
     const firstWarning = opts.turn ? this.queue.findIndex((q) => !q.turn) : -1;
     if (firstWarning >= 0) this.queue.splice(firstWarning, 0, item);
     else this.queue.push(item);
+    // A warning being said that would run past the turn's moment is cut short for it: "잠시 후 좌회전" queued at 130 m
+    // behind a camera sentence at 70 km/h was dropped as late nearly every time (review, 2026-11-01).
+    if (item.turn && this.current && !this.current.turn && this.current.endsAt + CUT_IN_MARGIN_MS > item.until) {
+      try { this.playing?.stop(); } catch { /* not started, or over */ }
+    }
     void this.buffer(text).catch(() => {}); // fetch early, play in turn
     if (!this.speaking) void this.next();
   }
@@ -315,9 +322,11 @@ export class Voice {
           finish();
         }, buffer.duration * 1000 + 2000);
         this.playing = source;
+        this.current = { turn: item.turn, endsAt: Date.now() + buffer.duration * 1000 };
         source.start();
       });
       this.playing = null;
+      this.current = null;
       this.onSaid(text, this.context.currentTime - began, buffer.duration, (Date.now() - item.at) / 1000 - buffer.duration, fetchedS);
     } catch (e) {
       this.onError(`${text}: ${(e as Error).message}`);
@@ -377,6 +386,8 @@ export class Voice {
  * 안내 음량 goes this far up (300 %): some found the voice too quiet over the road (2026-10-14), and at 200 % still
  * (a tester, 2026-10-15). The limiter after the knob holds what this pushes past full scale.
  */
+/** A warning cut for a turn only where the turn's moment would pass before the warning ends, with this much to spare. */
+const CUT_IN_MARGIN_MS = 500;
 export const MAX_VOLUME = 3;
 /** The chime's peak at 100 %: its held part's RMS (0.28 / √2) the voice's TARGET_RMS. */
 const CHIME_PEAK = 0.28;
