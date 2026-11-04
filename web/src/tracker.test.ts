@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Line, metres, offset } from "./geo";
-import { OFF_AGAIN_S, OFF_FAR_M, OFF_M, OFF_S, LOST_S, START_LEAVE_M, Tracker, type ReckonEnd } from "./tracker";
+import { OFF_AGAIN_S, OFF_FAR_M, OFF_M, OFF_S, LOST_S, START_LEAVE_M, THAW_MS, Tracker, type ReckonEnd } from "./tracker";
 import { CarTrack } from "./car-track";
 import type { Fix } from "./gps";
 import type { LonLat, Route } from "./types";
@@ -616,4 +616,35 @@ test("out of a reckoning that ran ahead, the car slows to a stand at most, never
   // Behind the fixes (to catch up, faster forward) or too far ahead to slide: as before.
   assert.equal(slideSeconds(-39, 7.2), SNAP_S);
   assert.equal(slideSeconds(271, 20), SNAP_S);
+});
+
+test("the page held up 10 s with the fixes still coming as it stopped: not reckoned on at the last speed, and the fix it missed taken", () => {
+  const tracker = new Tracker();
+  tracker.setRoute(route);
+  const car = new CarTrack();
+  tracker.car = car;
+  // 10 m/s at 300 m, the fixes ten a second and the car's speed every 0.25 s, a frame every 16 ms; then the page stands
+  // still for 10.6 s (no frame, no fix, no sample) while the car brakes to a light 35 m on (hantwo, 2026-11-03).
+  let t = 0;
+  for (; t <= 3000; t += 16) {
+    if (t % 100 < 16) tracker.feed(fix(offset(start, 0, 270 + 10 * (t / 1000)), t, { speed: 10 }), t);
+    if (t % 250 < 16) car.add({ t, speedMps: 10 }, t);
+    tracker.frame(t);
+  }
+  const before = tracker.frame(t)!.alongM!;
+  t += 10_600;
+  const thawed = tracker.frame(t)!;
+  assert.notEqual(thawed.mode, "reckoning");
+  assert.ok(thawed.alongM! - before < 12, `went ${(thawed.alongM! - before).toFixed(0)} m on with the page held up`);
+  // The fix it missed: the car standing at the light, 35 m on from where it was.
+  tracker.feed(fix(offset(start, 0, before + 35), t + 100, { speed: 0 }), t + 100);
+  for (let k = 0; k < 200; k++) tracker.frame((t += 16));
+  assert.ok(Math.abs(tracker.frame(t)!.alongM! - (before + 35)) < 3, `${tracker.frame(t)!.alongM} against ${before + 35}`);
+  // With no fix after the hold-up (a tunnel begun as the page stopped), the reckoning goes on once THAW_MS is past.
+  const tunnel = new Tracker();
+  tunnel.setRoute(route);
+  tunnel.feed(fix(offset(start, 0, 300), 1000, { speed: 10 }), 1000);
+  tunnel.frame(1000);
+  assert.notEqual(tunnel.frame(11_600)!.mode, "reckoning");
+  assert.equal(tunnel.frame(11_600 + THAW_MS + 100)!.mode, "reckoning");
 });

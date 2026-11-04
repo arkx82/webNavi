@@ -189,6 +189,28 @@ const longTasks = { n: 0, ms: 0 };
 try {
   new PerformanceObserver((l) => { for (const e of l.getEntries()) { longTasks.n++; longTasks.ms += e.duration; } }).observe({ type: "longtask", buffered: false });
 } catch { /* no long tasks here */ }
+/**
+ * A frame held up a second or more, and by what: the page stood still 3–44 s while driving, five times in hantwo's
+ * logs (10-22 and 10-29 a minute into the drive home, 11-03 at a left turn — the car reckoned 70 m past the light it
+ * stood at), and the long tasks' count says nothing of whose they were. The Long Animation Frames API names each
+ * script in the frame (how it was called, its function, file and place) and the time the layout took.
+ */
+const LONG_FRAME_LOG_MS = 1000;
+type FrameScript = { invoker?: string; sourceFunctionName?: string; sourceURL?: string; sourceCharPosition?: number; duration: number; forcedStyleAndLayoutDuration?: number };
+type LongFrame = PerformanceEntry & { blockingDuration?: number; renderStart?: number; styleAndLayoutStart?: number; scripts?: FrameScript[] };
+try {
+  new PerformanceObserver((l) => {
+    for (const e of l.getEntries() as LongFrame[]) {
+      if (e.duration < LONG_FRAME_LOG_MS) continue;
+      const end = e.startTime + e.duration;
+      const layout = e.styleAndLayoutStart ? end - e.styleAndLayoutStart : 0;
+      const render = e.renderStart ? end - e.renderStart : 0;
+      const scripts = [...(e.scripts ?? [])].sort((a, b) => b.duration - a.duration).slice(0, 3)
+        .map((s) => `${s.invoker ?? "?"} ${s.sourceFunctionName || "(이름 없음)"}@${(s.sourceURL ?? "").split("/").pop()}:${s.sourceCharPosition ?? "?"} ${Math.round(s.duration)} ms${s.forcedStyleAndLayoutDuration ? ` (강제 레이아웃 ${Math.round(s.forcedStyleAndLayoutDuration)} ms)` : ""}`);
+      log(`긴 프레임 ${Math.round(e.duration)} ms (막힘 ${Math.round(e.blockingDuration ?? 0)} ms · 그리기 ${Math.round(render)} ms · 레이아웃 ${Math.round(layout)} ms) · ${scripts.join(" · ") || "스크립트 없음"}`);
+    }
+  }).observe({ type: "long-animation-frame", buffered: false });
+} catch { /* no long animation frames here */ }
 /** The map's tiles held, by source (loaded + kept out of view): what grows on the GPU side, which the heap never shows. */
 function tilesHeld(): string {
   try {
@@ -3041,6 +3063,8 @@ const KAKAO_CARD_ID = "kakao";
 const KAKAO_CAMERAS = new Set<Kind>(["speed", "signal", "speed-signal", "section-start", "section-end", "school"]);
 let kakaoOn = false;
 let kakaoOffSaid = false;
+/** The first answer is logged whatever it is: a slot never given made no line at all (hantwo, 2026-11-01..04). */
+let kakaoHeard = false;
 /** 카카오's camera and 구간 단속 let go: the feature off, the slot lost, the drive over. */
 function kakaoClear() {
   kakaoCard = null;
@@ -3087,7 +3111,8 @@ function kakaoTick() {
         log(l.error ? `카카오 유도선 안 됨: ${l.error}` : `카카오 유도선 ${l.lines.length}곳 (안내 지점 ${l.total}): ${l.lines.map((x) => `${x.name || x.rg} ${x.colour}`).join(", ") || "없음"}`);
       }
       const on = r.slot != null;
-      if (on !== kakaoOn) {
+      if (on !== kakaoOn || !kakaoHeard) {
+        kakaoHeard = true;
         kakaoOn = on;
         // The server is off, or busy, or the slot was let go for a gap in the fixes (a tunnel): nothing of 카카오's
         // stays up without it. "off" is said once (a server without emulators would say it every second).

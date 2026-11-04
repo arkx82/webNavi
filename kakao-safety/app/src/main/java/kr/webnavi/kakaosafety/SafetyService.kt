@@ -38,6 +38,9 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
+/** The app's state is told the server again this often, for a server that has restarted since. */
+private const val STATUS_AGAIN_MS = 60_000L
+
 /**
  * One car's 카카오 안전운전, on one emulator (kakao-safety/README.md). The nav server hands this slot a car's fixes; the
  * container's feeder.py puts them in as this device's GPS, the 내비 SDK runs its no-destination 안전운전 over them, and what it would say of a camera
@@ -59,6 +62,9 @@ class SafetyService : Service(), KNGuidance_SafetyGuideDelegate, KNGuidance_Loca
     private var latest: List<KNSafety> = emptyList()
     /** The last trip asked of this slot (its id), so that it is asked of 카카오 once. */
     private var tripId = ""
+    /** The state last told the server, and when: told again each STATUS_AGAIN_MS. */
+    private var told: Pair<String, String>? = null
+    private var toldAt = 0L
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -115,6 +121,9 @@ class SafetyService : Service(), KNGuidance_SafetyGuideDelegate, KNGuidance_Loca
             if (active && initState == "ok" && !guiding) startGuidance()
             if (!active && guiding && now - inactiveSince > 30_000) stopGuidance()
             j.optJSONObject("trip")?.let { t -> if (initState == "ok" && t.optString("id") != tripId) lines(t) }
+            // nav restarted (a deploy) knows nothing of this slot but that it asks: "ready" was told once, at
+            // initialisation, and the slot was never given to a car again (2026-11-01 to 11-04, every drive).
+            told?.let { (state, detail) -> if (now - toldAt > STATUS_AGAIN_MS) post("status", JSONObject().put("state", state).put("detail", detail)).also { toldAt = now } }
         }
     }
 
@@ -279,6 +288,8 @@ class SafetyService : Service(), KNGuidance_SafetyGuideDelegate, KNGuidance_Loca
 
     private fun status(state: String, detail: String) {
         Log.i("KakaoSafety", "slot $slot $state: $detail")
+        told = state to detail
+        toldAt = SystemClock.elapsedRealtime()
         post("status", JSONObject().put("state", state).put("detail", detail))
     }
 

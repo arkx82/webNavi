@@ -41,6 +41,14 @@ export const OFF_FAR_ACC_M = 25;
 export const OFF_AGAIN_S = 6;
 export const LOST_S = 2;
 export const LOST_ACC_M = 50;
+/**
+ * A frame this long after the one before is the page held up (a long task), not the fixes lost: if they were still
+ * coming as it stopped, the one it missed comes a moment after, and no reckoning is made for THAW_MS waiting for it.
+ * Reckoned at once at the speed the car last had, the 10 s the page stood still at a red light took the car 104 m on
+ * and round the corner, and the fix that came 0.1 s later put it 69 m back (hantwo, 2026-11-03).
+ */
+export const FROZEN_MS = 5_000;
+export const THAW_MS = 1_500;
 export const SNAP_S = 1.5;
 /** The longest the slide out of a reckoning takes: its length grows with the miss, so the speed never turns round. */
 export const SNAP_MAX_S = 4;
@@ -189,6 +197,8 @@ export class Tracker {
   private shownAlong: number | null = null;
   /** When the last frame was drawn: the car on the road moves by the time since, at its speed. */
   private lastFrameAt = 0;
+  /** Out of a page held up with the fixes coming as it stopped: no reckoning until then (FROZEN_MS). */
+  private thawUntil = 0;
 
   private speedMps = 0;
   /**
@@ -445,7 +455,8 @@ export class Tracker {
     if (!this.lastFix || !this.glideTo || !this.glideFrom) return null;
     let mode: Mode = "gps";
     const lostForS = (now - this.lastFixAt) / 1000;
-    const lost = lostForS > LOST_S || this.lastFix.accM > LOST_ACC_M;
+    if (this.lastFrameAt && now - this.lastFrameAt > FROZEN_MS && this.lastFrameAt - this.lastFixAt <= LOST_S * 1000) this.thawUntil = now + THAW_MS;
+    const lost = now >= this.thawUntil && (lostForS > LOST_S || this.lastFix.accM > LOST_ACC_M);
     // The car's own word on the way it went since the last fix, while it streams: then a car that went in slowly,
     // or stands in a jam inside, is placed by what it did.
     const wallNow = this.fixWall + (now - this.fixPerf);

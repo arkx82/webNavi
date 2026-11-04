@@ -22,6 +22,11 @@ serial() { echo "emulator-$((5552 + 2 * $1))"; }
 boot() {
   local n=$1 s; s=$(serial "$n")
   [ -d "$ANDROID_AVD_HOME/slot$n.avd" ] || echo no | avdmanager create avd -n "slot$n" -k "$SYSTEM_IMAGE" -d pixel_5 --force >/dev/null
+  # Once no emulator of this slot runs (one just killed given ten seconds to go), the locks an emulator that died left
+  # behind are stale. Kept, every boot after stopped at "Running multiple emulators with the same AVD" (slot 3,
+  # 2026-11-01 to 11-04).
+  for _ in 1 2 3 4 5 6 7 8 9 10; do pgrep -f -- "-avd slot$n " >/dev/null || break; sleep 1; done
+  rm -f "$ANDROID_AVD_HOME/slot$n.avd/"*.lock
   log "slot $n: booting $s"
   emulator -avd "slot$n" -port $((5552 + 2 * n)) -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect \
     -memory 2048 -cores 2 -no-snapshot -dns-server 1.1.1.1,8.8.8.8 >"/tmp/emu$n.log" 2>&1 &
