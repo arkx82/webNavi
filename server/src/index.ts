@@ -1,4 +1,5 @@
 import Fastify, { type FastifyRequest } from "fastify";
+import { ROUTE_MAX_M, inKorea, pathM } from "./lonlat.js";
 import { setDefaultAutoSelectFamilyAttemptTimeout } from "node:net";
 import fastifyStatic from "@fastify/static";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
@@ -331,8 +332,7 @@ app.get<{ Querystring: { at: string; r?: string } }>("/api/road/incidents", asyn
 const limits = new SpeedLimits(settings.reader("tmapAppKey"), () => env.KOREA_OSRM_URL, join(workDir, "nodelink", "links.db"), (m) => app.log.info(m));
 app.post<{ Body: { path?: unknown } }>("/api/road/limits", { bodyLimit: 4 * 1024 * 1024 }, async (request, reply) => {
   const raw = request.body?.path;
-  const ok = (p: unknown): p is LimitLonLat => Array.isArray(p) && p.length === 2 && p.every((v) => typeof v === "number" && Number.isFinite(v));
-  if (!Array.isArray(raw) || raw.length < 2 || raw.length > 60_000 || !raw.every(ok)) return reply.code(400).send({ error: "path is [[lon,lat],…]" });
+  if (!Array.isArray(raw) || raw.length < 2 || raw.length > 60_000 || !raw.every(inKorea) || pathM(raw) > ROUTE_MAX_M) return reply.code(400).send({ error: "path is [[lon,lat],…] in Korea" });
   return limits.alongRoute(raw as LimitLonLat[]);
 });
 app.get<{ Querystring: { at?: string; deg?: string } }>("/api/road/limit", async (request, reply) => {
@@ -363,6 +363,9 @@ app.get<{ Querystring: { at?: string; deg?: string; m?: string } }>("/api/road/a
 // KAKAO_SLOTS unset is 3, as compose's kakao service takes it: the two must agree, or the emulators ask for slots there are not.
 const kakao = new KakaoHub(env.KAKAO_SLOTS == null ? 3 : Number(env.KAKAO_SLOTS) || 0, settings.reader("kakaoNativeKey"), Date.now, (m) => app.log.info(m));
 const kakaoApp = (request: FastifyRequest) => {
+  // From the emulators' container only, on the compose network: never through the tunnel (Cloudflare's header on it),
+  // where the token would be all that stood between the internet and the cars' places on the slots.
+  if (request.headers["cf-connecting-ip"] != null || request.headers["cf-ray"] != null) return false;
   const want = Buffer.from(env.KAKAO_TOKEN ?? ""), got = Buffer.from(String(request.headers["x-kakao-token"] ?? ""));
   return want.length >= 16 && got.length === want.length && timingSafeEqual(want, got);
 };
@@ -597,9 +600,29 @@ app.get("/api/tts/voices", async () => ({
 // A voice just chosen: its fixed sentences made in the background, one at a
 // time and only the missing ones, so the drive after asks nothing new.
 const warming = new Set<string>();
+/**
+ * What each account may have made a day (KST): new sentences — not on disk — and voices warmed. The service is paid
+ * for by the sentence, and nothing but its own budget held an account asking a new one each call, or warming every
+ * voice there is (review, 2026-11-13). A drive's new sentences are its junctions' names: a few dozen.
+ */
+const NEW_SENTENCES_A_DAY = 500;
+const VOICES_WARMED_A_DAY = 3;
+const ttsDay = new Map<string, { sentences: number; voices: Set<string> }>();
+function ttsToday(user: string) {
+  const key = `${user}|${new Date(Date.now() + 9 * 3600_000).toISOString().slice(0, 10)}`;
+  let d = ttsDay.get(key);
+  if (!d) {
+    if (ttsDay.size > 1000) ttsDay.clear();
+    ttsDay.set(key, (d = { sentences: 0, voices: new Set() }));
+  }
+  return d;
+}
 app.get<{ Querystring: { voice?: string } }>("/api/tts/warm", async (request, reply) => {
   if (!speaker.ready) return reply.code(503).send({ error: "tts has no key on this server" });
   const voice = await voiceAsked(request.query.voice);
+  const today = ttsToday(request.user!.name);
+  if (!today.voices.has(voice) && today.voices.size >= VOICES_WARMED_A_DAY) return reply.code(429).send({ error: "목소리는 하루 세 번까지 미리 만듭니다" });
+  today.voices.add(voice);
   if (!warming.has(voice)) {
     warming.add(voice);
     prerender(speaker, voice)
@@ -614,7 +637,13 @@ app.get<{ Querystring: { text: string; voice?: string } }>("/api/tts", async (re
   const text = (request.query.text ?? "").trim().slice(0, 200);
   if (!text) return reply.code(400).send({ error: "text" });
   try {
-    const wav = await speaker.say(text, await voiceAsked(request.query.voice));
+    const voice = await voiceAsked(request.query.voice);
+    if (!speaker.isCached(text, voice)) {
+      const today = ttsToday(request.user!.name);
+      if (today.sentences >= NEW_SENTENCES_A_DAY) return reply.code(429).send({ error: "오늘 새 문장을 다 썼습니다" });
+      today.sentences++;
+    }
+    const wav = await speaker.say(text, voice);
     return reply.header("Content-Type", "audio/wav").header("Cache-Control", "public, max-age=31536000, immutable").send(wav);
   } catch (refused) {
     request.log.warn({ text }, (refused as Error).message);

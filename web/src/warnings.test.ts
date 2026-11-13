@@ -597,3 +597,19 @@ test("a 구간 단속 being measured goes on over a re-route: the new watch, giv
   // Its end is said: the stretch is this one's.
   assert.deepEqual(watch.ahead(0, 2100).map((a) => a.feature.id), ["end"]);
 });
+
+test("a 구간 단속 start left early is not paired with another stretch's end joined partway later, its direction code the same", () => {
+  const p0: LonLat = [127.0, 37.5];
+  const north = (m: number, east = 0) => offset(offset(p0, 0, m), 90, east);
+  const path: LonLat[] = Array.from({ length: 301 }, (_, i) => north(i * 100));
+  const route = { provider: "kakao", distanceM: 30_000, durationS: 1500, path, guides: [], segments: [] } as unknown as Route;
+  const w = new RouteWatch(route);
+  // A's end is 10 km east (the route turns off before it); B's start 8 km behind the end the route joins at 20 km.
+  w.add([
+    { id: "A-start", kind: "section-start", lon: north(2000)[0], lat: north(2000)[1], limit: 100, direction: "1", pair: north(4000, 10_000) },
+    { id: "B-end", kind: "section-end", lon: north(20_000)[0], lat: north(20_000)[1], limit: 80, direction: "1", pair: north(12_000, -3000) },
+  ] as Feature[]);
+  const a = w.sections().find((s) => s.feature.id === "A-start")!;
+  assert.ok(a.endM < 5000, `A ran to ${a.endM}`);
+  assert.equal(w.limitAt(15_000), null);
+});

@@ -1,3 +1,4 @@
+import { osrmDeg } from "../road/ahead.js";
 import { ProviderError, askJson, isMotorwayName, markMotorway, type Congestion, type LonLat, type Route, type RouteProvider, type RouteRequest, type Segment } from "./types.js";
 import type { LinkBook } from "../road/traffic.js";
 import { koreanNumbers } from "../phrases.js";
@@ -92,7 +93,7 @@ export class Osrm implements RouteProvider {
     // On the move, from the road the car is on and the way it goes: without it a re-route on a divided road began
     // on the other carriageway, and the first guide was a U-turn the car then drove past (2026-10-03, 덕릉로).
     // No road that way near the start (a fix in a car park): asked again without.
-    const answer = heading == null ? await ask(url) : await ask(`${url}&bearings=${Math.round(heading)},${BEARING_RANGE_DEG};`).catch((e: unknown) => {
+    const answer = heading == null ? await ask(url) : await ask(`${url}&bearings=${osrmDeg(heading)},${BEARING_RANGE_DEG};`).catch((e: unknown) => {
       if (e instanceof ProviderError && e.status === 400) return ask(url); // OSRM's NoSegment / NoRoute that way
       throw e;
     });

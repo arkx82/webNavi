@@ -21,6 +21,8 @@ export interface CarSource {
 export interface CarListener {
   sample(s: CarSample): void;
   state(state: string): void;
+  /** Its stream ended by the hub (reset): the page opens a new one, asked for afresh. */
+  close?(): void;
 }
 
 /** Kept open this long after the last page goes (a reload, a tunnel's own dropout): not torn down and set up again. */
@@ -92,7 +94,12 @@ export class CarHub {
     this.sources.clear();
     for (const t of this.linger.values()) clearTimeout(t);
     this.linger.clear();
-    for (const set of this.listeners.values()) for (const l of set) l.state("reset");
+    // Every page's stream ended too, not only told: asked for afresh, each is checked again against the account's cars.
+    // Left open, a stream of a car that had gone to another account went on with that account's samples (review,
+    // 2026-11-13).
+    const all = [...this.listeners.values()].flatMap((set) => [...set]);
+    this.listeners.clear();
+    for (const l of all) { l.state("reset"); l.close?.(); }
   }
 
   status(): Record<string, { listeners: number; state: string; lastError: string | null; lastSampleAgoS: number | null }> {

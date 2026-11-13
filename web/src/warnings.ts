@@ -176,6 +176,16 @@ const directionOf = (f: Feature) => (f.direction ?? "").trim().replace(/^0+/, ""
 const SECTION_TWIN_M = 300;
 /** A carried 구간 단속's end camera is the one its start's pair points at: this near the pair's point. */
 const CARRIED_END_M = 100;
+/**
+ * Whether a start and an end are one stretch's, as far as their pairs say: each where the other's pair is, give or take
+ * a twin's distance. The direction code alone (1, 2 or 3, the country over) paired a start left early with another
+ * stretch's end joined partway 18 km on, and the HUD and the start's limit ran on over the roads between (review,
+ * 2026-11-13). Without both pairs, the code is all there is.
+ */
+function pairsWith(start: Feature, end: Feature): boolean {
+  if (!start.pair || !end.pair) return true;
+  return metresBetween(start.pair, [end.lon, end.lat]) <= SECTION_TWIN_M || metresBetween(end.pair, [start.lon, start.lat]) <= SECTION_TWIN_M;
+}
 const metresBetween = (a: LonLat, b: LonLat) => Math.hypot((b[0] - a[0]) * 111_320 * Math.cos(((a[1] + b[1]) / 2) * Math.PI / 180), (b[1] - a[1]) * 111_320);
 /** The limits a zone camera can give its zone. */
 const ZONE_LIMITS = new Set([20, 30, 40, 50, 60]);
@@ -202,7 +212,10 @@ export class RouteWatch {
   private line: Line;
   /** Every feature on the route, sorted by where it is along it. */
   private onRoute: Placed[] = [];
-  /** The zone cameras left out as the other carriageway's: still a sign their 보호구역 is this road's (zoneHere). */
+  /**
+   * The cameras left out as the other carriageway's: a zone's still a sign its 보호구역 is this road's (zoneHere), and
+   * any of them what 카카오's same camera is (main.ts kakaoSay: 카카오, given no course, tells the other way's too).
+   */
   private otherWay: { feature: Feature; alongM: number }[] = [];
   /**
    * @param spoken feature id → the rungs already spoken. Handed on from the
@@ -278,7 +291,7 @@ export class RouteWatch {
     // way's (2026-10-11); one put on the cross street alone says nothing either way, and is kept.
     const runs = this.runsWith(f, p);
     if (runs === false && !paired) {
-      if (f.zone) this.otherWay.push({ feature: f, alongM: p.alongM });
+      this.otherWay.push({ feature: f, alongM: p.alongM });
       return;
     }
     // One camera, one warning: a 신호·과속 camera the lists give as two rows (a speed one and a signal one,
@@ -440,7 +453,7 @@ export class RouteWatch {
     for (const end of cams) {
       if (end.feature.kind !== "section-end") continue;
       const start = cams.filter((s) => s.feature.kind === "section-start" && !used.has(s) && directionOf(s.feature) === directionOf(end.feature)
-        && s.alongM < end.alongM && end.alongM - s.alongM <= SECTION_MAX_M).pop();
+        && s.alongM < end.alongM && end.alongM - s.alongM <= SECTION_MAX_M && pairsWith(s.feature, end.feature)).pop();
       if (!start) continue;
       used.add(start); used.add(end);
       sections.push({ feature: start.feature, alongM: start.alongM, endM: end.alongM });
@@ -636,6 +649,12 @@ export class RouteWatch {
   }
 
   /** The features this watch placed within [m] of [at]: whether our own lists know a camera 카카오 tells of. */
+  /** The cameras within [m] of [at] left out as the other carriageway's. */
+  otherWayNear(at: LonLat, m: number): Feature[] {
+    const k = 111_320 * Math.cos((at[1] * Math.PI) / 180);
+    return this.otherWay.map((p) => p.feature).filter((f) => Math.hypot((f.lon - at[0]) * k, (f.lat - at[1]) * 111_320) <= m);
+  }
+
   near(at: LonLat, m: number): Feature[] {
     const k = 111_320 * Math.cos((at[1] * Math.PI) / 180);
     return this.onRoute.map((p) => p.feature).filter((f) => Math.hypot((f.lon - at[0]) * k, (f.lat - at[1]) * 111_320) <= m);

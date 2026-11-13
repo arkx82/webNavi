@@ -86,3 +86,18 @@ test("a car's route goes to its slot's app once; the app's coloured lines come b
   hub.carFix("a", fix);
   assert.equal((await hub.appAsk(1, 0, 0))?.trip, undefined);
 });
+
+test("a car whose slot's app dies or falls out of ready is moved to one that serves, not held on it for nothing", () => {
+  let now = 0;
+  const hub = new KakaoHub(2, () => "key", () => now);
+  ready(hub, 1); ready(hub, 2);
+  assert.equal(hub.carFix("a", fix).slot, 1);
+  // Slot 1's app silent five minutes while the car's fixes go on each second; slot 2's still asking.
+  for (let s = 0; s < 300; s++) { now += 1000; if (s % 20 === 0) void hub.appAsk(2, 0, 0); hub.carFix("a", fix); }
+  assert.equal(hub.carFix("a", fix).slot, 2);
+  // Slot 2's SDK in error: back to 1 once it is up and ready again, none meanwhile.
+  hub.appEvent(2, { kind: "status", state: "error" });
+  assert.deepEqual([hub.carFix("a", fix).slot, hub.carFix("a", fix).why], [null, "down"]);
+  ready(hub, 1);
+  assert.equal(hub.carFix("a", fix).slot, 1);
+});

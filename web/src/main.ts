@@ -11,7 +11,7 @@ import { CarTrack } from "./car-track";
 import { DriveTrace } from "./drive-trace";
 import { RouteLayer, casingPx } from "./route-layer";
 import { OFF_M, Tracker, type Shown } from "./tracker";
-import { Line, bearing, lerpAngle, metres, offset } from "./geo";
+import { Line, angleBetween, bearing, lerpAngle, metres, offset } from "./geo";
 import { TrafficBar } from "./traffic-bar";
 import { arrowSvg, fromBend, maneuverOf, shapedOf, type Bend, type Maneuver } from "./maneuver";
 import { lazy, type MusicSource, type NowPlaying, type Playlist } from "./music/source";
@@ -21,7 +21,7 @@ import { Voice } from "./voice";
 import { RouteWatch, SECTION_MAX_M, isRear, phraseFor, type Ahead, type Feature, type Kind } from "./warnings";
 import { Notes, incidentNote, popupNote, restNote, schoolNote, type Note } from "./notes";
 import { CameraLayer } from "./camera-layer";
-import { KAKAO_SAME_M, behindCar, kakaoCameraStep, kakaoCardShown, otherWayCamera, type KakaoCamera } from "./kakao-camera";
+import { KAKAO_SAME_M, behindCar, kakaoCameraStep, kakaoCardShown, otherWayCamera, stillAway, type KakaoCamera } from "./kakao-camera";
 import { loadDrive, loadLast, saveDrive, saveLast, worthResuming } from "./resume";
 import { applyTheme, screenMode, watchScreenMode } from "./theme";
 import { ZoneLayer } from "./zone-layer";
@@ -808,7 +808,7 @@ function followCar(at: LonLat, speedMps = 0) {
   // MapLibre's) redrawn 60 times a second for as long as the light was red. Under 1 m/s, settled within 30 cm is still.
   const moving = speedMps > 1 || returning;
   if (!moving && metres(before.lng, before.lat, center[0], center[1]) < 0.3 && Math.abs(map.getZoom() - camera.zoom) < 0.003
-    && Math.abs(lerpAngle(map.getBearing(), camera.bearing, 1) - map.getBearing()) < 0.1 && Math.abs(map.getPitch() - camera.pitch) < 0.1) return;
+    && angleBetween(map.getBearing(), camera.bearing) < 0.1 && Math.abs(map.getPitch() - camera.pitch) < 0.1) return;
   map.jumpTo({ center, ...camera });
 }
 
@@ -1605,11 +1605,15 @@ async function choose(place: Place) {
 
 /** The place being gone to, as a pin; kept through the drive, gone when it ends. */
 let destPin: maplibregl.Marker | null = null;
-function showDestination(place: Place) {
+/** The pin on [place]: the place looked at, or the one driven to. */
+function pinPlace(place: Place) {
   destPin?.remove();
   const dot = document.createElement("div");
   dot.className = "dest-pin";
   destPin = new maplibregl.Marker({ element: dot, anchor: "bottom" }).setLngLat(place.at).addTo(map);
+}
+function showDestination(place: Place) {
+  pinPlace(place);
   setFollow(false);
   touchedAt = Date.now();
   // Into the free part of the screen, beside the panel (an offset, as for the 주변 places).
@@ -1620,8 +1624,9 @@ function showDestination(place: Place) {
 el("pv-find").addEventListener("click", async () => {
   el("pv-find").hidden = true;
   el("pv-msg").textContent = "경로 찾는 중…";
-  if (await fetchOffers()) el("go-row").hidden = false;
-  else el("pv-find").hidden = false;
+  const found = await fetchOffers();
+  if (found) el("go-row").hidden = false;
+  else if (found === false) el("pv-find").hidden = false;
 });
 
 /**
@@ -1631,13 +1636,19 @@ el("pv-find").addEventListener("click", async () => {
  */
 const OWN_ROUTE = new URLSearchParams(location.search).has("debug");
 
-async function fetchOffers(): Promise<boolean> {
+/** Each ask for the cards, by number: an answer is used only while its ask is the last, and the cards still open. */
+let offersAsked = 0;
+/** The ways to [goal] onto the cards: true with some, false with none, null for an answer no longer wanted. */
+async function fetchOffers(): Promise<boolean | null> {
   if (!goal) return false;
   const to = goal;
+  const asked = ++offersAsked;
   try {
     const answer = await api.routes(here(), goal.at);
-    // Another place was chosen while the ways were found: these are not its ways (koreaLater has the same guard).
-    if (goal !== to) return false;
+    // Another place was chosen while the ways were found (koreaLater has the same guard), asked again (무료도로 on and
+    // off), or the cards closed (a re-route back to the drive): not these. Taken, a late answer threw the drive's map
+    // out to the whole ways, the lines of routes not driven left on it (review, 2026-11-13).
+    if (goal !== to || asked !== offersAsked || el("s-preview").hidden) return null;
     for (const e of answer.errors) log(`경로 실패 ${e}`);
     if (answer.routes.length === 0) throw new Error(answer.errors.join("; ") || "경로 없음");
     offers = byOptions(answer.routes.filter((r) => OWN_ROUTE || r.provider !== "korea"));
@@ -1658,6 +1669,7 @@ async function fetchOffers(): Promise<boolean> {
   } catch (e) {
     // A provider's own words ("osrm: fetch failed") are for the 진단 log, not the driver: a way that did not come is not
     // shown at all, and when none came the sheet says so plainly — keeping the ways it had, if it had some.
+    if (goal !== to || asked !== offersAsked || el("s-preview").hidden) return null;
     log(`경로 없음 ${(e as Error).message}`);
     el("pv-msg").textContent = offers.length ? "경로를 다시 찾지 못했습니다 — 이전 경로입니다" : "경로를 찾지 못했습니다. 잠시 후 다시 시도해 주세요";
     return false;
@@ -1760,9 +1772,11 @@ el("go").addEventListener("click", () => {
   if (chosen) startDrive(chosen);
 });
 el("pv-close").addEventListener("click", () => {
+  offersAsked++;
   if (route) {
-    // Back to the drive as it was, to where it was going.
+    // Back to the drive as it was, to where it was going — its pin too: another place looked at had moved it there.
     goal = drivingTo;
+    if (drivingTo) pinPlace(drivingTo);
     routeLayer.show(route);
     showScreen("drive");
     setFollow(true);
@@ -1787,6 +1801,10 @@ el("pv-close").addEventListener("click", () => {
  * Nothing said or held about the drive is touched.
  */
 function relined(r: Route) {
+  // The 구간 단속 being measured, carried onto the new watch as startDrive carries it over a re-route: a re-route's line
+  // is put onto the lanes seconds later, and the watch made again without it took the stretch's end for one joined
+  // partway (review, 2026-11-13).
+  const carried = watch && route === r ? watch.currentSection(tracker.frame()?.alongM ?? -1)?.feature ?? null : null;
   routeLayer.show(r);
   tracker.setRoute(r);
   trace.route(r);
@@ -1796,7 +1814,7 @@ function relined(r: Route) {
   // The road watch measures along the line too: made again on the new one (what was said is kept), its features
   // asked for again at once, so the bands — 구간 단속, the school zones — are drawn along the line as it is now.
   if (watch && route === r) {
-    watch = new RouteWatch(r, () => ({ wants: (k) => wants(guide, k), shows: (k) => shows(guide, k), cameraFromM: guide.cameraFromM }), warningsSaid);
+    watch = new RouteWatch(r, () => ({ wants: (k) => wants(guide, k), shows: (k) => shows(guide, k), cameraFromM: guide.cameraFromM }), warningsSaid, carried);
     // Everything the old watch was given is asked for again for this one: the features round the car, the rest
     // areas, the incidents, the stretch held ahead. Left as they were, a drive re-routed had no rest-area card for
     // the rest of the way (the list came to the watch before, and the guard kept it from the new one).
@@ -1840,6 +1858,9 @@ function startDrive(r: Route) {
   laneLine(r);
   chosen = r;
   drivingTo = goal;
+  // The pin where the drive goes: a drive resumed (not chosen from the cards) had none, and a re-route left it on
+  // another place looked at meanwhile (review, 2026-11-13).
+  if (drivingTo) pinPlace(drivingTo);
   routeLayer.show(route);
   tracker.setRoute(route);
   trace.route(route);
@@ -2173,6 +2194,8 @@ const turnKey = (g: Guide, m: Maneuver) => `${junction(g.at)}:${m}`;
 let arrived = false;
 const END_AFTER_ARRIVE_MS = 10_000;
 /** The drive's end: said, shown, and (도착하면 안내 종료) back to the search screen once it has been said. */
+/** This near the route's end, with only its arrival ahead, the car has arrived. */
+const ARRIVED_M = 30;
 function arriveHere() {
   if (arrived || !route) return;
   arrived = true;
@@ -2255,10 +2278,12 @@ function showTurn(shown: Shown) {
     put("eta-time", arrivalAt(shown.remainingS));
     put("eta-left", `${minutes(shown.remainingS)} · ${km(shown.remainingM)} · ${NAMES[route.provider]}`);
   }
-  if (!shown.nextGuide) {
-    if (shown.remainingM != null && shown.remainingM < 30 && !arrived) arriveHere();
-    return;
-  }
+  // Within 30 m of the end with nothing but the arrival ahead: arrived. Asked only with no guide left, it came within
+  // the last 5 m (the arrival guide stays "next" until then), and a car stopped 6–30 m short was never told, nor its
+  // drive ended (review, 2026-11-13).
+  const arriving = !shown.nextGuide || maneuverFor(shown.nextGuide.guide) === "arrive";
+  if (arriving && shown.remainingM != null && shown.remainingM < ARRIVED_M && !arrived) arriveHere();
+  if (!shown.nextGuide) return;
   // Arrived (off the route near the end, before its last guide): the panel says 도착 and nothing more is said —
   // "잠시 후 목적지에 도착합니다" came two seconds after "목적지에 도착했습니다" (2026-10-14, hantwo).
   if (arrived) return;
@@ -3093,21 +3118,40 @@ function kakaoClear() {
   if (!route && !safeOn) { showLimit(null, tracker.frame()?.speedMps ?? null); showSectionHud(tracker.frame()); }
 }
 let kakaoSending = false;
+const KAKAO_ASK_MS = 5_000;
 let kakaoMovedAt = 0;
 /** What was said of each, by "id:rung": 카카오 tells a camera at its own distances, some our same rung. */
-const kakaoSaid = new Set<string>();
+const kakaoSaid = new Map<string, { t: number; at: LonLat }>();
+/**
+ * What was said of 카카오's camera is forgotten once the car is this far from it, or this long after (safe-drive.ts's
+ * rule for ours): cleared only by a new route's drive, it stayed said for days on a page driven without one — the
+ * camera told on Monday's commute unsaid from Tuesday on (review, 2026-11-13).
+ */
+const KAKAO_SAID_FORGET_M = 2000;
+const KAKAO_SAID_FORGET_MS = 15 * 60_000;
+function kakaoForget(car: LonLat) {
+  const now = Date.now();
+  for (const [k, s] of kakaoSaid) if (now - s.t > KAKAO_SAID_FORGET_MS || metres(s.at[0], s.at[1], car[0], car[1]) > KAKAO_SAID_FORGET_M) kakaoSaid.delete(k);
+}
 let kakaoCard: (KakaoCamera & { s: KakaoSafety }) | null = null;
 /**
- * 카카오's cameras judged not this car's way (kakaoSay, kakaoWhere), and when: told again on this drive past it, neither
- * said nor shown. For a while only — the same camera is the way home's.
+ * 카카오's cameras the car went away from never having come to them (kakaoWhere): where, the nearest it came, and when.
+ * Told again, neither said nor shown — until the car comes nearer than it was (a U-turn, a bend bringing the road
+ * back), or a while on (the same camera is the way home's).
  */
-const kakaoNotOurs = new Map<number, number>();
+const kakaoNotOurs = new Map<number, { t: number; at: LonLat; nearest: number }>();
 const KAKAO_NOT_OURS_MS = 10 * 60_000;
-function kakaoNotOur(id: number): boolean {
-  const t = kakaoNotOurs.get(id);
-  if (t != null && Date.now() - t < KAKAO_NOT_OURS_MS) return true;
+function kakaoNotOur(id: number, car: LonLat): boolean {
+  const n = kakaoNotOurs.get(id);
+  if (n && Date.now() - n.t < KAKAO_NOT_OURS_MS && stillAway(n.nearest, metres(car[0], car[1], n.at[0], n.at[1]))) return true;
   kakaoNotOurs.delete(id);
   return false;
+}
+/** What was logged of 카카오's tellings left unsaid, by camera and why: once each, not at each of its distances. */
+const kakaoUnsaidLogged = new Set<string>();
+/** Our cameras within [m] of [at]: the map's, and those the route's or 안전운전's watch left out as the other way's. */
+function ourCamerasNear(at: LonLat, m: number): Feature[] {
+  return [...(cameraLayer?.near(at, m) ?? []), ...(watch?.otherWayNear(at, m) ?? []), ...(safe.watch?.otherWayNear(at, m) ?? [])];
 }
 
 function kakaoTick() {
@@ -3133,7 +3177,9 @@ function kakaoTick() {
   const goal = route?.path[route.path.length - 1];
   const trip = tripId && goal ? { id: tripId, goal, have: kakaoLines?.id === tripId } : undefined;
   const body = { lon: f.at[0], lat: f.at[1], speed: f.speedMps, bearing: f.bearing, acc: gps.last?.accM ?? 10, trip };
-  fetch("/api/kakao/fix", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+  // Not left hanging: one ask at a time, and one hung on a weak link (a tunnel) kept 카카오 from the car's fixes till
+  // it ended, its slot let go meanwhile (review, 2026-11-13).
+  fetch("/api/kakao/fix", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(KAKAO_ASK_MS) })
     .then((a) => (a.ok ? a.json() : null))
     .then((r: { slot: number | null; events?: KakaoSafety[]; lines?: { id: string; lines: KakaoLine[]; total: number; error?: string }; why?: string } | null) => {
       if (!r) return;
@@ -3152,11 +3198,14 @@ function kakaoTick() {
         else { if (r.why !== "off" || !kakaoOffSaid) log(`카카오 안전운전 안 됨 (${r.why ?? ""})`); kakaoOffSaid = r.why === "off"; kakaoClear(); }
       }
       for (const e of r.events ?? []) kakaoSay(e, tracker.frame()?.speedMps ?? null);
-      // No watch of ours (no route, 안전운전 off): the camera card is nobody else's to draw.
-      if (!route && !safeOn) showLimit(null, tracker.frame()?.speedMps ?? null);
     })
     .catch(() => undefined)
-    .finally(() => { kakaoSending = false; });
+    .finally(() => {
+      kakaoSending = false;
+      // No watch of ours (no route, 안전운전 off): the camera card is nobody else's to draw — an answer failed too, or
+      // a card passed stayed up for as long as the link was down.
+      if (!route && !safeOn) showLimit(null, tracker.frame()?.speedMps ?? null);
+    });
 }
 setInterval(kakaoTick, 1000);
 
@@ -3230,16 +3279,28 @@ function kakaoRearAt(at: LonLat): boolean {
 }
 
 function kakaoSay(e: KakaoSafety, speedMps: number | null) {
-  // Not this car's: one our lists have on the other carriageway, or one behind the car — 카카오 is given no course
-  // (kakao-camera.ts). Before its 후면 is noted: the other way's rear camera is not the one beside it this way.
+  // A 구간 단속 of 카카오's being driven: its end tells how far it runs — whether or not our list has the end camera
+  // (it may have only the end of a pair, which never opens a section of ours), and before anything below can leave
+  // it unheard: an end taken for behind the car kept the stretch up for 25 km (review, 2026-11-13).
+  if (e.kind === "section-end" && kakaoSec?.entered && e.dist >= 0) {
+    kakaoSec.endOdo = kakaoOdo + e.dist;
+    if (e.limit) kakaoSec.limit = e.limit;
+  }
+  // Not this car's: one our lists have on the other carriageway, one behind the car, or one it went away from —
+  // 카카오 is given no course (kakao-camera.ts). Judged at each telling (the car may have turned round since). Before
+  // its 후면 is noted: the other way's rear camera is not the one beside it this way.
   const f = tracker.frame();
   if (KAKAO_CAMERAS.has(e.kind) && f) {
     const at: LonLat = [e.lon, e.lat];
-    const seen = kakaoNotOur(e.id);
-    const other = seen ? null : otherWayCamera(cameraLayer?.near(at, KAKAO_SAME_M) ?? [], at, f.bearing);
-    const why = seen ? "" : other ? `반대 차로, 우리 ${other.id.split("-").pop()}` : behindCar(f.at, f.bearing, at) ? "차 뒤" : null;
+    const other = otherWayCamera(ourCamerasNear(at, KAKAO_SAME_M), at, f.bearing);
+    const why = other ? `반대 차로, 우리 ${other.id.split("-").pop()}` : kakaoNotOur(e.id, f.at) ? "멀어짐" : behindCar(f.at, f.bearing, at) ? "차 뒤" : null;
     if (why != null) {
-      if (why) { kakaoNotOurs.set(e.id, Date.now()); log(`카카오 경고 (${why}) ${e.code} ${Math.round(e.dist)} m`); }
+      const logged = `${e.id}:${why}`;
+      if (!kakaoUnsaidLogged.has(logged)) {
+        if (kakaoUnsaidLogged.size > 500) kakaoUnsaidLogged.clear();
+        kakaoUnsaidLogged.add(logged);
+        log(`카카오 경고 (${why}) ${e.code} ${Math.round(e.dist)} m`);
+      }
       return;
     }
   }
@@ -3247,12 +3308,6 @@ function kakaoSay(e: KakaoSafety, speedMps: number | null) {
     const now = Date.now();
     while (kakaoRear.length && (now - kakaoRear[0].t > KAKAO_REAR_KEEP_MS || kakaoRear.length > 50)) kakaoRear.shift();
     if (!kakaoRearAt([e.lon, e.lat])) kakaoRear.push({ at: [e.lon, e.lat], t: now });
-  }
-  // A 구간 단속 of 카카오's being driven: its end tells how far it runs — whether or not our list has the end camera
-  // (it may have only the end of a pair, which never opens a section of ours).
-  if (e.kind === "section-end" && kakaoSec?.entered && e.dist >= 0) {
-    kakaoSec.endOdo = kakaoOdo + e.dist;
-    if (e.limit) kakaoSec.limit = e.limit;
   }
   if (kakaoKnown(e)) { log(`카카오 경고 (우리 목록에 있음) ${e.code} ${Math.round(e.dist)} m`); return; }
   // The driver's own settings hold for 카카오's cameras as for ours: a kind turned off is neither said nor shown.
@@ -3273,9 +3328,10 @@ function kakaoSay(e: KakaoSafety, speedMps: number | null) {
   if (e.dist > rungs[0] + 150) return;
   const rung = rungs.reduce((a, b) => (Math.abs(b - e.dist) < Math.abs(a - e.dist) ? b : a));
   const key = `${e.id}:${rung}`;
+  if (f) kakaoForget(f.at);
   if (kakaoSaid.has(key)) return;
-  kakaoSaid.add(key);
-  if (kakaoSaid.size > 500) kakaoSaid.clear();
+  kakaoSaid.set(key, { t: Date.now(), at: [e.lon, e.lat] });
+  if (kakaoSaid.size > 500) kakaoSaid.delete(kakaoSaid.keys().next().value!);
   sayWarning({ feature: { id: `kakao:${e.id}`, kind: e.kind, lon: e.lon, lat: e.lat, limit: e.limit, rear: /Backward/.test(e.code) }, alongM: 0, inM: e.dist, rungM: rung }, speedMps, "카카오 경고");
 }
 
@@ -3290,7 +3346,7 @@ function kakaoWhere(): { d: number; state: ReturnType<typeof kakaoCameraStep>; l
   const d = metres(f.at[0], f.at[1], c.s.lon, c.s.lat);
   const state = kakaoCameraStep(c, d, Date.now());
   if (state === "away") {
-    kakaoNotOurs.set(c.s.id, Date.now());
+    kakaoNotOurs.set(c.s.id, { t: Date.now(), at: [c.s.lon, c.s.lat], nearest: c.nearest });
     log(`카카오 카메라 멀어짐 ${c.s.code}: ${Math.round(c.nearest)} m까지 오고 ${Math.round(d)} m`);
   }
   if (state === "away" || state === "done") { kakaoCard = null; return null; }
@@ -3435,7 +3491,11 @@ async function placeIncidents(w: RouteWatch, at: LonLat) {
 interface Alert { kind: string; level: "주의보" | "경보"; where: "here" | "part"; area: string }
 let alertsNow: Alert[] = [];
 let alertsAt: { at: LonLat; t: number } | null = null;
-/** Each 특보 is said once a page: the voice is for its arrival, the card for its staying. */
+/**
+ * Each 특보 is said once while it is in force: the voice is for its arrival, the card for its staying. Lifted (not in
+ * the answer any more), it is forgotten, said and shown again when one comes another day — kept for the page's life,
+ * Monday's 호우주의보 left Thursday's unsaid (review, 2026-11-13).
+ */
 const alertsSaid = new Set<string>();
 
 async function refreshAlerts(at: LonLat) {
@@ -3448,6 +3508,9 @@ async function refreshAlerts(at: LonLat) {
     const j = (await a.json()) as { alerts?: Alert[]; error?: string };
     if (!a.ok) throw new Error(j.error ?? `${a.status}`);
     alertsNow = j.alerts ?? [];
+    const inForce = new Set(alertsNow.map((al) => `${al.kind}${al.level}`));
+    for (const key of alertsSaid) if (!inForce.has(key)) alertsSaid.delete(key);
+    for (const id of dismissed) if (id.startsWith("alert:") && !inForce.has(id.slice("alert:".length))) dismissed.delete(id);
     for (const al of alertsNow) {
       const key = `${al.kind}${al.level}`;
       if (alertsSaid.has(key) || guide.weatherAlerts !== "voice" || !(ALERT_KINDS as readonly string[]).includes(al.kind)) continue;
@@ -3683,6 +3746,25 @@ function askHere(f: Shown) {
     .finally(() => { hereAsking = false; });
 }
 
+/**
+ * 카카오's 구간 단속 with no end told: the road's own limit (ours, not 카카오's) other than the stretch's for
+ * KAKAO_SEC_OFF_ROAD_M driven, and the car has left the stretch's road — at an exit before the end camera was told,
+ * which held the HUD, the stretch's limit on the sign and the chime for 25 km (review, 2026-11-13).
+ */
+const KAKAO_SEC_OFF_ROAD_M = 1000;
+let kakaoSecOffOdo: number | null = null;
+function kakaoSectionRoad(sign: { kmh: number; src: string } | null) {
+  const k = kakaoSec;
+  if (!k?.entered || k.endOdo != null || sign?.kmh === k.limit) { kakaoSecOffOdo = null; return; }
+  // No sign of the road's own (none known here, or a 보호구역's, a section's of ours): nothing said either way.
+  if (!sign || sign.src === "zone" || sign.src === "section" || sign.src === "kakao") return;
+  kakaoSecOffOdo ??= kakaoOdo;
+  if (kakaoOdo - kakaoSecOffOdo < KAKAO_SEC_OFF_ROAD_M) return;
+  log(`카카오 구간 단속 끝 (도로 제한 ${sign.kmh}, 구간 ${k.limit}, ${Math.round(kakaoOdo - k.startOdo)} m 지나)`);
+  kakaoSec = null;
+  kakaoSecOffOdo = null;
+}
+
 function drawSign() {
   // The demo's screen: a sign as the drive would have one.
   if (demo) return showSign({ kmh: 50, src: "tmap" }, tracker.frame()?.speedMps ?? null);
@@ -3691,8 +3773,10 @@ function drawSign() {
   // 카카오's camera our lists lack (kakaoTick): its limit on the sign from when it is told to 300 m past it, as our own
   // cameras' — over the road's, not over a 보호구역's or a 구간 단속's.
   const kakaoLimit = kakaoWhere()?.limit ?? kakaoSectionBounds()?.limit;
-  const show = (sign: { kmh: number; src: string } | null, speedMps: number | null | undefined) =>
+  const show = (sign: { kmh: number; src: string } | null, speedMps: number | null | undefined) => {
+    kakaoSectionRoad(sign);
     showSign(kakaoLimit && !(sign && (sign.src === "zone" || sign.src === "section")) ? { kmh: kakaoLimit, src: "kakao" } : sign, speedMps);
+  };
   const w = watch;
   if (w && route && !f.offRoute && f.alongM != null && w.hasRoadLimits) {
     const s = w.signLimitAt(f.alongM);
@@ -4708,6 +4792,11 @@ map.on("load", async () => {
   logEnvironment();
   log(`secure=${window.isSecureContext} style=${style}`);
   el("wake").textContent = await keepAwake();
+  // A page hidden lets its wake lock go (the browser's rule): asked again each time it is back, or a phone's screen
+  // went dark mid-drive after a look at another app (review, 2026-11-13).
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") void keepAwake().then((w) => { el("wake").textContent = w; });
+  });
   gps.start();
   try {
     health = await api.health();
@@ -4720,7 +4809,7 @@ map.on("load", async () => {
   void resumeDrive();
   // Whether a page opened (or reloaded into a new version) has its sound without a tap.
   log(`오디오 시작 ${voice.context.state}`);
-  watchVersion(() => ({ driving: !!route || !!sim?.running || !!demo, stillMs: Date.now() - movedAt, untouchedMs: Date.now() - touchedAnyAt, speaking: voice.busy }), log);
+  watchVersion(() => ({ driving: !!route || !!sim?.running || !!demo, stillMs: Date.now() - movedAt, untouchedMs: Date.now() - touchedAnyAt, speaking: voice.busy, playing: now.playing }), log);
 });
 /** Slower than this the car is still (for loading a new version, new-version.ts). */
 const STILL_MPS = 0.5;

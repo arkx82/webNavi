@@ -35,6 +35,8 @@ export interface SectionBounds { id: string; limit: number; startAlongM: number;
 export const GRACE_MS = 8_000;
 /** Past the end by this much, the car is out whatever is reported. */
 const PAST_END_M = 30;
+/** A section's start moved this much is measured on another line (a re-route, the line onto the lanes). */
+const RE_ANCHOR_M = 5;
 /** No target is shown below the limit by more than this: "권장 10" on a motorway is not advice. */
 const TARGET_BELOW_LIMIT_MAX = 40;
 
@@ -53,6 +55,14 @@ export class SectionTracker {
    * stretch "최종 평균 0km/h" (2026-10-04).
    */
   private drivenM = 0;
+  /**
+   * Where along the line the driven metres are counted from, and how many were driven by then: the start's own place
+   * at first, and the car's place whenever the stretch's start moves (a re-route: the stretch carried on the new line
+   * from 0; the line put onto the lanes). Counted from the new start instead, 5 km driven at 120 stood still while the
+   * time ran on, and the average fell to 60 over the rest — "safe" while over (review, 2026-11-13).
+   */
+  private anchorAlongM = 0;
+  private anchorDrivenM = 0;
 
   /**
    * Update tracker state with current vehicle progress.
@@ -90,6 +100,8 @@ export class SectionTracker {
       }
       this.activeId = section.id;
       this.drivenM = 0;
+      this.anchorAlongM = section.startAlongM;
+      this.anchorDrivenM = 0;
       // If entered past the start point (e.g. 300 km/h fast simulation or GPS leap),
       // back-calculate the exact start timestamp so driven distance and elapsed time match
       const offsetM = Math.max(0, alongM - section.startAlongM);
@@ -98,7 +110,12 @@ export class SectionTracker {
       this.startTime = now - backS * 1000;
       justEntered = true;
     }
-    // The bounds as now known, every call (see the file's note); the start time stays.
+    // The bounds as now known, every call (see the file's note); the start time stays. A start moved is another line's
+    // metres: what was driven is held, and counted on from the car's place on the new line.
+    else if (Math.abs(section.startAlongM - this.startAlongM) > RE_ANCHOR_M) {
+      this.anchorAlongM = alongM;
+      this.anchorDrivenM = this.drivenM;
+    }
     this.limit = section.limit;
     this.startAlongM = section.startAlongM;
     this.endAlongM = section.endAlongM;
@@ -108,10 +125,11 @@ export class SectionTracker {
 
   private measure(alongM: number, now: number, overspeedBy: number): ActiveSectionInfo {
     const elapsedS = Math.max(0.05, (now - this.startTime) / 1000);
-    const totalM = Math.max(10, this.endAlongM - this.startAlongM);
-    const drivenM = Math.max(this.drivenM, Math.max(0, Math.min(totalM, alongM - this.startAlongM)));
-    this.drivenM = drivenM;
     const remainM = Math.max(0, this.endAlongM - alongM);
+    const drivenM = Math.max(this.drivenM, this.anchorDrivenM + Math.max(0, alongM - this.anchorAlongM));
+    this.drivenM = drivenM;
+    // The stretch's length as driven and left: its bounds alone are the new line's after a re-route (from 0).
+    const totalM = Math.max(10, drivenM + remainM);
 
     const rawAvg = (drivenM / elapsedS) * 3.6;
     // Accurate average speed supporting high simulation speeds (up to 450 km/h)
@@ -155,5 +173,7 @@ export class SectionTracker {
     this.seenAt = 0;
     this.lastAvgKmh = 0;
     this.drivenM = 0;
+    this.anchorAlongM = 0;
+    this.anchorDrivenM = 0;
   }
 }

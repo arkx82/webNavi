@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { behindCar, kakaoCameraStep, kakaoCardShown, otherWayCamera, otherWays, type KakaoCamera } from "./kakao-camera";
+import { behindCar, kakaoCameraStep, kakaoCardShown, otherWayCamera, otherWays, stillAway, type KakaoCamera } from "./kakao-camera";
 import { offset } from "./geo";
 import type { Feature } from "./warnings";
 import type { LonLat } from "./types";
@@ -19,8 +19,10 @@ test("카카오's camera our lists have on the other carriageway is not this car
   assert.equal(otherWayCamera([g4699], told, 209), null);
   // Two rows at one junction, one each way (구암삼거리 G2808 / G1828): the car's way is there.
   assert.equal(otherWayCamera([g4699, cam(told, 37)], told, 37), null);
-  // On the cross street too, or with no carriageways known: nothing said either way.
-  assert.equal(otherWayCamera([cam(told, 209, 120)], told, 37), null);
+  // On the cross street too: still the other way's, as the route's watch has it. With no carriageways known, or one
+  // across alone: nothing said either way.
+  assert.equal(otherWayCamera([cam(told, 209, 120)], told, 37)?.id, "c209-120");
+  assert.equal(otherWayCamera([cam(told, 120)], told, 37), null);
   assert.equal(otherWayCamera([{ ...g4699, ways: undefined }], told, 37), null);
   // None of ours near it: 카카오's own, said.
   assert.equal(otherWayCamera([cam(offset(told, 0, 200), 209)], told, 37), null);
@@ -59,4 +61,10 @@ test("카카오's camera on the card from 카메라 안내 시작 in, while the 
   // Three minutes and never come to: done.
   const s: KakaoCamera = { since: t0, nearest: Infinity };
   assert.equal(kakaoCameraStep(s, 500, t0 + 181_000), "done");
+});
+
+test("a camera gone away from is not taken again until the car comes nearer to it than it was (a U-turn, a bend)", () => {
+  assert.equal(stillAway(700, 760), true);
+  assert.equal(stillAway(700, 680), true);
+  assert.equal(stillAway(700, 640), false);
 });

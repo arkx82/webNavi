@@ -10,3 +10,9 @@ test("a new version is loaded only with no drive, the car still and the screen l
   assert.ok(!quietEnough({ ...quiet, untouchedMs: 5_000 }), "someone at the screen");
   assert.ok(!quietEnough({ ...quiet, speaking: true }));
 });
+
+test("music playing keeps a new version waiting: a reload would stop it", () => {
+  const q = { driving: false, stillMs: RELOAD_STILL_MS, untouchedMs: RELOAD_UNTOUCHED_MS, speaking: false };
+  assert.equal(quietEnough(q), true);
+  assert.equal(quietEnough({ ...q, playing: true }), false);
+});

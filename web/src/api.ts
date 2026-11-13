@@ -4,10 +4,10 @@ import { threadRoute } from "./thread";
 /** Corners through the painted lanes where 정밀도로지도 has them (quick: only the turns). The whole line goes onto the lanes when a route is driven (main.ts). */
 const onLanes = (r: Route) => threadRoute(r);
 
-async function get<T>(path: string, params: Record<string, string | undefined>): Promise<T> {
+async function get<T>(path: string, params: Record<string, string | undefined>, timeoutMs?: number): Promise<T> {
   const url = new URL(path, location.origin);
   for (const [k, v] of Object.entries(params)) if (v != null) url.searchParams.set(k, v);
-  const answer = await fetch(url);
+  const answer = await fetch(url, timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {});
   const body = await answer.json().catch(() => ({}));
   if (!answer.ok) throw new Error((body as { error?: string }).error ?? `${answer.status}`);
   return body as T;
@@ -63,6 +63,7 @@ export const api = {
   limits: (path: LonLat[]) => post<{ runs: LimitRun[]; tmapShare: number }>("/api/road/limits", { path }),
   /** The limit where a car off any route is, running [deg]. */
   limitHere: (at: LonLat, deg: number | null) =>
-    get<{ kmh: number | null; src: "tmap" | "nodelink" | null }>("/api/road/limit", { at: pair(at), deg: deg == null ? undefined : String(Math.round(deg)) }),
+    // Asked one at a time (main.ts askHere): a request hung on a weak link kept the sign blank till it ended.
+    get<{ kmh: number | null; src: "tmap" | "nodelink" | null }>("/api/road/limit", { at: pair(at), deg: deg == null ? undefined : String(Math.round(deg)) }, 10_000),
   gasDetail: (uniId: string) => get<StationDetail>(`/api/nearby/gas/${encodeURIComponent(uniId)}`, {}),
 };

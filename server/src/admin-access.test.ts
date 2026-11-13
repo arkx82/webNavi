@@ -34,7 +34,7 @@ async function site() {
   };
   const call = (cookie: string, method: "GET" | "POST" | "DELETE", url: string, payload?: object) =>
     app.inject({ method, url, payload, headers: { cookie, "x-requested-with": "nav-admin" } });
-  return { app, login, call };
+  return { app, login, call, settings };
 }
 
 test("/admin takes an account's 아이디 and 비밀번호, and the page's own password as admin", async () => {
@@ -98,4 +98,14 @@ test("a 관리자 sees every account's link as a line, and changes their own onl
   assert.deepEqual(await lines(), ["june — TIDAL 연결됨 (KR) · 서버 시작 뒤 아직 안 씀"]);
   assert.equal((await call(june.cookie, "POST", "/admin/api/users", { name: "test", password: "secret3" })).statusCode, 200);
   assert.equal((await lines())[1], "test — 연결 안 됨 (차 화면에 음악 버튼 없음)");
+});
+
+test("the page's password changed, the built-in admin's sessions of the old one end", async () => {
+  const { login, call, settings } = await site();
+  const builtin = await login("admin", "page-password");
+  assert.equal((await call(builtin.cookie, "GET", "/admin/api/state")).json().loggedIn, true);
+  settings.setPassword("new-password");
+  assert.equal((await call(builtin.cookie, "GET", "/admin/api/state")).json().loggedIn, false);
+  const again = await login("admin", "new-password");
+  assert.equal((await call(again.cookie, "GET", "/admin/api/state")).json().loggedIn, true);
 });

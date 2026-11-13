@@ -172,3 +172,22 @@ test("a car is its account's alone: one given to no account is no one's, not eve
   assert.deepEqual(hub.carsFor("June").map((c) => c.vin), ["V1"]);
   assert.deepEqual(hub.carsFor("sim1"), []);
 });
+
+test("a reset ends every page's stream: one left open got the samples of a car that had gone to another account", () => {
+  const car: LinkedCar = { vin: "V1", id: "1", vehicleId: 7, name: "모델 3", user: "alice" };
+  const emits: ((s: CarSample) => void)[] = [];
+  const hub = new CarHub(() => [car], (_c, emit) => {
+    emits.push(emit);
+    return { start: () => {}, stop: () => {}, state: "streaming", lastError: null, lastSampleAt: 0 };
+  });
+  const alice: CarSample[] = [];
+  let closed = 0;
+  hub.listen("V1", { sample: (s) => alice.push(s), state: () => {}, close: () => { closed++; } });
+  // The car goes to bob: the hub is reset, and bob's page opens a stream of its own.
+  car.user = "bob";
+  hub.reset();
+  assert.equal(closed, 1);
+  hub.listen("V1", { sample: () => {}, state: () => {} });
+  emits[emits.length - 1]({ t: 2, speedMps: 5 });
+  assert.equal(alice.length, 0);
+});

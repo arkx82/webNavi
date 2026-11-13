@@ -20,6 +20,10 @@ const TURN_WITHIN_S = 25;
 const WITHIN_S = 20;
 /** A sentence that is not a turn, its sound not come in this long, gives way to a turn queued behind it. */
 const GIVE_WAY_MS = 1500;
+/** A sentence's sound asked for this long is given up: a request hung on a weak link held every sentence behind it. */
+const FETCH_MS = 20_000;
+/** How often a sentence waiting for its sound looks whether it is still worth waiting for. */
+const WAIT_LOOK_MS = 250;
 const TAIL_S = 0.35;
 const FADE_S = 0.03;
 /**
@@ -195,8 +199,9 @@ export class Voice {
       const key = this.warmQueue.shift()!;
       const [voice, text] = [key.slice(0, key.indexOf("|")), key.slice(key.indexOf("|") + 1)];
       this.warming++;
-      void fetch(this.url(text, voice || null))
-        .then(async (a) => { if (a.ok) { await a.arrayBuffer(); this.warmed.add(key); } })
+      // Refused too is warmed: asked again only when said. A budget spent, the stretch ahead asked every 5 s.
+      void fetch(this.url(text, voice || null), { signal: AbortSignal.timeout(FETCH_MS) })
+        .then(async (a) => { if (a.ok) await a.arrayBuffer(); this.warmed.add(key); })
         .catch(() => { /* offline already, or refused: said later if it can be */ })
         .finally(() => {
           this.warming--;
@@ -227,7 +232,7 @@ export class Voice {
     // Used again: newest in the order the least recently used are dropped by.
     if (had) { this.buffers.delete(key); this.buffers.set(key, had); }
     else {
-      had = fetch(this.url(text, this.voiceName))
+      had = fetch(this.url(text, this.voiceName), { signal: AbortSignal.timeout(FETCH_MS) })
         .then(async (a) => {
           if (!a.ok) throw new Error((await a.json().catch(() => ({}))).error ?? `${a.status}`);
           return padded(this.context, await this.context.decodeAudioData(await a.arrayBuffer()));
@@ -243,6 +248,23 @@ export class Voice {
       }
     }
     return had;
+  }
+
+  /**
+   * Whether [item]'s sound came (or failed) while it was still worth waiting for: not once its moment has passed, nor
+   * — a warning or the like — once a turn waits behind it, GIVE_WAY_MS on. Looked at all along, not once: a sentence
+   * whose sound never came held every one behind it, the turns too, cached as they were (review, 2026-11-13).
+   */
+  private waitFor(item: { until: number; turn: boolean }, sound: Promise<AudioBuffer>): Promise<boolean> {
+    return new Promise<boolean>((done) => {
+      const started = Date.now();
+      const finish = (came: boolean) => { clearInterval(look); done(came); };
+      const look = setInterval(() => {
+        if (Date.now() > item.until) finish(false);
+        else if (!item.turn && Date.now() - started >= GIVE_WAY_MS && this.queue.some((q) => q.turn)) finish(false);
+      }, WAIT_LOOK_MS);
+      sound.then(() => finish(true), () => finish(true));
+    });
   }
 
   private async next() {
@@ -264,15 +286,11 @@ export class Voice {
     try {
       let buffer: AudioBuffer;
       const asked = Date.now();
-      const sound = this.buffer(text);
-      // A warning or the like whose sound is slow to come gives way to a turn waiting behind it: dropped, not held.
-      if (!item.turn) {
-        const came = await Promise.race([sound.then(() => true, () => true), new Promise<boolean>((r) => setTimeout(() => r(false), GIVE_WAY_MS))]);
-        if (!came && this.queue.some((q) => q.turn)) {
-          this.onLate(text, (Date.now() - item.at) / 1000);
-          void this.next();
-          return;
-        }
+      let sound = this.buffer(text);
+      if (!(await this.waitFor(item, sound))) {
+        this.onLate(text, (Date.now() - item.at) / 1000);
+        void this.next();
+        return;
       }
       try {
         buffer = await sound;
@@ -280,7 +298,13 @@ export class Voice {
         if (!item.fallback) throw e;
         this.onError(`${text}: ${(e as Error).message} — 대신 "${item.fallback}"`);
         text = item.fallback;
-        buffer = await this.buffer(text);
+        sound = this.buffer(text);
+        if (!(await this.waitFor(item, sound))) {
+          this.onLate(text, (Date.now() - item.at) / 1000);
+          void this.next();
+          return;
+        }
+        buffer = await sound;
       }
       fetchedS = (Date.now() - asked) / 1000;
       // Its moment may have passed while the sound was fetched (a cache miss on a slow link): then it stays unsaid.

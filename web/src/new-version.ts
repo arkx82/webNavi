@@ -27,11 +27,16 @@ export interface Quiet {
   untouchedMs: number;
   /** The voice is saying something. */
   speaking: boolean;
+  /**
+   * The page's music is playing: a reload would stop it, and a tap be needed to start it again (parked with the music
+   * on after a deploy, review 2026-11-13).
+   */
+  playing?: boolean;
 }
 
 /** Whether a page with a new version waiting may be reloaded now. */
 export function quietEnough(q: Quiet): boolean {
-  return !q.driving && !q.speaking && q.stillMs >= RELOAD_STILL_MS && q.untouchedMs >= RELOAD_UNTOUCHED_MS;
+  return !q.driving && !q.speaking && !q.playing && q.stillMs >= RELOAD_STILL_MS && q.untouchedMs >= RELOAD_UNTOUCHED_MS;
 }
 
 /**

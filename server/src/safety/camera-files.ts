@@ -151,6 +151,17 @@ export async function findCameraFiles(dir: string, log: (m: string) => void = ()
   }
   const files: CameraFile[] = [];
   const features: Feature[] = [];
+  /**
+   * A file that could not be looked at this time (the portal slow, an answer not JSON, a download refused): last time's
+   * result for it kept, its cameras with it. Dropped, its cameras went unwarned for the week till the next look — a
+   * county's whole gap-fill on one timeout (review, 2026-11-13).
+   */
+  const keepLast = (id: string) => {
+    const was = known.get(id);
+    if (!was) return;
+    files.push(was);
+    features.push(...(knownFeatures.get(id) ?? []));
+  };
   for (const id of [...ids].sort()) {
     try {
       const meta = JSON.parse((await (await get(`https://www.data.go.kr/catalog/${id}/fileData.json`)).bytes()).toString("utf8")) as {
@@ -174,13 +185,15 @@ export async function findCameraFiles(dir: string, log: (m: string) => void = ()
       if (!file) { files.push({ ...base, rows: 0, cameras: 0, read: false, why: "내려받을 파일 없음" }); continue; }
       const got = await get(`https://www.data.go.kr/cmm/cmm/fileDownload.do?atchFileId=${file}&fileDetailSn=1`);
       const bytes = await got.bytes();
+      if (!got.ok && was) { log(`camera file ${id}: 내려받기 ${got.status}, 지난번 것 그대로`); keepLast(id); continue; }
       if (!got.ok || bytes.length > MAX_BYTES) { files.push({ ...base, rows: 0, cameras: 0, read: false, why: got.ok ? "파일이 너무 큼" : `내려받기 ${got.status}` }); continue; }
       const rows = rowsOf(bytes);
       const j = judge(rows, `file-${id}`, name);
       files.push({ ...base, asOf: j.asOf, sido: j.sido, rows: rows.length, cameras: j.cameras.length, read: j.read, ...(j.why ? { why: j.why } : {}) });
       if (j.read) features.push(...j.cameras);
     } catch (e) {
-      log(`camera file ${id}: ${(e as Error).message}`);
+      log(`camera file ${id}: ${(e as Error).message}${known.has(id) ? ", 지난번 것 그대로" : ""}`);
+      keepLast(id);
     }
   }
   const kept: KeptFiles = { at: Date.now(), v: FILES_VERSION, files, features };

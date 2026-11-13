@@ -29,6 +29,8 @@ const BASE = "https://dashscope-intl.aliyuncs.com";
 const RENDER_TIMEOUT_MS = 30_000;
 /** Renders asked of Model Studio at once; the rest wait their turn. */
 const RENDERS_AT_ONCE = 2;
+/** Renders waiting their turn at most: past it a sentence is refused (the page says the plain one), not queued for ever. */
+const RENDER_QUEUE_MAX = 50;
 /** A render refused for the rate is tried again after these waits. */
 const THROTTLED_WAIT_MS = [2_000, 5_000, 10_000];
 
@@ -57,6 +59,13 @@ export class Speaker {
     return join(this.dir, `${hash}.wav`);
   }
 
+  /** Whether [text] in [voice] is on disk: served without a call to the service. */
+  isCached(text: string, voice = this.voice): boolean {
+    const on = (v: string) => existsSync(this.fileFor(text, 2, v)) || existsSync(this.fileFor(text, 1, v));
+    // A made voice whose model's allowance is gone speaks in the default one, kept under its name (say).
+    return on(voice) || (isMadeVoice(voice) && this.spent.isSpent(CLONED_MODEL) && on(this.voice));
+  }
+
   cached(text: string, voice = this.voice): Buffer | null {
     const file = this.fileFor(text, 2, voice);
     if (existsSync(file)) return readFileSync(file);
@@ -83,7 +92,10 @@ export class Speaker {
   private async render(key: string, tier: Tier, text: string, asked: string): Promise<Buffer> {
     // A slot taken here, or handed over by the render that finished (which then does not give it back): a waiter
     // woken and a newcomer could otherwise both see a free slot in the same moment.
-    if (this.rendering >= RENDERS_AT_ONCE) await new Promise<void>((go) => this.turn.push(go));
+    if (this.rendering >= RENDERS_AT_ONCE) {
+      if (this.turn.length >= RENDER_QUEUE_MAX) throw new Error("tts busy");
+      await new Promise<void>((go) => this.turn.push(go));
+    }
     else this.rendering++;
     try {
       for (let attempt = 0; ; attempt++) {

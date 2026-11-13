@@ -72,6 +72,18 @@ test("the portal is searched, each file looked at once, and what each gave repor
   const report = sourcesReport([{ code: "1320000", name: "경찰청", sido: "충청남도", rows: 2258, cameras: 2000, asOf: "2026-04-06" }], kept, kept.features);
   const cn = report.files.find((f) => f.id === "15118678")!;
   assert.deepEqual([cn.filled, cn.listAsOf, cn.asOf], [1, "2026-04-06", "2026-09-14"]);
+  // A week on, 충청남도's file changed but its look timed out, then its download refused: last week's cameras kept.
+  for (const fail of ["catalog", "download"]) {
+    const later: Get = async (url) => {
+      if (fail === "catalog" && url.includes("/catalog/15118678/")) throw new Error("timeout");
+      if (url.includes("/catalog/15118678/")) return reply(JSON.stringify({ alternateName: "충청남도_전국무인교통단속카메라 정보_20260921", dateModified: "2026-09-21", encodingFormat: "CSV" }));
+      if (url.includes("FILE_1")) return reply("", false);
+      return get(url);
+    };
+    const again = await findCameraFiles(dir, () => {}, later, kept);
+    assert.deepEqual(again.features.map((f) => f.id), ["file-15118678:7"], fail);
+    assert.equal(again.files.find((f) => f.id === "15118678")?.read, true, fail);
+  }
 });
 
 test("the national list's agencies by province: rows, cameras kept and the newest date", () => {

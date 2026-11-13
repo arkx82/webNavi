@@ -189,6 +189,14 @@ export class Settings {
     return timingSafeEqual(tried, Buffer.from(hash, "hex"));
   }
 
+  /**
+   * Which admin password is set, as a short tag of its hash (salted, so never the same twice): signed into the built-in
+   * admin's cookie, so a new password ends the sessions of the old one (review, 2026-11-13: they ran their 30 days).
+   */
+  get passwordTag(): string {
+    return this.saved.adminHash ? createHmac("sha256", this.master).update(`admin-password:${this.saved.adminHash}`).digest("base64url").slice(0, 16) : "";
+  }
+
   // ---- a signed token for the session cookie ----
 
   sign(text: string): string {

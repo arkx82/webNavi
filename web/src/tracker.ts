@@ -344,7 +344,9 @@ export class Tracker {
     let bearing = this.speedMps < HEADING_MIN_MPS ? this.shownBearing : (fix.course ?? this.shownBearing);
 
     if (this.line) {
-      const proj = this.line.project(target, this.lastProj?.segment ?? 0);
+      // The car's own way, where the fix says it moving: of a route's two passes by one place, the one it is on.
+      const way = fix.course != null && (fix.speed ?? 0) >= 2 ? fix.course : undefined;
+      const proj = this.line.project(target, this.lastProj?.segment ?? 0, undefined, way);
       this.lastProj = proj;
       // Snapped only when close and pointing the road's way; a car on a
       // parallel street is not on this road.
@@ -376,6 +378,10 @@ export class Tracker {
         }
       }
       this.reckonAlong = proj.alongM;
+      // A vague fix in the dark (50–1000 m) is the reckoning's new place: what the placeless ones had added since the
+      // old one is behind it. Kept, it was added again from here, and the car leapt a tunnel's length on (review,
+      // 2026-11-13: 1.2 km at a tunnel's mouth, the turns there said early and not at them).
+      if (this.vagueAt) { this.vagueM = 0; this.vagueAt = now; }
     }
 
     // Coming out of a tunnel: from wherever reckoning left the marker.
@@ -498,6 +504,8 @@ export class Tracker {
     const free = lost && !parked && this.car && (!this.line || this.declaredOff) && lostForS <= RECKON_CAR_MAX_S ? this.car.freePath(this.fixWall, wallNow) : null;
     /** Where reckoning put the car this frame: its own along, not a projection back onto the line each frame. */
     let reckoned: Projection | null = null;
+    /** Where a reckoning over without a good fix left the car, held there (below). */
+    let heldAt: number | null = null;
 
     if (reckon && this.line && !this.declaredOff) {
       // Reckoning: advance along the route from the place the last fix put us, by the car's own distance — and
@@ -549,6 +557,14 @@ export class Tracker {
       this.shownAlong = null;
       if (free.heading != null) this.shownBearing = free.heading;
     } else {
+      // A reckoning over with no good fix to end it (standing in a tunnel, the browser silent and the car's stream not
+      // there; or past its longest): the car stays where it was reckoned to. Followed, it was taken back to its last
+      // good fix — the tunnel's mouth, a kilometre behind — and leapt on again as the fixes came (review, 2026-11-13).
+      if (lost && this.reckonSince > 0 && this.line && !this.declaredOff && this.shownAlong != null) {
+        this.glideFromAlong = this.glideToAlong = this.reckonAlong = this.shownAlong;
+        this.vagueM = 0;
+        heldAt = this.shownAlong;
+      }
       const t = Math.min(1, (now - this.glideStart) / (this.glideS * 1000));
       if (this.line && this.glideToAlong != null) {
         // On the road the car is kept moving at its speed, frame by frame, and steered toward where the last fix
@@ -614,7 +630,7 @@ export class Tracker {
       offRoute: this.declaredOff,
     };
     if (this.line && this.route) {
-      const along = reckoned ? reckoned.alongM : (this.lastProj?.alongM ?? 0);
+      const along = reckoned ? reckoned.alongM : heldAt ?? (this.lastProj?.alongM ?? 0);
       shown.alongM = along;
       shown.offM = this.lastProj?.offM;
       shown.remainingM = Math.max(0, this.line.lengthM - along);

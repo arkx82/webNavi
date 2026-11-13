@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Lockout, RateLimit, RefusedUrl, isPrivate, isPublicUrl, publicLookup, unmapped } from "./guard.js";
+import { LoginLockout, Lockout, NAME_LOCK_AFTER, RateLimit, RefusedUrl, isPrivate, isPublicUrl, publicLookup, unmapped } from "./guard.js";
 
 test("addresses inside the house, or no one's, are private", () => {
   for (const ip of ["127.0.0.1", "10.1.2.3", "172.16.0.1", "172.31.255.1", "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0", "::1", "fd00::1", "fe80::1", "::ffff:192.168.1.42"]) assert.ok(isPrivate(ip), ip);
@@ -83,4 +83,24 @@ test("the API is told by the decoded, folded path: an encoded or doubled slash d
     assert.equal(isApiPath(url), true, url);
   }
   for (const url of ["/", "/share", "/admin/api/state", "/assets/main.js", "/apix/health"]) assert.equal(isApiPath(url), false, url);
+});
+
+test("a lock over, the count starts again; one address cannot keep an account locked, many together still are held", () => {
+  const lock = new Lockout(5, 60_000);
+  for (let i = 0; i < 5; i++) lock.failed(["name:june"], i * 1000);
+  assert.ok(lock.wait(["name:june"], 5000) > 0);
+  // After the lock, one more wrong try a minute does not lock it again.
+  for (let m = 2; m < 10; m++) {
+    lock.failed(["name:june"], m * 61_000);
+    assert.equal(lock.wait(["name:june"], m * 61_000 + 1), 0, `minute ${m}`);
+  }
+  // A login: one address is locked after five, and from then on its tries do not count against the account.
+  const login = new LoginLockout(5, 60_000);
+  for (let i = 0; i < 100; i++) { const t = i * 500; if (!login.wait("1.2.3.4", "june", t)) login.failed("1.2.3.4", "june", t); }
+  assert.ok(login.wait("1.2.3.4", "june", 50_000) > 0, "the address locked");
+  assert.equal(login.wait("5.6.7.8", "june", 50_000), 0, "june still logs in from elsewhere");
+  // Many addresses at one account: locked at NAME_LOCK_AFTER.
+  const many = new LoginLockout(5, 60_000);
+  for (let i = 0; i < NAME_LOCK_AFTER; i++) many.failed(`10.0.0.${i}`, "june", i * 100);
+  assert.ok(many.wait("9.9.9.9", "june", NAME_LOCK_AFTER * 100) > 0);
 });

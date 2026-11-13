@@ -8,14 +8,27 @@ import type { LonLat } from "./types";
  * 무안 and 지산부대앞 (G7834), each morning of hantwo's 2026-11-05..12, our lists having both as the way home's.
  */
 
-/** A carriageway this far from the car's heading runs against it (camera-layer.ts ahead, the same). */
+/** A carriageway this far from the car's heading runs against it (camera-layer.ts ahead, the same)… */
 export const AGAINST_DEG = 110;
+/** …and one this near runs with it (warnings.ts WITH_DEG). */
+const WITH_DEG = 45;
 /** A camera of ours this near 카카오's is the same camera. */
 export const KAKAO_SAME_M = 80;
 
-/** Whether every carriageway the camera stands on runs against [headingDeg]: the other way's camera. */
+/**
+ * Whether the camera is the other way's for a car heading [headingDeg]: none of the carriageways it stands on runs
+ * with the car and one runs against it — as the route's watch has it (warnings.ts runsWith): a camera at a junction
+ * put on the cross street too is still the other way's, one with no way known says nothing (review, 2026-11-13).
+ */
 export function otherWays(f: Pick<Feature, "ways">, headingDeg: number): boolean {
-  return !!f.ways?.length && f.ways.every((w) => w.deg >= 0 && angleBetween(headingDeg, w.deg) >= AGAINST_DEG);
+  let against = false;
+  for (const w of f.ways ?? []) {
+    if (w.deg < 0) continue;
+    const deg = angleBetween(headingDeg, w.deg);
+    if (deg <= WITH_DEG) return false;
+    if (deg >= AGAINST_DEG) against = true;
+  }
+  return against;
 }
 
 /**
@@ -69,6 +82,14 @@ export function kakaoCameraStep(c: KakaoCamera, d: number, now: number): "coming
     return d > PAST_HELD_M ? "done" : "passed";
   }
   return d > c.nearest + AWAY_M ? "away" : "coming";
+}
+
+/**
+ * Whether a camera the car went away from ([nearest] metres the nearest it came) is still not its own, the car now
+ * [d] from it: until the car comes nearer again than it was — round a U-turn, or a bend bringing the road back.
+ */
+export function stillAway(nearest: number, d: number): boolean {
+  return d > nearest - AWAY_M;
 }
 
 /** Whether 카카오's camera [d] metres on is on the camera card: as ours, from 카메라 안내 시작 ([fromM]) in. */

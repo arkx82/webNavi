@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { bearing, metres, roadAhead } from "./ahead.js";
+import { bearing, metres, osrmDeg, roadAhead } from "./ahead.js";
 import type { LonLat } from "./limits.js";
 
 /**
@@ -39,4 +39,16 @@ test("the road ahead stops at a junction it ends at, not turning either way", as
   const end = r!.path[r!.path.length - 1];
   assert.ok(Math.abs(metres(at0, end) - 700) < 30, `${metres(at0, end)}`);
   assert.ok(r!.path.every((p) => p[0] === at0[0]), "never onto the cross street");
+});
+
+test("every bearing asked of OSRM is 0..359: heading north, the bends 45° and 90° to the left are asked too (review, 2026-11-13)", async () => {
+  assert.deepEqual([osrmDeg(-35), osrmDeg(-80), osrmDeg(395), osrmDeg(359.6), osrmDeg(0)], [325, 280, 35, 0, 0]);
+  // A T-junction 300 m on: no way straight on, so the bends either side are asked.
+  for (const deg of [0, 10, 355]) {
+    const { fetchJson, asked } = osrm(300);
+    await roadAhead("http://osrm", at0, deg, 2000, fetchJson);
+    const bearings = asked.flatMap((u) => /bearings=([^&]+)/.exec(u)![1].split(";").map((b) => Number(b.split(",")[0])));
+    assert.ok(asked.length > 1, "the bends were asked");
+    assert.ok(bearings.every((b) => b >= 0 && b < 360), `${deg}°: ${bearings.join(" ")}`);
+  }
 });

@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { AdminAccess } from "../admin.js";
 import { OWN_ONLY } from "../music.js";
 import type { Db } from "../db.js";
+import { sessionUser } from "../users.js";
 import type { Settings } from "../settings.js";
 import { FleetApi, FleetFeed, telemetryCa } from "./fleet.js";
 import { CarHub, type CarSource, type LinkedCar } from "./hub.js";
@@ -136,13 +137,22 @@ export function registerCar(app: FastifyInstance, settings: Settings, db: Db, ac
     });
     const event = (name: string, data: unknown) => res.write(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`);
     event("car", { name: car.name, source: source() });
+    let beat: NodeJS.Timeout | undefined;
+    const end = () => { clearInterval(beat); off(); res.end(); };
     const off = hub.listen(car.vin, {
       sample: (s) => res.write(`data: ${JSON.stringify(s)}\n\n`),
       state: (state) => event("state", { state }),
+      close: end,
     });
     // Every 5 s what the stream is and how old its last sample: the page sees a pipe gone dead (a comment it could not),
     // and samples the server has that never reached it (2026-10-09: 38 minutes "streaming" with none), and opens again.
-    const beat = setInterval(() => event("beat", { state: hub.status()[car.vin]?.state ?? "stopped", sampleAgoMs: hub.sampleAgo(car.vin) }), 5_000);
+    // And whether it is still this account's to have: its session not ended (a password changed, the account gone),
+    // the car still its own — else the stream ends.
+    beat = setInterval(() => {
+      const user = sessionUser(request, db, settings);
+      if (!user || user.name !== request.user!.name || !hub.carsFor(user.name).some((c) => c.vin === car.vin)) return end();
+      event("beat", { state: hub.status()[car.vin]?.state ?? "stopped", sampleAgoMs: hub.sampleAgo(car.vin) });
+    }, 5_000);
     request.raw.on("close", () => { clearInterval(beat); off(); });
   });
 

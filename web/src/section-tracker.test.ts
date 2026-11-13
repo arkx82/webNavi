@@ -128,3 +128,22 @@ test("no target is suggested far below the limit, nor at all once the section is
   const r4 = slow.update(5000, 50, section, 0, t0 + 360_000);
   assert.equal(r4.current?.targetKmh, null);
 });
+
+test("a re-route inside the stretch: what was driven is kept and counted on along the new line, the average true", () => {
+  const tracker = new SectionTracker();
+  const t0 = 7_000_000;
+  // 10 km at 100, driven at 120 km/h (33.3 m/s): 5 km in 150 s.
+  const section = { id: "s", limit: 100, startAlongM: 2000, endAlongM: 12_000 };
+  tracker.update(2000, 120, section, 0, t0);
+  const before = tracker.update(7000, 120, section, 0, t0 + 150_000);
+  assert.equal(before.current?.avgKmh, 120);
+  // The new route starts at the car: the stretch carried from 0 to its end 5 km on (warnings.ts sectionPlan).
+  const carried = { id: "s", limit: 100, startAlongM: 0, endAlongM: 5000 };
+  tracker.update(0, 120, carried, 0, t0 + 150_000);
+  for (const s of [30, 90, 149]) {
+    const r = tracker.update((s * 100) / 3, 120, carried, 0, t0 + 150_000 + s * 1000);
+    assert.ok(Math.abs(r.current!.avgKmh - 120) <= 1, `${s} s on: ${r.current!.avgKmh}`);
+    assert.equal(r.current!.over, true);
+    assert.ok(Math.abs(r.current!.totalM - 10_000) <= 10, `${r.current!.totalM}`);
+  }
+});

@@ -1,4 +1,4 @@
-import { Lockout, clientIp } from "./guard.js";
+import { LoginLockout, clientIp } from "./guard.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { readFileSync } from "node:fs";
 import { EDITABLE, type SecretName, type Settings } from "./settings.js";
@@ -51,7 +51,7 @@ export function registerAdmin(app: FastifyInstance, settings: Settings, checks: 
   /** Whether any site account is 관리자: then the page's password is set by one of them, not by whoever comes first. */
   const anyAdmin = () => db.users().some((u) => u.role === "admin");
   // Wrong logins by address and, under one key, for the page as a whole: a forged address does not start afresh (guard.ts).
-  const lockout = new Lockout(LOCK_AFTER, LOCK_MS);
+  const lockout = new LoginLockout(LOCK_AFTER, LOCK_MS);
 
   const isSecure = (request: FastifyRequest) =>
     request.protocol === "https" || request.headers["x-forwarded-proto"] === "https";
@@ -72,12 +72,12 @@ export function registerAdmin(app: FastifyInstance, settings: Settings, checks: 
     if (!m) return false;
     const [exp, sig] = m[1].split("~");
     if (!exp || !sig || Number(exp) < Date.now()) return false;
-    return settings.verify(exp, sig);
+    return settings.verify(`${exp}~${settings.passwordTag}`, sig);
   };
 
   const setSession = (request: FastifyRequest, reply: FastifyReply) => {
     const exp = String(Date.now() + SESSION_DAYS * 86_400_000);
-    const value = `${exp}~${settings.sign(exp)}`;
+    const value = `${exp}~${settings.sign(`${exp}~${settings.passwordTag}`)}`;
     reply.header("Set-Cookie", `${COOKIE}=${value}; Path=/admin; HttpOnly; SameSite=Lax; Max-Age=${SESSION_DAYS * 86_400}${isSecure(request) ? "; Secure" : ""}`);
   };
 
@@ -123,8 +123,8 @@ export function registerAdmin(app: FastifyInstance, settings: Settings, checks: 
     const ip = clientIp(request);
     const name = typeof request.body?.name === "string" ? request.body.name.trim() : "";
     const password = typeof request.body?.password === "string" ? request.body.password : "";
-    const keys = [`ip:${ip}`, `name:${name.toLowerCase() || "admin"}`];
-    const wait = lockout.wait(keys);
+    const lockName = name.toLowerCase() || "admin";
+    const wait = lockout.wait(ip, lockName);
     if (wait) return reply.code(429).send({ error: `잠김 — ${wait}초 뒤` });
     // An account by its own password: the car page's session, so that browser is logged in there too.
     const user = name ? db.check(name, password) : null;
@@ -132,11 +132,11 @@ export function registerAdmin(app: FastifyInstance, settings: Settings, checks: 
     const builtin = !user && (!name || (name.toLowerCase() === "admin" && !db.users().some((u) => u.name.toLowerCase() === "admin")))
       && settings.hasPassword && settings.checkPassword(password);
     if (!user && !builtin) {
-      lockout.failed(keys);
+      lockout.failed(ip, lockName);
       request.log.warn({ who: ip, name }, "admin login failed");
       return reply.code(401).send({ error: "아이디 또는 비밀번호가 다릅니다" });
     }
-    lockout.passed(keys);
+    lockout.passed(ip, lockName);
     if (user) {
       issueSession(request, reply, user, settings);
       request.log.info({ user: user.name, role: user.role }, "admin page login");

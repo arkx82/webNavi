@@ -1,4 +1,5 @@
 import { Junction3D } from "./junction3d.js";
+import { ROUTE_MAX_M, inKorea, pathM } from "./lonlat.js";
 import type { FastifyInstance } from "fastify";
 import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -17,6 +18,8 @@ import type { LonLat } from "./route/types.js";
 export const TILE_CACHE_CONTROL = "private, max-age=86400";
 /** Vertices snapped in one call (a long route comes in several). */
 export const SNAP_BATCH = 4000;
+/** A corner's line before or after it, at most. */
+const TURN_LINE_MAX_M = 2000;
 
 export class HdTiles {
   private db: DatabaseSync | null = null;
@@ -115,8 +118,7 @@ export function registerHdmap(app: FastifyInstance, workDir: string) {
     const points = Array.isArray(request.body?.points) ? request.body.points.slice(0, SNAP_BATCH) : null;
     const headings = Array.isArray(request.body?.headings) ? request.body.headings : null;
     const biases = Array.isArray(request.body?.biases) ? request.body.biases : undefined;
-    const ok = (p: unknown): p is LonLat => Array.isArray(p) && p.length === 2 && p.every(Number.isFinite);
-    if (!points || !headings || headings.length !== points.length || !points.every(ok)) return reply.code(400).send({ error: "points, headings" });
+    if (!points || !headings || headings.length !== points.length || !points.every(inKorea) || pathM(points) > ROUTE_MAX_M) return reply.code(400).send({ error: "points, headings" });
     if (!lanes.ready) return { at: points.map(() => null) };
     const at = lanes.snap(points, headings.map(Number), biases?.map(Number));
     request.log.debug({ asked: points.length, snapped: at.filter(Boolean).length }, "route snapped to lanes");
@@ -127,14 +129,17 @@ export function registerHdmap(app: FastifyInstance, workDir: string) {
     const turns = Array.isArray(request.body?.turns) ? request.body.turns.slice(0, 200) : null;
     if (!turns) return reply.code(400).send({ error: "turns" });
     if (!lanes.ready) return { trails: turns.map(() => null) };
-    const ok = (p: unknown): p is LonLat => Array.isArray(p) && p.length === 2 && p.every(Number.isFinite);
+    // A corner's lines are its route's next and last 150 m or so: one far longer is not one (resampled every 5 m).
+    const near = (line: LonLat[]) => line.every(inKorea) && pathM(line) <= TURN_LINE_MAX_M;
     // The lane ends at the stop line first, then the lanes under the route before it (a slip lane, an outer lane):
     // both handed over, the page taking the first that fits its line — a stop-line trail it could not fit had left
     // six right turns of the drives on the provider's cut while the slip lane's would have fitted (2026-10-13).
     const answers = turns.map((t) => {
-      if (!(ok(t.at) && Number.isFinite(t.in) && Array.isArray(t.after) && t.after.every(ok))) return null;
+      if (!t || typeof t !== "object" || !inKorea(t.at) || !Number.isFinite(t.in) || !Array.isArray(t.after)) return null;
       const after = t.after.slice(0, AFTER_POINTS);
-      const before = Array.isArray(t.before) && t.before.every(ok) ? t.before.slice(-AFTER_POINTS) : null;
+      if (!near(after)) return null;
+      const kept = Array.isArray(t.before) ? t.before.slice(-AFTER_POINTS) : null;
+      const before = kept && near(kept) ? kept : null;
       const stop = lanes.thread(t.at, t.in, after), slip = before ? lanes.threadAlong(before, after) : null;
       // Turning right, the slip lane first where there is one: the stop line's way through the junction is not the car's.
       if (stop && slip && turnsRight(t.in, t.at, after) && cornerGap(slip, t.at) >= cornerGap(stop, t.at) + SLIP_EXTRA_M) return { first: slip, then: stop };

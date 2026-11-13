@@ -1,4 +1,4 @@
-import { Lockout, clientIp, isApiPath } from "./guard.js";
+import { LoginLockout, clientIp, isApiPath } from "./guard.js";
 import { appendFile, mkdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
@@ -91,7 +91,7 @@ export function registerUsers(
   onRemoved: (name: string) => void = () => {},
 ) {
   // Wrong logins by address and by account: a forged address does not free the account (guard.ts).
-  const lockout = new Lockout(LOCK_AFTER, LOCK_MS);
+  const lockout = new LoginLockout(LOCK_AFTER, LOCK_MS);
 
   const userOf = (request: FastifyRequest): User | null => sessionUser(request, db, settings);
 
@@ -119,16 +119,16 @@ export function registerUsers(
     const name = request.body?.name, password = request.body?.password;
     if ((name != null && typeof name !== "string") || (password != null && typeof password !== "string")) return reply.code(400).send({ error: "body" });
     const who = clientIp(request);
-    const keys = [`ip:${who}`, `name:${(request.body?.name ?? "").trim().toLowerCase()}`];
-    const wait = lockout.wait(keys);
+    const lockName = (request.body?.name ?? "").trim().toLowerCase();
+    const wait = lockout.wait(who, lockName);
     if (wait) return reply.code(429).send({ error: `잠시 잠김 — ${wait}초 뒤에 다시` });
     const user = db.check(request.body?.name ?? "", request.body?.password ?? "");
     if (!user) {
-      lockout.failed(keys);
+      lockout.failed(who, lockName);
       request.log.warn({ who, name: request.body?.name }, "login failed");
       return reply.code(401).send({ error: "아이디 또는 비밀번호가 다릅니다" });
     }
-    lockout.passed(keys);
+    lockout.passed(who, lockName);
     issueSession(request, reply, user, settings);
     request.log.info({ user: user.name }, "logged in");
     return { user: { id: user.id, name: user.name } };
@@ -199,18 +199,40 @@ export function registerUsers(
   app.addContentTypeParser("application/reports+json", { parseAs: "string", bodyLimit: 512 * 1024 }, (_request, body, done) => {
     try { done(null, JSON.parse(body as string)); } catch (e) { done(e as Error, undefined); }
   });
+  /**
+   * What each account's browser reports wrote today, bytes: at most REPORT_DAY_MAX into its day's log. Unbounded, an
+   * account could fill the disk the settings and the voice cache are on, at half a gigabyte a minute, and push its
+   * own day's log past LOG_DAY_MAX so the page's lines were refused (review, 2026-11-13).
+   */
+  const REPORT_DAY_MAX = 1_000_000;
+  const reported = new Map<string, number>();
+  const oneLine = (v: unknown, most: number) => String(v ?? "").replace(/[\r\n]+/g, " ").slice(0, most);
   app.post("/api/report", async (request, reply) => {
-    const reports = Array.isArray(request.body) ? (request.body as { type?: unknown; url?: unknown; age?: unknown; body?: unknown }[]).slice(0, 20) : [];
+    const reports = Array.isArray(request.body)
+      ? (request.body as unknown[]).slice(0, 20).filter((r): r is { type?: unknown; url?: unknown; age?: unknown; body?: unknown } => !!r && typeof r === "object")
+      : [];
     if (!reports.length) return reply.code(204).send();
-    await (logDirMade ??= mkdir(logDir, { recursive: true }));
     const now = new Date();
-    const file = join(logDir, `${request.user!.name.replace(/[^\p{L}\p{N}._-]/gu, "_")}-${new Date(now.getTime() + 9 * 3600_000).toISOString().slice(0, 10)}.log`);
+    const day = new Date(now.getTime() + 9 * 3600_000).toISOString().slice(0, 10);
+    const file = join(logDir, `${request.user!.name.replace(/[^\p{L}\p{N}._-]/gu, "_")}-${day}.log`);
     const lines = reports.map((r) => {
-      const url = String(r.url ?? "").replace(/^https?:\/\/[^/]+/, "");
+      const url = oneLine(r.url, 500).replace(/^https?:\/\/[^/]+/, "");
       // The context's log is many lines in one value: kept whole, on this one line, to be split when read.
-      return `${now.toISOString()} 브라우저 보고 ${String(r.type ?? "?")} ${url} ${Math.round(Number(r.age) || 0)}ms 전 ${JSON.stringify(r.body ?? null).replace(/[\r\n]+/g, " ").slice(0, 70_000)}`;
+      return `${now.toISOString()} 브라우저 보고 ${oneLine(r.type ?? "?", 40)} ${url} ${Math.round(Number(r.age) || 0)}ms 전 ${oneLine(JSON.stringify(r.body ?? null), 70_000)}`;
     });
-    await appendFile(file, lines.join("\n") + "\n");
+    const text = lines.join("\n") + "\n";
+    const key = `${request.user!.name}|${day}`;
+    const written = reported.get(key) ?? 0;
+    if (written + text.length > REPORT_DAY_MAX) return reply.code(204).send();
+    if (reported.size > 1000) reported.clear();
+    reported.set(key, written + text.length);
+    try {
+      await (logDirMade ??= mkdir(logDir, { recursive: true }));
+    } catch (e) {
+      logDirMade = null;
+      throw e;
+    }
+    await appendFile(file, text);
     request.log.warn({ types: reports.map((r) => r.type) }, "browser report");
     return reply.code(204).send();
   });
@@ -222,14 +244,14 @@ export function registerUsers(
     if (!me) return reply.code(400).send({ error: "관리 페이지 비밀번호는 위 설정에서 바꿉니다" });
     const current = typeof request.body?.current === "string" ? request.body.current : "";
     const next = typeof request.body?.password === "string" ? request.body.password : "";
-    const keys = [`ip:${clientIp(request)}`, `name:${me.name.toLowerCase()}`];
-    const wait = lockout.wait(keys);
+    const ip = clientIp(request), lockName = me.name.toLowerCase();
+    const wait = lockout.wait(ip, lockName);
     if (wait) return reply.code(429).send({ error: `잠시 잠김 — ${wait}초 뒤에 다시` });
     if (!db.check(me.name, current)) {
-      lockout.failed(keys);
+      lockout.failed(ip, lockName);
       return reply.code(401).send({ error: "지금 비밀번호가 다릅니다" });
     }
-    lockout.passed(keys);
+    lockout.passed(ip, lockName);
     try {
       db.setPassword(me.id, next);
     } catch (e) {

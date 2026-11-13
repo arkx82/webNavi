@@ -49,6 +49,21 @@ test("a point TMAP put on another road is not taken, and with no 노드링크 th
   assert.ok(a.tmapShare < 1);
 });
 
+test("points TMAP had nothing for are remembered as asked: the same route again makes no call for them", async () => {
+  // Every third point put on another road (~110 m off): scattered gaps, each once a call of its own with its neighbours.
+  const t = tmapAnswering(() => 50, (i) => (i % 3 === 1 ? 0.001 : 0));
+  const limits = new SpeedLimits(() => "key", () => undefined, "/nowhere/links.db", undefined, t.fetchJson);
+  await limits.alongRoute(PATH);
+  const first = t.calls.length;
+  await limits.alongRoute(PATH);
+  await limits.alongRoute([[127.0, 37.50001], [127.0113, 37.50001]]);
+  assert.equal(t.calls.length, first);
+  // Off the route, a point remembered as nothing is no answer: TMAP's nearest road is asked.
+  assert.equal(t.calls.filter((u) => u.includes("nearToRoad")).length, 0);
+  await limits.here("june", [127.0, 37.5], 90);
+  assert.equal(t.calls.filter((u) => u.includes("nearToRoad")).length, 0, "the matched 50 there is the answer");
+});
+
 test("TMAP's limit reached (429): no more calls that day", async () => {
   let n = 0;
   const fetchJson: Fetch = async () => { n++; return { status: 429, json: async () => ({ error: { code: "QUOTA_EXCEEDED" } }) }; };

@@ -66,7 +66,11 @@ export class Hotspots {
       url.searchParams.set("numOfRows", "100");
       url.searchParams.set("pageNo", "1");
       const answer = await fetch(url, { signal: AbortSignal.timeout(10_000) });
-      const body = (await answer.json().catch(() => ({}))) as { resultCode?: string; items?: { item?: Spot[] | Spot } };
+      const body = (await answer.json().catch(() => ({}))) as { resultCode?: string; resultMsg?: string; items?: { item?: Spot[] | Spot } };
+      // A refusal (the day's calls spent, a key not taken: an XML page, or another code) is no answer: thrown, not kept
+      // as "no spots here" for a week (review, 2026-11-13). 00 is an answer, 03 one with nothing in it.
+      const refused = body.resultCode != null ? body.resultCode !== "00" && body.resultCode !== "03" : body.items == null;
+      if (!answer.ok || refused) throw new Error(`사고다발지역 ${answer.status} ${body.resultCode ?? "?"} ${body.resultMsg ?? ""}`);
       const raw = body.items?.item;
       const spots = raw == null ? [] : Array.isArray(raw) ? raw : [raw];
       if (spots.length) return spots.map((s) => spotFeature(kind, s)).filter((f): f is Feature => !!f);

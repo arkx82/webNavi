@@ -101,6 +101,12 @@ export function upToTurn(r: Way): LonLat[] {
   return out;
 }
 
+/**
+ * A bearing as OSRM takes it, 0..359: one outside is refused (400), and the bend looked for 45° left of a car heading
+ * 10° (-35) was never found — the road ahead ended there going north (review, 2026-11-13).
+ */
+export const osrmDeg = (deg: number) => ((Math.round(deg) % 360) + 360) % 360;
+
 /** The road ahead of a car at [at] heading [deg], [lengthM] long at most (shorter where it ends, forks round a bend or turns back). */
 export async function roadAhead(base: string, at: LonLat, deg: number, lengthM: number, fetchJson: Fetch, trace?: (m: string) => void): Promise<RoadAhead | null> {
   const want = Math.min(AHEAD_MAX_M, Math.max(AHEAD_STEP_M, lengthM));
@@ -112,7 +118,7 @@ export async function roadAhead(base: string, at: LonLat, deg: number, lengthM: 
     const to = onFrom(from, aim, len);
     const url = `${base}/route/v1/driving/${from[0].toFixed(6)},${from[1].toFixed(6)};${to[0].toFixed(6)},${to[1].toFixed(6)}`
       + `?overview=full&geometries=geojson&steps=true&continue_straight=true`
-      + `&bearings=${Math.round(heading)},${first ? CAR_BEARING_DEG : FROM_BEARING_DEG};${Math.round(aim)},${STEP_BEARING_DEG}`
+      + `&bearings=${osrmDeg(heading)},${first ? CAR_BEARING_DEG : FROM_BEARING_DEG};${osrmDeg(aim)},${STEP_BEARING_DEG}`
       + `&radiuses=${first ? CAR_RADIUS_M : FROM_RADIUS_M};${STEP_RADIUS_M}`;
     const a = await fetchJson(url);
     const j = (await a.json().catch(() => ({}))) as OsrmRoute & { message?: string };

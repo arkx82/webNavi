@@ -56,6 +56,34 @@ const SPOKEN_FORGET_M = 2000;
 /** …or this long after it was first said: the car parked all day by the camera it passed on the way in (hantwo's work). */
 const SPOKEN_FORGET_MS = 15 * 60_000;
 
+/** The grid nearPath keeps features by: about this many metres a cell. */
+const NEAR_CELL_M = 500;
+/**
+ * The features within about a cell of [path] (and any wider than one): the rest are no road-ahead's. Every one of the
+ * thousands known was projected onto the whole line, the trail behind and the road ahead, at each new road ahead —
+ * 0.3 s with the page standing still each time, every 1.6 km (review, 2026-11-13).
+ */
+export function nearPath(path: LonLat[], features: Iterable<Feature>): Feature[] {
+  if (!path.length) return [];
+  const ky = NEAR_CELL_M / 111_320, kx = ky / Math.cos((path[0][1] * Math.PI) / 180);
+  const cell = (p: LonLat) => `${Math.floor(p[0] / kx)},${Math.floor(p[1] / ky)}`;
+  const cells = new Set<string>();
+  for (let i = 0; i < path.length; i++) {
+    const a = path[i], b = path[i + 1] ?? a;
+    const n = Math.max(1, Math.ceil(metres(a[0], a[1], b[0], b[1]) / (NEAR_CELL_M / 2)));
+    for (let k = 0; k < n; k++) {
+      const t = k / n, p: LonLat = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+      const [x, y] = [Math.floor(p[0] / kx), Math.floor(p[1] / ky)];
+      for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) cells.add(`${x + dx},${y + dy}`);
+    }
+  }
+  const out: Feature[] = [];
+  for (const f of features) {
+    if ((f.radiusM ?? 0) > NEAR_CELL_M || cells.has(cell([f.lon, f.lat])) || f.ways?.some((w) => cells.has(cell(w.at)))) out.push(f);
+  }
+  return out;
+}
+
 const turnBetween = (a: number, b: number) => Math.abs(((b - a + 540) % 360) - 180);
 
 export class SafeDrive {
@@ -140,7 +168,7 @@ export class SafeDrive {
       };
       this.forget(at);
       const watch = new RouteWatch(route, () => this.deps.prefs(), this.spoken);
-      watch.add([...this.known.values()]);
+      watch.add(nearPath(path, this.known.values()));
       this.watch = watch;
       this.line = new Line(path);
       this.seg = shift;

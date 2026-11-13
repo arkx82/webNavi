@@ -1,3 +1,4 @@
+import { osrmDeg } from "./ahead.js";
 import { existsSync } from "node:fs";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import type { PostedAt } from "./signs.js";
@@ -140,6 +141,9 @@ export function resample(path: LonLat[], step = STEP_M): Sample[] {
 }
 
 /** TMAP's answers by place and way, kept less than a day: a re-route, the way back, a drive off the route ask again for nothing. */
+/** Remembered for a point TMAP was asked about and had no limit for. */
+const NONE = 0;
+
 class Remembered {
   private cells = new Map<string, { p: LonLat; deg: number; kmh: number; t: number }[]>();
   private static cell = (p: LonLat) => `${Math.floor(p[0] / 0.0005)}:${Math.floor(p[1] / 0.0004)}`;
@@ -285,13 +289,15 @@ export class SpeedLimits {
     const kmh: (number | null)[] = samples.map(() => null);
     const src: (LimitSource | null)[] = samples.map(() => null);
     // TMAP: what was asked today first, the rest asked in runs of points next to one another (a trajectory, as it wants).
+    const askedNone = new Set<number>();
     for (let i = 0; i < samples.length; i++) {
       const v = this.remembered.near(samples[i].p, samples[i].deg);
-      if (v != null) { kmh[i] = v; src[i] = "tmap"; }
+      if (v === NONE) askedNone.add(i);
+      else if (v != null) { kmh[i] = v; src[i] = "tmap"; }
     }
     const missing: number[][] = [];
     for (let i = 0; i < samples.length; i++) {
-      if (kmh[i] != null) continue;
+      if (kmh[i] != null || askedNone.has(i)) continue;
       const run = missing[missing.length - 1];
       if (run && run[run.length - 1] === i - 1) run.push(i); else missing.push([i]);
     }
@@ -349,6 +355,10 @@ export class SpeedLimits {
       out[m.sourceIndex] = m.speed;
       this.remembered.put(s.p, s.deg, m.speed);
     }
+    // Those it had nothing for (put on another road, no speed): remembered too, as asked. Forgotten, each was asked
+    // again with its neighbours every time the route was — a call each, five times the first ask's on a long route
+    // asked again (review, 2026-11-13).
+    out.forEach((v, i) => { if (v == null) this.remembered.put(points[i].p, points[i].deg, NONE); });
     return out;
   }
 
@@ -367,7 +377,7 @@ export class SpeedLimits {
       // left out (OSRM names it) and the rest asked again.
       for (let tries = 0; tries < 8 && part.length >= 2; tries++) {
         const coords = part.map((w) => `${w.p[0].toFixed(6)},${w.p[1].toFixed(6)}`).join(";");
-        const bearings = part.map((w) => `${Math.round(w.deg)},45`).join(";");
+        const bearings = part.map((w) => `${osrmDeg(w.deg)},45`).join(";");
         const a = await this.fetchJson(`${base}/route/v1/driving/${coords}?overview=false&annotations=nodes,distance&continue_straight=true&bearings=${bearings}&radiuses=${part.map(() => "25").join(";")}`);
         j = (await a.json()) as typeof j;
         const bad = j.code === "NoSegment" ? Number(/coordinate (\d+)/.exec(j.message ?? "")?.[1]) : NaN;
@@ -420,7 +430,7 @@ export class SpeedLimits {
     const told = (kmh: number) => { if (deg != null) this.lastTold.set(who, { kmh, p, deg, t: this.now() }); return { kmh, src: "tmap" as const }; };
     if (deg != null) {
       const v = this.remembered.near(p, deg);
-      if (v != null) return told(v);
+      if (v != null && v !== NONE) return told(v);
     }
     const last = this.hereAskedAt.get(who) ?? 0;
     if (deg != null && this.canAskTmap() && this.now() - last >= HERE_EVERY_MS) {
@@ -472,7 +482,7 @@ export class SpeedLimits {
     if (!base || deg == null || !this.links.ready) return null;
     const k = Math.cos(p[1] * RAD), ahead: LonLat = [p[0] + (Math.sin(deg * RAD) * 60) / (R * RAD * k), p[1] + (Math.cos(deg * RAD) * 60) / (R * RAD)];
     const coords = `${p[0].toFixed(6)},${p[1].toFixed(6)};${ahead[0].toFixed(6)},${ahead[1].toFixed(6)}`;
-    const a = await this.fetchJson(`${base}/route/v1/driving/${coords}?overview=false&annotations=nodes&bearings=${Math.round(deg)},45;${Math.round(deg)},90&radiuses=25;60`);
+    const a = await this.fetchJson(`${base}/route/v1/driving/${coords}?overview=false&annotations=nodes&bearings=${osrmDeg(deg)},45;${osrmDeg(deg)},90&radiuses=25;60`);
     const j = (await a.json()) as { code?: string; routes?: { legs: { annotation: { nodes: number[] } }[] }[]; waypoints?: { distance: number }[] };
     const nodes = j.routes?.[0]?.legs[0]?.annotation.nodes;
     if (j.code !== "Ok" || !nodes?.length || (j.waypoints?.[0]?.distance ?? Infinity) > MATCH_OFF_M) return null;

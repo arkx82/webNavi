@@ -174,7 +174,10 @@ export class Lockout {
   /** One wrong try under each of [keys]. */
   failed(keys: string[], now = Date.now()) {
     for (const k of keys) {
-      const count = (this.failures.get(k)?.count ?? 0) + 1;
+      // Counted afresh once its last lock (or the minute since the last wrong try) is over: kept, one more wrong try a
+      // minute locked the account again for good — anyone's, from anywhere (review, 2026-11-13).
+      const f = this.failures.get(k);
+      const count = (f && f.until > now ? f.count : 0) + 1;
       // Set anew so the map's order is by last failure: the oldest go first past the cap.
       this.failures.delete(k);
       this.failures.set(k, { count, until: now + this.ms });
@@ -193,6 +196,26 @@ export class Lockout {
   get size() {
     return this.failures.size;
   }
+}
+
+/** Wrong logins an account takes, from all addresses together, before it is locked for a while. */
+export const NAME_LOCK_AFTER = 30;
+
+/**
+ * The login's two counts: by the address, [after] wrong tries; by the account's name, from every address together,
+ * NAME_LOCK_AFTER. One address (or a LAN host forging CF-Connecting-IP) is locked itself long before it could lock the
+ * account, so it cannot keep anyone out; many together trying one account are still held to a few dozen a minute.
+ */
+export class LoginLockout {
+  private byAddress: Lockout;
+  private byName: Lockout;
+  constructor(after = 5, ms = 60_000) {
+    this.byAddress = new Lockout(after, ms);
+    this.byName = new Lockout(NAME_LOCK_AFTER, ms);
+  }
+  wait(ip: string, name: string, now = Date.now()) { return Math.max(this.byAddress.wait([`ip:${ip}`], now), this.byName.wait([`name:${name}`], now)); }
+  failed(ip: string, name: string, now = Date.now()) { this.byAddress.failed([`ip:${ip}`], now); this.byName.failed([`name:${name}`], now); }
+  passed(ip: string, name: string) { this.byAddress.passed([`ip:${ip}`]); this.byName.passed([`name:${name}`]); }
 }
 
 /**

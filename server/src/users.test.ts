@@ -1,7 +1,8 @@
 import { test } from "node:test";
+import { NAME_LOCK_AFTER } from "./guard.js";
 import assert from "node:assert/strict";
 import Fastify from "fastify";
-import { mkdtempSync, readFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, statSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Db } from "./db.js";
@@ -34,13 +35,16 @@ test("a bad cookie on an /api call is a 401, not a crash", async () => {
   assert.equal(r.statusCode, 401);
 });
 
-test("five wrong passwords lock the account, whatever address the tunnel header claims after", async () => {
+test("five wrong passwords lock the address; an account is locked by many addresses together, not kept locked by one", async () => {
   const { app } = await site();
   for (let i = 0; i < 5; i++) assert.equal((await login(app, "june", "wrong!!", "1.1.1.1")).statusCode, 401);
   assert.equal((await login(app, "june", "secret1", "1.1.1.1")).statusCode, 429);
-  assert.equal((await login(app, "june", "secret1", "2.2.2.2")).statusCode, 429, "a forged address does not free the account");
+  assert.equal((await login(app, "mina", "secret1", "1.1.1.1")).statusCode, 429, "the address is held, whatever name");
+  // One address cannot keep the account from its owner (review, 2026-11-13): june logs in from elsewhere.
+  assert.equal((await login(app, "june", "secret1", "2.2.2.2")).statusCode, 200);
+  // Wrong tries from many addresses (or a LAN host forging the tunnel's header) lock the account at NAME_LOCK_AFTER.
+  for (let i = 0; i < NAME_LOCK_AFTER; i++) await login(app, "june", "wrong!!", `10.0.${i}.1`);
   assert.equal((await login(app, "JUNE ", "secret1", "3.3.3.3")).statusCode, 429, "nor another spelling of the name");
-  assert.equal((await login(app, "mina", "secret1", "1.1.1.1")).statusCode, 429, "the address is held too");
   assert.equal((await login(app, "mina", "secret1", "4.4.4.4")).statusCode, 401, "another name from another address is only wrong");
 });
 
@@ -70,6 +74,21 @@ test("the page's log goes to a file a day, and is refused when the day's file is
   const big = { lines: Array.from({ length: 2000 }, () => "x".repeat(450)) };
   for (let i = 0; i < 6; i++) assert.equal((await app.inject({ method: "POST", url: "/api/me/log", payload: big, headers: { cookie } })).statusCode, 200, `post ${i}`);
   assert.equal((await app.inject({ method: "POST", url: "/api/me/log", payload: big, headers: { cookie } })).statusCode, 413);
+});
+
+test("the browser's reports go into the day's log on one line each, a day's worth at most; an odd entry is no crash", async () => {
+  const { app, dir } = await site();
+  const cookie = (await login(app, "june", "secret1")).headers["set-cookie"] as string;
+  const post = (body: unknown) => app.inject({ method: "POST", url: "/api/report", payload: JSON.stringify(body), headers: { cookie, "content-type": "application/json" } });
+  assert.equal((await post([null, { type: "crash\n2026 forged line", url: "https://x/car\nnext", body: { reason: "oom" } }])).statusCode, 204);
+  const file = join(dir, "client-logs", readdirSync(join(dir, "client-logs"))[0]);
+  const rows = readFileSync(file, "utf8").trim().split("\n");
+  assert.equal(rows.length, 1);
+  assert.ok(rows[0].includes("브라우저 보고 crash 2026 forged line /car next"), rows[0]);
+  // 20 reports of 40 KB a post: the day stops growing at about 1 MB, whatever is sent.
+  const big = Array.from({ length: 20 }, () => ({ type: "crash", body: "x".repeat(40_000) }));
+  for (let i = 0; i < 5; i++) assert.equal((await post(big)).statusCode, 204);
+  assert.ok(statSync(file).size < 1_100_000, `${statSync(file).size}`);
 });
 
 test("the music player's calls are gated like the rest: no session, no TIDAL token, audio or proxy; the state alone is open", async () => {

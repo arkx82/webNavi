@@ -155,8 +155,11 @@ export class KmaWeather {
           this.items("MidFcstInfoService/getMidLandFcst", { regId: city.land, tmFc }).then((i) => i[0] ?? null).catch(() => null),
           this.items("MidFcstInfoService/getMidTa", { regId: city.ta, tmFc }).then((i) => i[0] ?? null).catch(() => null),
         ]);
+        // Both refused (the day's calls spent, the service down): none kept, or the 4–10 day forecast stayed empty
+        // for the three hours till the next base time (review, 2026-11-13). Asked again next time.
+        if (!land && !ta) throw new Error("중기예보 없음");
         return { land, ta, base: tmFc };
-      }),
+      }).catch(() => ({ land: null, ta: null, base: midBase() })),
     ]);
     return assemble(city.name, now, fcst, mid);
   }

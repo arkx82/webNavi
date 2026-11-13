@@ -648,3 +648,75 @@ test("the page held up 10 s with the fixes still coming as it stopped: not recko
   assert.notEqual(tunnel.frame(11_600)!.mode, "reckoning");
   assert.equal(tunnel.frame(11_600 + THAW_MS + 100)!.mode, "reckoning");
 });
+
+/** A 10 km road due north, and a fix [m] metres up it (review, 2026-11-13: the tunnel cases). */
+const longPath: LonLat[] = Array.from({ length: 201 }, (_, i) => offset(start, 0, i * 50));
+const longRoute = { provider: "osrm", distanceM: 10_000, durationS: 500, path: longPath, guides: [], segments: [] } as unknown as Route;
+const fixUp = (t: number, m: number, accM: number, speed: number): Fix => { const at = offset(start, 0, m); return { t, lon: at[0], lat: at[1], accM, speed, heading: 0, course: 0 } as Fix; };
+/** Into a tunnel at 20 m/s: good fixes to 1000 m, then 60 s of placeless ones (acc 10000) — the car 1200 m on. */
+function intoTunnel() {
+  const tr = new Tracker();
+  tr.setRoute(longRoute);
+  let now = 10_000, t = 1_700_000_000_000;
+  const step = (ms: number) => { now += ms; t += ms; };
+  for (let m = 900; m <= 1000; m += 20) { tr.feed(fixUp(t, m, 5, 20), now); for (let k = 0; k < 10; k++) { step(100); tr.frame(now); } }
+  for (let i = 0; i < 600; i++) { tr.feed(fixUp(t, 1000, 10_000, 20), now); step(100); tr.frame(now); }
+  return { tr, step, at: () => ({ now, t }) };
+}
+
+test("out of a tunnel, a fix of 120 m is the reckoning's new place: the car is not leapt a tunnel's length on", () => {
+  const { tr, step, at } = intoTunnel();
+  const out = tr.frame(at().now)!.alongM!;
+  assert.ok(Math.abs(out - 2220) < 60, `${out}`);
+  tr.feed(fixUp(at().t, 2200, 120, 20), at().now);
+  for (const ms of [100, 900, 1000]) {
+    step(ms);
+    const a = tr.frame(at().now)!.alongM!;
+    assert.ok(a < 2300, `${a} m: leapt on`);
+  }
+});
+
+test("standing in a tunnel, the browser silent: the car stays where it was reckoned to, not back at the tunnel's mouth", () => {
+  const { tr, step, at } = intoTunnel();
+  // Slowing to a stop with the placeless fixes still coming, then none.
+  for (let i = 0, v = 20; i < 60; i++) { v = Math.max(0, v - 0.4); tr.feed(fixUp(at().t, 1000, 10_000, v), at().now); step(100); tr.frame(at().now); }
+  const stood = tr.frame(at().now)!;
+  for (const ms of [1000, 1500, 1000, 5000, 30_000]) {
+    step(ms);
+    const s = tr.frame(at().now)!;
+    assert.ok(Math.abs(s.alongM! - stood.alongM!) < 5, `${ms}: ${s.alongM} (stood at ${stood.alongM})`);
+    assert.ok(metres(s.at[0], s.at[1], stood.at[0], stood.at[1]) < 5, `${ms}: drawn ${metres(s.at[0], s.at[1], stood.at[0], stood.at[1])} m off`);
+  }
+});
+
+test("a route there and back along one road (a U-turn): the car is put on the pass running its way, not taken for off the route", () => {
+  // North 600 m, back down [gap] m to the left, then west: the two passes on one centreline, or 7 m apart.
+  for (const [gap, err] of [[0, 0], [7, 4.5]]) {
+    const path: LonLat[] = [];
+    for (let y = 0; y <= 600; y += 30) path.push(offset(start, 0, y));
+    for (let y = 600; y >= 0; y -= 25) path.push(offset(offset(start, 0, y), 270, gap));
+    for (let x = gap + 30; x <= 400; x += 30) path.push(offset(start, 270, x));
+    const r = { provider: "kakao", distanceM: 1600, durationS: 160, path, guides: [], segments: [] } as unknown as Route;
+    const tr = new Tracker();
+    tr.setRoute(r);
+    let off = 0;
+    tr.onOffRoute = () => { off++; };
+    let now = 10_000, t = 1_700_000_000_000;
+    const at = (x: number, y: number, course: number): Fix => { const p = offset(offset(start, 0, y), 270, x); return { t, lon: p[0], lat: p[1], accM: 5, speed: 15, heading: course, course } as Fix; };
+    // Up the way out, the fix a little toward the middle of the road.
+    for (let y = 100; y <= 590; y += 15) {
+      tr.feed(at(err, y, 0), now);
+      const s = tr.frame(now)!;
+      assert.ok(Math.abs(s.alongM! - y) < 30, `gap ${gap}, out at ${y}: ${s.alongM}`);
+      now += 1000; t += 1000;
+    }
+    // Back down after the U-turn.
+    for (let y = 560; y >= 300; y -= 15) {
+      tr.feed(at(gap - err, y, 180), now);
+      const s = tr.frame(now)!;
+      assert.ok(Math.abs(s.alongM! - (600 + gap + (600 - y))) < 30, `gap ${gap}, back at ${y}: ${s.alongM}`);
+      now += 1000; t += 1000;
+    }
+    assert.equal(off, 0, `gap ${gap}: re-routed ${off} times`);
+  }
+});

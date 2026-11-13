@@ -90,6 +90,12 @@ export class KakaoHub {
   carFix(user: string, fix: Fix, trip?: { id: string; goal: [number, number]; have?: boolean }): { slot: number | null; events: KakaoSafety[]; lines?: TripLines; why?: string } {
     this.sweep();
     let s = this.slots.find((x) => x.user === user);
+    // Its app gone quiet or out of "ready" (died, the SDK in error): the car moves to one that serves. Held, it was
+    // given nothing for the rest of the drive, its fixes keeping the slot from being let go (review, 2026-11-13).
+    if (s && !this.serving(s)) {
+      this.release(s, this.appUp(s) ? `app ${s.state}` : "app gone");
+      s = undefined;
+    }
     if (!s) {
       s = this.slots.find((x) => !x.user && this.serving(x));
       if (!s) return { slot: null, events: [], why: this.slots.some((x) => this.serving(x)) ? "busy" : "down" };
