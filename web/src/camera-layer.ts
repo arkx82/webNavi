@@ -1,5 +1,6 @@
 import type maplibregl from "maplibre-gl";
 import { metres } from "./geo";
+import { otherWays } from "./kakao-camera";
 import { flashingNow, type Feature, type Kind } from "./warnings";
 import type { LonLat } from "./types";
 
@@ -87,8 +88,13 @@ export class CameraLayer {
       const dx = (f.lon - at[0]) * kx, dy = (f.lat - at[1]) * ky, d = Math.hypot(dx, dy);
       if (d > reachM || d < 5) return false;
       if (off(headingDeg, ((Math.atan2(dx, dy) * 180) / Math.PI + 360) % 360) > 30) return false;
-      return !(f.ways?.length && f.ways.every((w) => w.deg >= 0 && off(headingDeg, w.deg) >= 110));
+      return !otherWays(f, headingDeg);
     });
+  }
+
+  /** The cameras the map knows within [m] of [at] (for 카카오's, kakao-camera.ts otherWayCamera). */
+  near(at: LonLat, m: number): Feature[] {
+    return [...this.known.values()].filter((f) => f.kind !== "signal-light" && metres(at[0], at[1], f.lon, f.lat) <= m);
   }
 
   /** Features the route watch placed, so a light ahead is drawn even before the map's own ask has it. */

@@ -21,6 +21,7 @@ import { Voice } from "./voice";
 import { RouteWatch, SECTION_MAX_M, isRear, phraseFor, type Ahead, type Feature, type Kind } from "./warnings";
 import { Notes, incidentNote, popupNote, restNote, schoolNote, type Note } from "./notes";
 import { CameraLayer } from "./camera-layer";
+import { KAKAO_SAME_M, behindCar, kakaoCameraStep, kakaoCardShown, otherWayCamera, type KakaoCamera } from "./kakao-camera";
 import { loadDrive, loadLast, saveDrive, saveLast, worthResuming } from "./resume";
 import { applyTheme, screenMode, watchScreenMode } from "./theme";
 import { ZoneLayer } from "./zone-layer";
@@ -673,13 +674,23 @@ function carFloorM(at: LonLat): number {
     return 0;
   }
 }
+/**
+ * A frame this slow has its steps logged: the page stood still minutes at a time on the move (hantwo 11-04 8 min,
+ * 11-05 3 min), all in this loop (긴 프레임 "Kw"). One step each time is that step's (a GL call waiting on the GPU);
+ * any step, the whole page was stopped.
+ */
+const FRAME_STEPS_LOG_MS = 1000;
 function frame() {
   const at = performance.now();
   if (frames.at && document.visibilityState === "visible") frames.longestMs = Math.max(frames.longestMs, at - frames.at);
   frames.at = at;
   frames.n++;
+  const laps: [string, number][] = [];
+  let lapAt = at;
+  const lap = (name: string) => { const t = performance.now(); laps.push([name, t - lapAt]); lapAt = t; };
   try {
     const shown = tracker.frame();
+    lap("tracker");
     if (shown && route && Date.now() - tracedAt >= 1000) {
       tracedAt = Date.now();
       trace.shown(shown);
@@ -695,27 +706,35 @@ function frame() {
       const onMotorwayNow = !!route && !!routeLine && shown.alongM != null && motorwayAt(route, routeLine.place(shown.alongM).segment);
       carLaneM += ((onMotorwayNow ? LANE_WIDTH_M.motorway : LANE_WIDTH_M.town) - carLaneM) * 0.03;
       carFloorNowM = carFloorM(carAt);
+      lap("car-floor");
       carLayer.sizeTo(carLaneM, carFloorNowM);
       carLayer.place(carAt, markerBearing, shown.speedMps);
+      lap("car");
       zoomSpeed += (shown.speedMps * 3.6 - zoomSpeed) * 0.03;
       // The 3D 분기점 panel shows the junction: the map goes on as it was, not drawn in for the turn as well.
       turnInM = route && !junctionView.open ? shown.nextGuide?.inM : undefined;
       closeup = closeupFor(shown);
       showCloseup(closeup);
+      lap("closeup");
       showJunction3d(shown);
+      lap("junction3d");
       // 카메라 프레임 30: the map moved every other frame — a car computer that cannot keep 60 draws an even 30 more
       // smoothly than an uneven 40 — the car itself still drawn every frame.
       const now = performance.now();
       const due = guide.followFps !== 30 || now - cameraMovedAt >= 1000 / 30 - 2;
       if (follow && !handsOn() && due) { followCar(shown.at, shown.speedMps); cameraMovedAt = now; }
+      lap("follow");
       // The painted lanes only where they matter on the move — near a turn, or slow — unless asked for always; a map
       // moved by hand shows everything.
       showTurn(shown);
+      lap("turn");
       showLanes(shown);
       placeLanesUnderCar();
+      lap("lanes");
       routeBar.show(route, routeLine, shown.alongM ?? null, guide.trafficBar);
       showSectionHud(shown);
       backoff.seen(!shown.offRoute && (shown.offM == null || shown.offM <= OFF_M));
+      lap("bar");
     }
   } catch (e) {
     // One bad frame (a NaN handed to the marker) must not end the loop for the rest of the drive.
@@ -725,6 +744,8 @@ function frame() {
       log(`화면 갱신 오류 ${message}`);
     }
   }
+  const took = performance.now() - at;
+  if (took > FRAME_STEPS_LOG_MS) log(`화면 갱신 ${Math.round(took)} ms: ${laps.filter(([, ms]) => ms >= 1).map(([n, ms]) => `${n} ${Math.round(ms)}`).join(" · ") || "단계 모두 1 ms 아래"}`);
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
@@ -3056,8 +3077,7 @@ function kakaoTripId(r: Route): string {
 let kakaoLines: { id: string; lines: KakaoLine[] } | null = null;
 /** Parked this long, the car lets its slot go (three cars share the server's). */
 const KAKAO_PARKED_MS = 3 * 60_000;
-/** A camera of ours this near 카카오's is the same camera. A zone's point (its facility, or where it begins) is looser. */
-const KAKAO_SAME_M = 80;
+/** A camera of ours this near 카카오's is the same camera (KAKAO_SAME_M); a zone's point (its facility, or where it begins) is looser. */
 const KAKAO_SAME_ZONE_M = 300;
 const KAKAO_CARD_ID = "kakao";
 const KAKAO_CAMERAS = new Set<Kind>(["speed", "signal", "speed-signal", "section-start", "section-end", "school"]);
@@ -3076,7 +3096,19 @@ let kakaoSending = false;
 let kakaoMovedAt = 0;
 /** What was said of each, by "id:rung": 카카오 tells a camera at its own distances, some our same rung. */
 const kakaoSaid = new Set<string>();
-let kakaoCard: { s: KakaoSafety; since: number; nearest: number } | null = null;
+let kakaoCard: (KakaoCamera & { s: KakaoSafety }) | null = null;
+/**
+ * 카카오's cameras judged not this car's way (kakaoSay, kakaoWhere), and when: told again on this drive past it, neither
+ * said nor shown. For a while only — the same camera is the way home's.
+ */
+const kakaoNotOurs = new Map<number, number>();
+const KAKAO_NOT_OURS_MS = 10 * 60_000;
+function kakaoNotOur(id: number): boolean {
+  const t = kakaoNotOurs.get(id);
+  if (t != null && Date.now() - t < KAKAO_NOT_OURS_MS) return true;
+  kakaoNotOurs.delete(id);
+  return false;
+}
 
 function kakaoTick() {
   const f = tracker.frame();
@@ -3163,13 +3195,24 @@ function kakaoSectionBounds() {
   return { id: k.id, limit: k.limit, startAlongM: k.startOdo, endAlongM: k.endOdo ?? k.startOdo + SECTION_MAX_M };
 }
 
-/** Whether our own lists have it: a camera of ours near 카카오's camera, a zone near its zone. */
+/**
+ * A camera of ours ahead with 카카오's limit, its metres to go this near 카카오's, is the same camera: 카카오 puts some
+ * further from ours than KAKAO_SAME_M (금강전기앞 G2807, told by 카카오 and then by us two seconds apart, each
+ * morning of 2026-11-05..12).
+ */
+const KAKAO_SAME_AHEAD_M = 150;
+
+/** Whether our own lists have it: a camera of ours near 카카오's camera, or as far ahead with its limit; a zone near its zone. */
 function kakaoKnown(e: KakaoSafety): boolean {
   const camera = KAKAO_CAMERAS.has(e.kind);
-  for (const w of [watch, safe.watch]) {
+  const shown = tracker.frame();
+  const watches: [RouteWatch | null, number | null | undefined][] = [[watch, shown && !shown.offRoute ? shown.alongM : null], [safe.watch, safeRoad ? safeAlong : null]];
+  for (const [w, along] of watches) {
     if (!w) continue;
     const near = w.near([e.lon, e.lat], camera ? KAKAO_SAME_M : KAKAO_SAME_ZONE_M);
     if (near.some((f) => (camera ? KAKAO_CAMERAS.has(f.kind) : f.kind === "school-zone" || f.kind === "school"))) return true;
+    if (camera && e.limit && along != null && e.dist >= 0
+      && w.ahead(along, e.dist + KAKAO_SAME_AHEAD_M).some((a) => KAKAO_CAMERAS.has(a.feature.kind) && a.feature.limit === e.limit && Math.abs(a.inM - e.dist) <= KAKAO_SAME_AHEAD_M)) return true;
   }
   return false;
 }
@@ -3187,6 +3230,19 @@ function kakaoRearAt(at: LonLat): boolean {
 }
 
 function kakaoSay(e: KakaoSafety, speedMps: number | null) {
+  // Not this car's: one our lists have on the other carriageway, or one behind the car — 카카오 is given no course
+  // (kakao-camera.ts). Before its 후면 is noted: the other way's rear camera is not the one beside it this way.
+  const f = tracker.frame();
+  if (KAKAO_CAMERAS.has(e.kind) && f) {
+    const at: LonLat = [e.lon, e.lat];
+    const seen = kakaoNotOur(e.id);
+    const other = seen ? null : otherWayCamera(cameraLayer?.near(at, KAKAO_SAME_M) ?? [], at, f.bearing);
+    const why = seen ? "" : other ? `반대 차로, 우리 ${other.id.split("-").pop()}` : behindCar(f.at, f.bearing, at) ? "차 뒤" : null;
+    if (why != null) {
+      if (why) { kakaoNotOurs.set(e.id, Date.now()); log(`카카오 경고 (${why}) ${e.code} ${Math.round(e.dist)} m`); }
+      return;
+    }
+  }
   if (KAKAO_CAMERAS.has(e.kind) && /Backward/.test(e.code)) {
     const now = Date.now();
     while (kakaoRear.length && (now - kakaoRear[0].t > KAKAO_REAR_KEEP_MS || kakaoRear.length > 50)) kakaoRear.shift();
@@ -3223,22 +3279,28 @@ function kakaoSay(e: KakaoSafety, speedMps: number | null) {
   sayWarning({ feature: { id: `kakao:${e.id}`, kind: e.kind, lon: e.lon, lat: e.lat, limit: e.limit, rear: /Backward/.test(e.code) }, alongM: 0, inM: e.dist, rungM: rung }, speedMps, "카카오 경고");
 }
 
-/** 카카오's camera as the car comes to it and goes by: its distance, and whether it is behind (the nearest was close, and is past). */
-function kakaoWhere(): { d: number; passed: boolean; limit: number } | null {
+/**
+ * 카카오's camera as the car comes to it and goes by (kakao-camera.ts kakaoCameraStep): its distance, and where the
+ * car is with it. One the car goes away from without coming to it is let go, and not taken again (hantwo, 2026-11:
+ * the other carriageway's camera on the card, its metres counting up).
+ */
+function kakaoWhere(): { d: number; state: ReturnType<typeof kakaoCameraStep>; limit: number } | null {
   const c = kakaoCard, f = tracker.frame();
   if (!c || !f || !c.s.limit) return null;
   const d = metres(f.at[0], f.at[1], c.s.lon, c.s.lat);
-  c.nearest = Math.min(c.nearest, d);
-  const passed = c.nearest < 60 && d > c.nearest + 30;
-  // Held as our own cameras hold the sign: to 300 m past it (warnings.ts CAMERA_ON_M); three minutes at most.
-  if (Date.now() - c.since > 180_000 || (passed && d > 300)) { kakaoCard = null; return null; }
-  return { d, passed, limit: c.s.limit };
+  const state = kakaoCameraStep(c, d, Date.now());
+  if (state === "away") {
+    kakaoNotOurs.set(c.s.id, Date.now());
+    log(`카카오 카메라 멀어짐 ${c.s.code}: ${Math.round(c.nearest)} m까지 오고 ${Math.round(d)} m`);
+  }
+  if (state === "away" || state === "done") { kakaoCard = null; return null; }
+  return { d, state, limit: c.s.limit };
 }
 
-/** The camera card for 카카오's camera while the car comes to it; gone once past it. */
+/** The camera card for 카카오's camera while the car comes to it, from 카메라 안내 시작 in as ours; gone once past it. */
 function kakaoHeld(): ReturnType<RouteWatch["limitAt"]> {
   const k = kakaoWhere();
-  return k && !k.passed ? { limit: k.limit, why: "camera", inM: k.d, id: KAKAO_CARD_ID } : null;
+  return k && kakaoCardShown(k.state, k.d, guide.cameraFromM) ? { limit: k.limit, why: "camera", inM: k.d, id: KAKAO_CARD_ID } : null;
 }
 
 /** Lights this close along the route are one junction's; the nearest ahead of the car is "the next". */
