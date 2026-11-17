@@ -609,7 +609,21 @@ test("a 구간 단속 start left early is not paired with another stretch's end 
     { id: "A-start", kind: "section-start", lon: north(2000)[0], lat: north(2000)[1], limit: 100, direction: "1", pair: north(4000, 10_000) },
     { id: "B-end", kind: "section-end", lon: north(20_000)[0], lat: north(20_000)[1], limit: 80, direction: "1", pair: north(12_000, -3000) },
   ] as Feature[]);
-  const a = w.sections().find((s) => s.feature.id === "A-start")!;
-  assert.ok(a.endM < 5000, `A ran to ${a.endM}`);
+  // A unsaid (its end is nowhere the route goes), or ended near its start: never run on to B's end.
+  const a = w.sections().find((s) => s.feature.id === "A-start");
+  assert.ok(!a || a.endM < 5000, `A ran to ${a?.endM}`);
   assert.equal(w.limitAt(15_000), null);
+});
+
+test("the other carriageway's 구간 단속 start, the route going its way only at first, is not a stretch (동부간선 at 성수, 2026-11-15)", () => {
+  // The start faces north-east; its end 9.8 km north. The route goes 250 m north, then west and south-west away.
+  const p0: LonLat = [127.0605, 37.5493];
+  const path: LonLat[] = [p0, offset(p0, 0, 250)];
+  for (let i = 1; i <= 30; i++) path.push(offset(path[1], 255, i * 100));
+  const route = { provider: "naver", distanceM: 3250, durationS: 600, path, guides: [], segments: [] } as unknown as Route;
+  const start = offset(p0, 0, 240);
+  const w = new RouteWatch(route);
+  w.add([{ id: "K0386", kind: "section-start", lon: start[0], lat: start[1], limit: 80, direction: "2", pair: offset(start, 355, 9800), ways: [{ deg: 90, at: start }] }] as Feature[]);
+  assert.deepEqual(w.sections(), []);
+  assert.equal(w.limitAt(1000), null);
 });

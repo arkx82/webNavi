@@ -24,6 +24,11 @@ export interface SafeDeps {
   prefs(): WatchPrefs;
   log(text: string): void;
   now?(): number;
+  /**
+   * What was said, by feature id, shared with the route's watch (main.ts warningsSaid): a camera said in 안전운전 and
+   * again as the route began was said twice in half a minute (2026-11-15). Without it, the drive's own.
+   */
+  spoken?(): Map<string, Set<number>>;
 }
 
 /** The road asked for this far ahead; again once this little of it is left in front of the car. */
@@ -94,7 +99,8 @@ export class SafeDrive {
   private trail: LonLat[] = [];
   private trailM = 0;
   /** What was said, by feature id: kept from one line to the next, so a camera is said once. */
-  private spoken = new Map<string, Set<number>>();
+  private own = new Map<string, Set<number>>();
+  private get spoken() { return this.deps.spoken?.() ?? this.own; }
   /** When each feature was first found said. */
   private spokenSince = new Map<string, number>();
   private known = new Map<string, Feature>();

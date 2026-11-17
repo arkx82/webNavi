@@ -53,6 +53,9 @@ const HOLD_M = 500;
 const HOLD_DEG = 30;
 /** OSRM's waypoints on the route, this many samples apart (500 m), each snapped the route's way. */
 const WAYPOINT_EVERY = 5;
+/** A leg of 표준노드링크 this much longer than the route between its ends (and at least DETOUR_M) went another way. */
+const DETOUR_RATIO = 1.5;
+const DETOUR_M = 300;
 /** 표준노드링크's ids for a link's inner vertices begin here (tools/nodelink/build.py VERTEX_BASE). */
 const INNER_ID = 9_000_000_000;
 /** Limits that are limits: a 0 or a 5 is a blank. */
@@ -370,6 +373,7 @@ export class SpeedLimits {
     const way = samples.filter((_, i) => i % WAYPOINT_EVERY === 0 || i === samples.length - 1);
     // Nodes in order, each edge with the route distance (samples' m) it covers.
     const nodes: string[] = [], edgeFrom: number[] = [], edgeTo: number[] = [];
+    const strays = new Set<number>();
     for (let s = 0; s < way.length - 1; s += 99) {
       const part = way.slice(s, s + 100);
       let j: { code?: string; message?: string; routes?: { legs: { annotation: { nodes: number[]; distance: number[] } }[] }[] } = {};
@@ -388,6 +392,9 @@ export class SpeedLimits {
       j.routes[0].legs.forEach((leg, li) => {
         const n = leg.annotation.nodes.map(String), d = leg.annotation.distance;
         const m0 = part[li].m, m1 = part[li + 1].m, total = d.reduce((x, y) => x + y, 0) || 1;
+        // A leg far longer than the route between its ends went another way round (a waypoint left out between them,
+        // on a lane 표준노드링크 lacks): its roads are not the route's, and its limits not laid along it.
+        const strayed = total > Math.max(DETOUR_M, (m1 - m0) * DETOUR_RATIO);
         if (!nodes.length || nodes[nodes.length - 1] !== n[0]) {
           if (nodes.length) { edgeFrom.push(m0); edgeTo.push(m0); }
           nodes.push(n[0]);
@@ -399,6 +406,7 @@ export class SpeedLimits {
           nodes.push(n[i + 1]);
           edgeFrom.push(from);
           edgeTo.push(m0 + (acc / total) * (m1 - m0));
+          if (strayed) strays.add(edgeFrom.length - 1);
         }
       });
     }
@@ -415,7 +423,9 @@ export class SpeedLimits {
     let e = 0;
     for (let q = 0; q < samples.length; q++) {
       while (e < edgeTo.length - 1 && edgeTo[e] < samples[q].m) e++;
-      if (e < limit.length && edgeFrom[e] <= samples[q].m + 1) out[q] = limit[e];
+      // Only within an edge: past the last one (the route's end on a lane 표준노드링크 lacks, its waypoint left out) is no
+      // edge's. Taken as the last's, an apartment's side street read 80 off the main road before it (2026-11-15).
+      if (e < limit.length && !strays.has(e) && edgeFrom[e] <= samples[q].m + 1 && samples[q].m <= edgeTo[e] + 1) out[q] = limit[e];
     }
     return out;
   }

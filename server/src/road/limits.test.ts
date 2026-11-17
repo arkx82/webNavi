@@ -135,6 +135,32 @@ test("off the route: TMAP's nearest road if it runs the car's way, remembered al
   assert.equal(n, before + 1);
 });
 
+test("표준노드링크 lays no limit past its last road, nor along a leg that went another way round (2026-11-15)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "limits-"));
+  const db = new DatabaseSync(join(dir, "links.db"));
+  db.exec("CREATE TABLE links (id TEXT PRIMARY KEY, f TEXT, t TEXT, maxspd INTEGER, nodes TEXT); CREATE INDEX links_ft ON links (f, t)");
+  db.prepare("INSERT INTO links VALUES (?, ?, ?, ?, ?)").run("L1", "1", "2", 80, "1,2");
+  db.prepare("INSERT INTO links VALUES (?, ?, ?, ?, ?)").run("L2", "2", "3", 60, "2,3");
+  db.close();
+  for (const way of ["end", "detour"] as const) {
+    const fetchJson: Fetch = async (url) => {
+      const n = (/driving\/([^?]+)/.exec(url)![1].match(/;/g) ?? []).length + 1;
+      // The route's end on a side street 표준노드링크 lacks: its waypoint refused, the road before it all there is.
+      if (way === "end" && n === 3) return { status: 400, json: async () => ({ code: "NoSegment", message: "Could not find a matching segment for coordinate 2" }) };
+      if (way === "end") return { status: 200, json: async () => ({ code: "Ok", routes: [{ legs: [{ annotation: { nodes: [1, 2], distance: [500] } }] }] }) };
+      // A second leg of 1.6 km for the route's 500 m: round by another road.
+      return { status: 200, json: async () => ({ code: "Ok", routes: [{ legs: [
+        { annotation: { nodes: [1, 2], distance: [500] } },
+        { annotation: { nodes: [2, 3], distance: [1600] } },
+      ] }] }) };
+    };
+    const limits = new SpeedLimits(() => undefined, () => "http://osrm", join(dir, "links.db"), undefined, fetchJson);
+    const a = await limits.alongRoute([[127.0, 37.5], [127.0113, 37.5]]);
+    assert.deepEqual(a.runs.map((r) => [r.kmh, r.src]), [[80, "nodelink"]], way);
+    assert.ok(a.runs[0].to <= 0.6, `${way}: to ${a.runs[0].to}`);
+  }
+});
+
 test("a waypoint OSRM cannot place (a lane 표준노드링크 lacks) is left out, not the whole stretch", async () => {
   const dir = mkdtempSync(join(tmpdir(), "limits-"));
   const db = new DatabaseSync(join(dir, "links.db"));

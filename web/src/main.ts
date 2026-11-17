@@ -21,7 +21,7 @@ import { Voice } from "./voice";
 import { RouteWatch, SECTION_MAX_M, isRear, phraseFor, type Ahead, type Feature, type Kind } from "./warnings";
 import { Notes, incidentNote, popupNote, restNote, schoolNote, type Note } from "./notes";
 import { CameraLayer } from "./camera-layer";
-import { KAKAO_SAME_M, behindCar, kakaoCameraStep, kakaoCardShown, otherWayCamera, stillAway, type KakaoCamera } from "./kakao-camera";
+import { KAKAO_SAME_M, behindCar, kakaoCameraStep, kakaoCardShown, offTheWay, otherWayCamera, stillAway, type KakaoCamera } from "./kakao-camera";
 import { loadDrive, loadLast, saveDrive, saveLast, worthResuming } from "./resume";
 import { applyTheme, screenMode, watchScreenMode } from "./theme";
 import { ZoneLayer } from "./zone-layer";
@@ -608,6 +608,7 @@ const safe = new SafeDrive({
     if (!a.ok) throw new Error((await a.json().catch(() => ({}))).error ?? `${a.status}`);
     return a.json();
   },
+  spoken: () => warningsSaid,
   near: async (at) => {
     const a = await fetch(`/api/safety/near?lon=${at[0]}&lat=${at[1]}&r=1500`);
     if (!a.ok) throw new Error(`${a.status}`);
@@ -1875,8 +1876,10 @@ function startDrive(r: Route) {
   if (fresh || elsewhere) {
     turnsSaid.clear();
     linesSaid.clear();
-    warningsSaid.clear();
-    kakaoSaid.clear();
+    // Not what was said a moment ago (안전운전 before the route, a drive ended and begun again): said again at once,
+    // "육백미터 앞에서 구간 단속이 시작됩니다" came three times in a minute (2026-11-15). 카카오's are let go by their own
+    // rule (kakaoForget).
+    for (const id of warningsSaid.keys()) if (!(Date.now() - (warnedAt.get(id) ?? 0) < WARNED_KEPT_MS)) warningsSaid.delete(id);
     popups.clear();
     dismissed.clear();
     backoff.reset();
@@ -2183,6 +2186,9 @@ const turnsSaid = new Map<string, Set<number>>();
 const linesSaid = new Set<string>();
 /** The same for the road's warnings, by feature. */
 const warningsSaid = new Map<string, Set<number>>();
+/** When each feature was last warned of; one this recent stays said into a new drive. */
+const warnedAt = new Map<string, number>();
+const WARNED_KEPT_MS = 5 * 60_000;
 /** A junction's key: its place to about 20 m, since each provider puts the same turn a few metres apart. */
 const junction = (at: LonLat) => `${Math.round(at[0] * 5000)},${Math.round(at[1] * 5000)}`;
 /**
@@ -3003,6 +3009,8 @@ function checkRoad(w: RouteWatch, r: Route, speedMps: number | null | undefined)
 /** A warning come due, said — once for things at one place. */
 function sayWarning(due: Ahead & { rungM: number }, speedMps: number | null | undefined, how = "경고") {
   const f = due.feature;
+  warnedAt.set(f.id, Date.now());
+  if (warnedAt.size > 2000) warnedAt.delete(warnedAt.keys().next().value!);
   // 후면: as the list says, or as 카카오 said of the camera there (kakaoRearAt).
   const phrase = phraseFor(due, isRear(f) || kakaoRearAt([f.lon, f.lat]));
   // One sentence for things at one place (a school zone and its camera); a second camera further on is its own.
@@ -3147,6 +3155,8 @@ function kakaoNotOur(id: number, car: LonLat): boolean {
   kakaoNotOurs.delete(id);
   return false;
 }
+/** A camera this near the end of 안전운전's road ahead may be past it, on whichever road the car takes there. */
+const KAKAO_AHEAD_END_M = 50;
 /** What was logged of 카카오's tellings left unsaid, by camera and why: once each, not at each of its distances. */
 const kakaoUnsaidLogged = new Set<string>();
 /** Our cameras within [m] of [at]: the map's, and those the route's or 안전운전's watch left out as the other way's. */
@@ -3293,7 +3303,11 @@ function kakaoSay(e: KakaoSafety, speedMps: number | null) {
   if (KAKAO_CAMERAS.has(e.kind) && f) {
     const at: LonLat = [e.lon, e.lat];
     const other = otherWayCamera(ourCamerasNear(at, KAKAO_SAME_M), at, f.bearing);
-    const why = other ? `반대 차로, 우리 ${other.id.split("-").pop()}` : kakaoNotOur(e.id, f.at) ? "멀어짐" : behindCar(f.at, f.bearing, at) ? "차 뒤" : null;
+    // Off the way the car goes: its route (where it is on it), or 안전운전's road ahead as far as that is known.
+    const offRoute = !!route && !!routeLine && !f.offRoute && offTheWay(routeLine, at);
+    const offAhead = !route && safeRoad && !!safe.line && offTheWay(safe.line, at, safe.line.lengthM - KAKAO_AHEAD_END_M);
+    const why = other ? `반대 차로, 우리 ${other.id.split("-").pop()}` : offRoute ? "경로 밖" : offAhead ? "앞길 밖"
+      : kakaoNotOur(e.id, f.at) ? "멀어짐" : behindCar(f.at, f.bearing, at) ? "차 뒤" : null;
     if (why != null) {
       const logged = `${e.id}:${why}`;
       if (!kakaoUnsaidLogged.has(logged)) {

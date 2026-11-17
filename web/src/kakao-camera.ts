@@ -1,4 +1,4 @@
-import { angleBetween, bearing, metres } from "./geo";
+import { angleBetween, bearing, metres, type Line } from "./geo";
 import type { Feature } from "./warnings";
 import type { LonLat } from "./types";
 
@@ -45,6 +45,19 @@ export function otherWayCamera(ours: Iterable<Feature>, at: LonLat, headingDeg: 
     if (d < best) { best = d; nearest = f; }
   }
   return nearest;
+}
+
+/** 카카오's camera this far off the way the car goes — its route, or 안전운전's road ahead — is another road's. */
+export const OFF_WAY_M = 80;
+/**
+ * Whether 카카오's camera at [at] is off [line], the way the car goes, where the line is known to run ([coveredM]: a
+ * road ahead ends where the car may turn either way, and a camera past it is no one's to judge). 카카오, given no course,
+ * told a camera on the motorway the car had just left for its exit: its 60 on the sign for a minute over the slip
+ * road's 40, till the car was seen going away from it (2026-11-15).
+ */
+export function offTheWay(line: Line, at: LonLat, coveredM = Infinity): boolean {
+  const p = line.project(at, 0, line.path.length);
+  return p.offM > OFF_WAY_M && p.alongM < coveredM;
 }
 
 /** Further from its heading than this, a camera is behind the car… */

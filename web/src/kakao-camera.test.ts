@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { behindCar, kakaoCameraStep, kakaoCardShown, otherWayCamera, otherWays, stillAway, type KakaoCamera } from "./kakao-camera";
-import { offset } from "./geo";
+import { behindCar, kakaoCameraStep, kakaoCardShown, offTheWay, otherWayCamera, otherWays, stillAway, type KakaoCamera } from "./kakao-camera";
+import { Line, offset } from "./geo";
 import type { Feature } from "./warnings";
 import type { LonLat } from "./types";
 
@@ -67,4 +67,16 @@ test("a camera gone away from is not taken again until the car comes nearer to i
   assert.equal(stillAway(700, 760), true);
   assert.equal(stillAway(700, 680), true);
   assert.equal(stillAway(700, 640), false);
+});
+
+test("a camera off the way the car goes is another road's; on it, or past where a road ahead is known, it is not judged off", () => {
+  // The route leaves the motorway (north) by an exit bending east; 카카오 tells the motorway's camera 400 m on.
+  const route = new Line([car, offset(car, 0, 300), offset(offset(car, 0, 300), 60, 600)]);
+  assert.equal(offTheWay(route, offset(car, 0, 700)), true);
+  assert.equal(offTheWay(route, offset(offset(car, 0, 300), 60, 400)), false);
+  assert.equal(offTheWay(route, offset(offset(offset(car, 0, 300), 60, 400), 150, 30)), false, "30 m beside it: its own");
+  // A road ahead that ends at a junction 300 m on: a camera beyond the end is no one's to judge.
+  const ahead = new Line([car, offset(car, 0, 300)]);
+  assert.equal(offTheWay(ahead, offset(car, 0, 700), ahead.lengthM - 50), false);
+  assert.equal(offTheWay(ahead, offset(offset(car, 0, 150), 90, 200), ahead.lengthM - 50), true);
 });
