@@ -30,6 +30,7 @@ import { GUIDE_LINES } from "../../server/src/phrases";
 import { ALERT_KINDS, alertPhrase, type AlertKind } from "../../server/src/phrases";
 import { Nearby } from "./nearby";
 import { CLOSE_ZOOM, autoZoom } from "./autozoom";
+import { HdLayer } from "./hdmap-layer";
 import { EVENTS, facilityOf, straightMatters, turnRungs, turnSay, unrepeated } from "./speech";
 import { repaint, sharedShare } from "./traffic";
 import { junctionKind, junctionOf, laneHint, motorwayAt, motorwaySides, namedTurnPhrase, townJunctionOf } from "./highway";
@@ -725,8 +726,8 @@ function frame() {
       const due = guide.followFps !== 30 || now - cameraMovedAt >= 1000 / 30 - 2;
       if (follow && !handsOn() && due) { followCar(shown.at, shown.speedMps); cameraMovedAt = now; }
       lap("follow");
-      // The painted lanes only where they matter on the move — near a turn, or slow — unless asked for always; a map
-      // moved by hand shows everything.
+      // The lane lines only where they matter on the move — near a band, or slow; a map moved by hand shows them.
+      hdLayer?.setAway(follow && !handsOn() ? lanesAway(shown) : false);
       showTurn(shown);
       lap("turn");
       showLanes(shown);
@@ -752,6 +753,23 @@ function frame() {
 requestAnimationFrame(frame);
 
 const approach = (from: number, to: number, k: number) => (Math.abs(to - from) < 0.005 ? to : from + (to - from) * k);
+
+/**
+ * Whether the lane lines can be put away for now: no band ahead within reach of the car, and not slow (with a little
+ * play, so they do not flicker). Off a route there is no band, and they show only slow.
+ */
+let lanesWereAway = true;
+function lanesAway(shown: Shown): boolean {
+  const kmh = shown.speedMps * 3.6;
+  const along = shown.alongM;
+  const bandNear = along != null && bandAlong.some(([a, b]) => along >= a - LANES_BEFORE_M && along <= b);
+  const fast = kmh > (lanesWereAway ? LANES_SLOW_KMH - 5 : LANES_SLOW_KMH + 5);
+  lanesWereAway = fast && !bandNear;
+  return lanesWereAway;
+}
+/** The lines come on this far before a band, so the lanes are there as it starts. */
+const LANES_BEFORE_M = 150;
+const LANES_SLOW_KMH = 25;
 
 /** When the camera last followed, so its easing goes by time, not by frames. */
 let followedAt = 0;
@@ -1812,6 +1830,7 @@ function relined(r: Route) {
   sim?.follow(r, true);
   routeLine = new Line(r.path);
   bends = new WeakMap();
+  drawBand();
   // The road watch measures along the line too: made again on the new one (what was said is kept), its features
   // asked for again at once, so the bands — 구간 단속, the school zones — are drawn along the line as it is now.
   if (watch && route === r) {
@@ -1965,6 +1984,7 @@ function endDrive() {
   chosen = null;
   routeLayer.show(null);
   tracker.setRoute(null);
+  drawBand();
   carLink.stop();
   destPin?.remove();
   destPin = null;
@@ -2483,6 +2503,40 @@ function laneStopCard(along: number): LaneCard | null {
   };
 }
 
+/**
+ * 차선 띠: the route as wide as a lane round each turn whose lanes are known (the lane card's, so only where
+ * 정밀도로지도 has the junction and the line was put on its lanes) — from BAND_TOWN_M before it (BAND_MOTORWAY_M on a
+ * motorway) to BAND_AFTER_M past it. Drawn again when a junction's lanes come, and with each new line.
+ */
+const BAND_TOWN_M = 300;
+const BAND_MOTORWAY_M = 800;
+const BAND_AFTER_M = 60;
+/** The band's stretches, metres along the route line: the lane lines are drawn as the car nears one (lanesAway). */
+let bandAlong: [number, number][] = [];
+function drawBand() {
+  bandAlong = [];
+  if (route && routeLine && guide.laneBand) {
+    const line = routeLine;
+    for (const g of route.guides) {
+      if (!lanesAsked.get(g) || !hasTurnCard(maneuverFor(g))) continue;
+      const at = line.project(g.at, 0, line.path.length).alongM;
+      bandAlong.push([Math.max(0, at - ((onMotorway.get(g) ?? false) ? BAND_MOTORWAY_M : BAND_TOWN_M)), Math.min(line.lengthM, at + BAND_AFTER_M)]);
+    }
+    bandAlong = mergeSpans(bandAlong);
+  }
+  routeLayer.band(bandAlong.map(([a, b]) => routeLine!.slice(a, b)), routeLine?.path[0]?.[1] ?? 37.5);
+}
+/** Spans that overlap or touch, as one. */
+function mergeSpans(spans: [number, number][]): [number, number][] {
+  const out: [number, number][] = [];
+  for (const [a, b] of [...spans].sort((x, y) => x[0] - y[0])) {
+    const last = out[out.length - 1];
+    if (last && a <= last[1]) last[1] = Math.max(last[1], b);
+    else out.push([a, b]);
+  }
+  return out;
+}
+
 /** Every turn has a card at the foot of the map; straight on, the arrival, the start and the wordless ones do not. */
 const hasTurnCard = (m: Maneuver) => m !== "straight" && m !== "arrive" && m !== "depart" && m !== "other";
 /** The turn just passed, kept on the card until the car is through the junction (TURN_HELD_M past it). */
@@ -2537,6 +2591,7 @@ function showLanes(shown: Shown) {
     if (way) q.set("way", way);
     void fetch(`/api/hdmap/lanes?${q}`).then((a) => (a.ok ? a.json() : null)).then((info: Lanes | null) => {
       lanesAsked.set(g, info && info.lanes.length ? info : null);
+      if (info?.lanes.length) drawBand();
       log(info?.lanes.length ? `차로 ${info.lanes.map((l) => (l.best ? `[${l.turns.join("+")}]` : l.turns.join("+"))).join(" | ")} · ${g.text}` : `차로 정보 없음 · ${g.text} (${way ?? "-"})`);
     }).catch(() => {});
   }
@@ -2772,6 +2827,7 @@ function prepareHighway(r: Route) {
   routeLine = line;
   lanesAsked.clear();
   linesAsked.clear();
+  drawBand();
   laneStops = [];
   laneStopsAt = null;
   // The junction held close up was measured along the old line; on this one its metres would read as kilometres.
@@ -3918,6 +3974,7 @@ map.once("load", () => void refreshAlerts(here()));
 const guide = loadGuide();
 /** The screen's theme where the car is: the lane lines' colour, and the lit buildings, follow it. */
 function themed(day: boolean) {
+  hdLayer?.setDay(day);
   nightCity?.setNight(!day);
 }
 /** 어린이 보호구역 회피 as last applied: a change asks the route sheet's ways again. */
@@ -3939,6 +3996,8 @@ function applyGuide() {
   document.body.classList.toggle("layout-mini", guide.layout === "mini");
   document.body.classList.toggle("dest-left", guide.destAt !== "top");
   themed(applyTheme(guide.theme, here()));
+  hdLayer?.refresh();
+  drawBand();
   nightCity?.refresh();
   // 화면 크기: everything over the map scaled together (style.css zooms the overlays by --ui).
   document.documentElement.style.setProperty("--ui", String(guide.uiScale || 1));
@@ -3967,6 +4026,8 @@ const cameraLayer: CameraLayer | null = new CameraLayer(map, (f, ahead) => {
 }, log);
 // A light turning to flashing at midnight turns amber on the map; the screen turns dark at dusk.
 setInterval(() => { cameraLayer?.redraw(); themed(applyTheme(guide.theme, here())); }, 60_000);
+// 차선 단위 안내's lane lines: plain, only near a band or slow (lanesAway).
+const hdLayer: HdLayer | null = new HdLayer(map, () => guide.laneBand && health?.hdmap !== false);
 // 야경: the buildings lit by night, only in the tilted view and where the driver left it on.
 nightCity = new NightCity(map, () => guide.nightCity && view === "3d" && base !== "osm", showBuildings);
 themed(applyTheme(guide.theme, loadLast() ?? HOME));

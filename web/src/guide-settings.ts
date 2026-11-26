@@ -37,6 +37,11 @@ export interface GuideSettings {
    * 2026-11-01 when the painted lanes were still drawn.
    */
   mapRange: "normal" | "close";
+  /**
+   * 차선 단위 안내: near a turn whose lanes 정밀도로지도 knows, the route as a lane-wide band on the lane to be in, and
+   * the lane lines drawn plainly round it (TMAP's 2027 concept, 2026-11-26).
+   */
+  laneBand: boolean;
   /** The lanes at the junction ahead, the ones to be in lit (lanes-strip.ts). */
   laneGuide: boolean;
   /** "분홍색 유도선을 따라가세요": 한국도로공사's painted guide lines at motorway junctions. */
@@ -144,7 +149,7 @@ export interface GuideSettings {
 export type Mode = "voice" | "show" | "off";
 
 export const DEFAULTS: GuideSettings = {
-  voice: true, voiceName: null, volume: 1, turns: true, junctionNames: true, laneHints: true, merges: true, closeups: true, junction3d: true, junction3dMode: "still", sendLogs: true, layout: "classic", destAt: "left", mapRange: "normal", laneGuide: true, colorLines: true, theme: "auto", nightCity: false, carIcon: "model3d", carPaint: PAINTS[0][0], carSize: "large", trafficBar: true, lanesAt: "car", endOnArrive: true, mapDpr: "auto", followFps: "auto", ducking: "soft", fasterRoute: "ask", avoidSchool: false, carData: "auto", rev: 4, uiScale: 1, lightsOnMap: "route", camerasOnMap: "route", nextLight: true, flashSignals: true,
+  voice: true, voiceName: null, volume: 1, turns: true, junctionNames: true, laneHints: true, merges: true, closeups: true, junction3d: true, junction3dMode: "still", sendLogs: true, layout: "classic", destAt: "left", mapRange: "normal", laneBand: true, laneGuide: true, colorLines: true, theme: "auto", nightCity: false, carIcon: "model3d", carPaint: PAINTS[0][0], carSize: "large", trafficBar: true, lanesAt: "car", endOnArrive: true, mapDpr: "auto", followFps: "auto", ducking: "soft", fasterRoute: "ask", avoidSchool: false, carData: "auto", rev: 4, uiScale: 1, lightsOnMap: "route", camerasOnMap: "route", nextLight: true, flashSignals: true,
   cameras: true, safeDrive: true, kakaoSafety: true, cameraFromM: 600, sections: true, schools: true,
   bumps: "show", curves: "off", accidents: "show", bikeAccidents: "show",
   overspeed: true, overspeedBy: 0, chimeVolume: null,
@@ -357,6 +362,7 @@ const GROUPS: Group[] = [
     { key: "nextLight", label: "다음 신호등 거리", kind: "toggle", sub: "안내 중 왼쪽 패널에 \"다음 신호등 250 m · 약 15초\"" },
     { key: "trafficBar", label: "경로 막힘 막대", kind: "toggle", sub: "지도 오른쪽 끝에 경로 전체를 세로 막대로 — 아래가 출발, 위가 목적지, 초록 원활 · 노랑 서행 · 빨강 정체, 지나온 곳은 회색, 점이 내 차 (교통 정보가 있는 경로만)" },
     { key: "mapRange", label: "지도 거리", kind: "choice", options: [["normal", "보통"], ["close", "가깝게"]], sub: "보통: 티맵 · 카카오내비처럼 — 시내에서 차 앞 400 m쯤, 고속도로 700 m. 가깝게: 한 단계 더 당겨서 (회전 300 m 안에서는 어느 쪽이든 조금 더 당김)" },
+    { key: "laneBand", label: "차선 단위 안내", kind: "toggle", sub: "정밀도로지도가 있는 곳의 회전 · 분기 앞에서 경로를 탈 차로 폭의 파란 띠로, 그 근처에서만 차선을 가볍게 (느린 차량이면 끄세요)" },
     { key: "nightCity", label: "야경 건물", kind: "toggle", sub: "밤에 3D 화면이면 티맵·네이버 바탕 위에 건물을 옅은 금빛으로 (OpenStreetMap 건물이라 도심 밖에는 드묾. 도로가 가려 보이면 끄세요)" },
   ] },
   { id: "display", title: "디스플레이", sub: "테마 · 자차 · 목적지 창 · 배치 · 크기 · 해상도", rows: [

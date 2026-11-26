@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { validateStyleMin } from "@maplibre/maplibre-gl-style-spec";
 import type maplibregl from "maplibre-gl";
 import { CameraLayer } from "./camera-layer";
+import { HdLayer } from "./hdmap-layer";
 import { NightCity } from "./night-city";
 import { PinLayer } from "./pin-layer";
 import { RouteLayer } from "./route-layer";
@@ -35,8 +36,11 @@ test("every map layer is one MapLibre accepts", async () => {
   const { map, sources, layers } = fakeMap();
   // The camera layer's own timer, which a test does not want running.
   (globalThis as { window?: unknown }).window ??= { setInterval: () => 0, clearInterval: () => {} };
+  // The lane lines' tiles are asked of this page's own server.
+  (globalThis as { location?: unknown }).location ??= { origin: "https://example.org" };
   const made: unknown[] = [
     new CameraLayer(map, () => true, () => {}),
+    new HdLayer(map, () => true),
     new NightCity(map, () => true),
     new PinLayer(map, () => {}),
     new RouteLayer(map),
@@ -46,10 +50,12 @@ test("every map layer is one MapLibre accepts", async () => {
     const o = m as { image?: unknown; install: () => unknown };
     // Icons are drawn on a canvas, which this is not: taken as made.
     if ("image" in o) o.image = async () => {};
+    // The lane lines wait for the server's coverage: none, here.
+    if (m instanceof HdLayer) (m as unknown as { bounds: unknown }).bounds = null;
     await o.install();
   }
   const ids = layers.map((l) => l.id);
-  for (const id of ["cams", "cams-next", "lights", "zones-fill", "route-line"]) assert.ok(ids.includes(id), `${id} added`);
+  for (const id of ["cams", "cams-next", "lights", "zones-fill", "route-line", "band-lane", "hd-lines"]) assert.ok(ids.includes(id), `${id} added`);
   const errors = validateStyleMin({
     version: 8,
     glyphs: "https://example.org/{fontstack}/{range}.pbf",
