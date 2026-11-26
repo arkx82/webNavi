@@ -150,6 +150,22 @@ test("in a long tunnel the car goes on along the route at the traffic's pace, an
   assert.notEqual(tracker.frame(700_000)!.mode, "reckoning");
 });
 
+test("reckoned up to a slow stretch and into it, the car only ever goes on: never back and forth across its edge (2026-11-26)", () => {
+  const tracker = new Tracker();
+  // Free for the first 400 m, slow (8 m/s at most) from there.
+  tracker.setRoute({ ...route, segments: [{ from: 0, to: 4, congestion: 1 }, { from: 4, to: 21, congestion: 2 }] });
+  tracker.feed(fix(offset(start, 0, 100), 0, { speed: 20 }), 0);
+  let last = -Infinity;
+  for (let t = 3000; t <= 40_000; t += 50) {
+    const shown = tracker.frame(t)!;
+    assert.equal(shown.mode, "reckoning");
+    assert.ok(shown.alongM! >= last - 0.01, `${t} ms: ${last.toFixed(1)} → ${shown.alongM!.toFixed(1)}`);
+    last = shown.alongM!;
+  }
+  // 300 m to the slow stretch at 20 m/s (15 s), then 25 s at 8 m/s: 600 m.
+  assert.ok(Math.abs(last - 600) < 15, `${last}`);
+});
+
 test("well clear of the road on good fixes is off-route after a second", () => {
   const tracker = new Tracker();
   tracker.setRoute(route);

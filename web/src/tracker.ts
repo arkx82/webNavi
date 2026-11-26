@@ -258,6 +258,12 @@ export class Tracker {
     this.route = route;
     this.glideFromAlong = this.glideToAlong = this.shownAlong = null;
     this.line = route && route.path.length > 1 ? new Line(route.path) : null;
+    const line = this.line;
+    this.slowStretches = !line || !route ? [] : route.segments
+      .filter((sg) => CONGESTED_MPS[sg.congestion] != null && sg.to > sg.from)
+      .map((sg) => [line.along[Math.min(sg.from, line.path.length - 1)], line.along[Math.min(sg.to, line.path.length - 1)], CONGESTED_MPS[sg.congestion]!] as [number, number, number])
+      .filter(([a, b]) => b > a)
+      .sort((x, y) => x[0] - y[0]);
     this.guides = [];
     this.lastProj = null;
     this.offSince = null;
@@ -440,14 +446,36 @@ export class Tracker {
     this.speedMps = fix.speed! * share;
   }
 
-  /** The last speed, held to the traffic's pace where the route says its stretch is slow or jammed — at [alongM], where the reckoning has the car, not where the last fix was. */
-  private reckonSpeed(speed = this.speedMps, alongM = this.shownAlong ?? this.reckonAlong): number {
-    if (!this.route || !this.line) return speed;
-    const i = this.line.place(alongM).segment;
-    const seg = this.route.segments.find((s) => i >= s.from && i < s.to);
-    const cap = seg ? CONGESTED_MPS[seg.congestion] : undefined;
-    return cap != null ? Math.min(speed, cap) : speed;
+  /**
+   * How far the car goes in [seconds] from [fromM] along the route at [speed], held to the traffic's pace on each
+   * stretch the route says is slow or jammed as it comes to it. It was the speed at the car's place in the frame
+   * before times the whole time since the fixes stopped: across the edge of a slow stretch that place fell on one side
+   * and then the other, and the car was drawn back and forth each frame — 8 m in a pretend drive on the car's speed,
+   * 100–200 m on the fixes' (2026-11-26). Walked from [fromM], it only ever grows with the time.
+   */
+  private reckonTravel(fromM: number, speed: number, seconds: number): number {
+    if (!(seconds > 0) || !(speed > 0)) return 0;
+    if (!this.line || !this.slowStretches.length) return speed * seconds;
+    let at = fromM, left = seconds;
+    for (const [a, b, cap] of this.slowStretches) {
+      if (b <= at) continue;
+      // Free road up to this stretch.
+      if (a > at) {
+        const free = (a - at) / speed;
+        if (free >= left) return at + speed * left - fromM;
+        left -= free;
+        at = a;
+      }
+      const v = Math.min(speed, cap);
+      const through = (b - at) / v;
+      if (through >= left) return at + v * left - fromM;
+      left -= through;
+      at = b;
+    }
+    return at + speed * left - fromM;
   }
+  /** The route's slow and jammed stretches, metres along its line, with the most the car is reckoned at on each. */
+  private slowStretches: [number, number, number][] = [];
 
   private startGlide(to: LonLat, now: number, seconds: number) {
     this.glideFrom = this.shownAt ?? to;
@@ -520,8 +548,8 @@ export class Tracker {
       const ahead = byFix
         ? this.reckonAlong + this.vagueM + this.speedMps * ((now - this.vagueAt) / 1000)
         : byCar
-          ? this.reckonAlong + byCar.m + this.reckonSpeed(this.car!.lastSpeed() ?? this.speedMps) * (Math.max(0, wallNow - byCar.through) / 1000)
-          : this.reckonAlong + this.reckonSpeed() * ((now - this.lastFixAt) / 1000);
+          ? this.reckonAlong + byCar.m + this.reckonTravel(this.reckonAlong + byCar.m, this.car!.lastSpeed() ?? this.speedMps, Math.max(0, wallNow - byCar.through) / 1000)
+          : this.reckonAlong + this.reckonTravel(this.reckonAlong, this.speedMps, (now - this.lastFixAt) / 1000);
       // Into the reckoning from where the car is drawn, not from the last fix's place: the difference (a stop's overrun,
       // the catch-up not done) is eased out as a slide out of one is, not taken in a frame (a 10.9 m leap back at a light,
       // 2026-10-11).
